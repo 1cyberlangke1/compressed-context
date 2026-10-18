@@ -1,5 +1,15 @@
 import { Plugin } from "@opencode/plugin"
 
+import { maybeAutoCompress } from "./compression/auto.ts"
+import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
+import { renderAll } from "./compression/render.ts"
+import { eligibleMessages, textChars, type MessageLike } from "./compression/select.ts"
+import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
+import { loadState, saveState, withPending, type Block } from "./compression/state.ts"
+import { summarize, type GenerateLike } from "./compression/summarize.ts"
+import { registerCompressTool } from "./compression/tool.ts"
+import { buildTranscript } from "./compression/transcript.ts"
+import { MIN_SOURCE_CHARS, validateSummary } from "./compression/validate.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./stats.ts"
 import { estimateCategories } from "./tokens.ts"
 
@@ -8,19 +18,15 @@ export default Plugin.define({
 
   /**
    * 输入：OpenCode 注入的插件上下文 ctx。
-   * 输出：注册 session 的 "context" 钩子，并返回注销函数。
-   * 预期：每次模型请求前估算上下文分类，节流写入 session metadata，
-   *       供 TUI 插件读取；不修改 system / messages / tools。
+   * 输出：注册 compress 工具、设置 RPC、context / compaction 钩子与事件订阅。
+   * 预期：块链通过 compaction 落盘；失败不破坏历史。
    */
   async setup(ctx) {
+    const cache = new Map<string, readonly MessageLike[]>()
     const published = new Map<string, ContextStats>()
+    const disposables: Disposable[] = []
 
-    /**
-     * 输入：sessionID + 本次统计。
-     * 输出：无；metadata 合并已有键后整体写回。
-     * 预期：失败静默，绝不阻塞模型请求。
-     */
-    const publish = async (sessionID: string, stats: ContextStats): Promise<void> => {
+    const publishStats = async (sessionID: string, stats: ContextStats): Promise<void> => {
       const session = await ctx.session.get({ sessionID })
       await ctx.session.update({
         sessionID,
@@ -28,20 +34,85 @@ export default Plugin.define({
       })
     }
 
-    const registration = await ctx.session.hook("context", (input) => {
-      const stats = createStats(
-        estimateCategories({
-          system: input.system,
-          tools: input.tools,
-          messages: input.messages,
-        }),
-        Date.now(),
-      )
-      if (!shouldPublish(published.get(input.sessionID), stats)) return
-      published.set(input.sessionID, stats)
-      void publish(input.sessionID, stats).catch(() => undefined)
-    })
+    disposables.push(await registerCompressTool(ctx, cache))
+    disposables.push(await registerSettingsRpc(ctx))
+    const stopEvents = startCompactionEvents(ctx)
+    void reconcileAll(ctx)
 
-    return () => registration.dispose()
+    disposables.push(
+      await ctx.session.hook("context", (event) => {
+        const eligible = eligibleMessages(event.messages)
+        cache.set(event.sessionID, eligible)
+
+        const stats = createStats(
+          estimateCategories({
+            system: event.system,
+            tools: event.tools,
+            messages: event.messages,
+          }),
+          Date.now(),
+        )
+        if (shouldPublish(published.get(event.sessionID), stats)) {
+          published.set(event.sessionID, stats)
+          void publishStats(event.sessionID, stats).catch(() => undefined)
+        }
+
+        void maybeAutoCompress({
+          ctx,
+          sessionID: event.sessionID,
+          messages: event.messages,
+          system: event.system,
+          tools: event.tools,
+          model: event.model,
+        })
+      }),
+    )
+
+    disposables.push(
+      await ctx.session.hook("compaction", async (event) => {
+        const state = await loadState(ctx.storage, event.sessionID)
+        if (state.pending) {
+          event.result = { summary: renderAll(state.blocks, state.pending) }
+          return
+        }
+
+        const eligible = eligibleMessages(event.messages)
+        const sourceChars = textChars(eligible)
+        if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) {
+          throw new Error("nothing to compress")
+        }
+        const summary = await summarize({
+          transcript: buildTranscript(eligible),
+          sourceChars,
+          generate: ctx.generate as unknown as GenerateLike,
+          model: event.model,
+        })
+        if (summary === undefined) throw new Error("compression failed")
+        const validation = validateSummary(summary, sourceChars)
+        if (!validation.ok) throw new Error(validation.message)
+
+        const first = eligible.find((message) => message.id !== undefined)
+        const last = [...eligible].reverse().find((message) => message.id !== undefined)
+        if (first?.id === undefined || last?.id === undefined) throw new Error("messages are missing ids")
+
+        const block: Block = {
+          id: `b${(state.blocks.length + 1).toString()}`,
+          tier: 1,
+          summary,
+          fromId: first.id,
+          toId: last.id,
+          tokensBefore: Math.ceil(sourceChars / 4),
+          tokensAfter: Math.ceil(JSON.stringify(summary).length / 4),
+          at: Date.now(),
+        }
+        await saveState(ctx.storage, event.sessionID, withPending(state, block))
+        event.result = { summary: renderAll(state.blocks, block) }
+      }),
+    )
+
+    return () => {
+      stopEvents()
+      for (const disposable of disposables) void disposable.dispose()
+    }
   },
 })

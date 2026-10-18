@@ -6,7 +6,7 @@ import { STATS_KEY } from "../src/stats.ts"
 
 interface RecordedHook {
   readonly name: string
-  readonly callback: (input: unknown) => void
+  readonly callback: (input: unknown) => void | Promise<void>
 }
 
 interface UpdateInput {
@@ -16,17 +16,45 @@ interface UpdateInput {
 
 /**
  * 输入：无。
- * 输出：只实现 session.hook/get/update 的假 ctx，以及记录数组。
- * 预期：足够让插件 setup 跑完，不需要真实 OpenCode 宿主。
+ * 输出：覆盖 setup 所需域的最小假 ctx。
+ * 预期：不需要真实 OpenCode 宿主即可跑完注册流程。
  */
 function createFakeContext() {
   const hooks: RecordedHook[] = []
   const updates: UpdateInput[] = []
+  const tools: string[] = []
   let disposed = false
 
   const ctx = {
+    storage: {
+      get: () => Promise.resolve(undefined),
+      set: () => Promise.resolve(),
+      remove: () => Promise.resolve(),
+      scan: () => Promise.resolve({ entries: [] }),
+    },
+    tool: {
+      transform: (fn: (editor: { add: (tool: { name: string }) => void }) => void) => {
+        fn({ add: (tool) => tools.push(tool.name) })
+        return Promise.resolve({ dispose: () => Promise.resolve() })
+      },
+    },
+    rpc: {
+      register: () => Promise.resolve({ dispose: () => Promise.resolve() }),
+    },
+    event: {
+      subscribe: () =>
+        (async function* empty() {
+          // no events in tests
+        })(),
+    },
+    model: {
+      list: () => Promise.resolve({ data: [] }),
+    },
+    generate: {
+      text: () => Promise.resolve({ text: "" }),
+    },
     session: {
-      hook: (name: string, callback: (input: unknown) => void) => {
+      hook: (name: string, callback: (input: unknown) => void | Promise<void>) => {
         hooks.push({ name, callback })
         return Promise.resolve({
           dispose: () => {
@@ -40,28 +68,37 @@ function createFakeContext() {
         updates.push(input)
         return Promise.resolve()
       },
+      compact: () => Promise.resolve(),
+      context: () => Promise.resolve([]),
     },
   }
 
-  return { ctx: ctx as unknown as Plugin.Context, hooks, updates, wasDisposed: () => disposed }
+  return { ctx: ctx as unknown as Plugin.Context, hooks, updates, tools, wasDisposed: () => disposed }
 }
 
-const emptyContext = { sessionID: "ses_test", system: [], tools: {}, messages: [] }
+const emptyContext = {
+  sessionID: "ses_test",
+  system: [],
+  tools: {},
+  messages: [],
+  model: { providerID: "provider", id: "model" },
+}
 
 describe("服务端插件入口", () => {
-  it("setup 注册 context 钩子", async () => {
-    const { ctx, hooks } = createFakeContext()
+  it("setup 注册 context / compaction 钩子与 compress 工具", async () => {
+    const { ctx, hooks, tools } = createFakeContext()
 
     await plugin.setup(ctx)
 
-    expect(hooks.map((hook) => hook.name)).toEqual(["context"])
+    expect(hooks.map((hook) => hook.name)).toEqual(["context", "compaction"])
+    expect(tools).toEqual(["compress"])
   })
 
-  it("钩子把统计合并进 session metadata", async () => {
+  it("context 钩子把统计合并进 session metadata", async () => {
     const { ctx, hooks, updates } = createFakeContext()
     await plugin.setup(ctx)
 
-    hooks[0]?.callback(emptyContext)
+    await hooks[0]?.callback(emptyContext)
 
     await vi.waitFor(() => {
       expect(updates).toHaveLength(1)
@@ -75,15 +112,15 @@ describe("服务端插件入口", () => {
     const { ctx, hooks, updates } = createFakeContext()
     await plugin.setup(ctx)
 
-    hooks[0]?.callback(emptyContext)
-    hooks[0]?.callback(emptyContext)
+    await hooks[0]?.callback(emptyContext)
+    await hooks[0]?.callback(emptyContext)
 
     await vi.waitFor(() => {
       expect(updates).toHaveLength(1)
     })
   })
 
-  it("清理函数会注销钩子", async () => {
+  it("清理函数会注销注册", async () => {
     const { ctx, wasDisposed } = createFakeContext()
 
     const cleanup = await plugin.setup(ctx)

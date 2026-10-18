@@ -16,12 +16,14 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     expanded: settings.expanded,
     locale: settings.locale,
     contextLimit: settings.contextLimit,
+    triggerPercent: settings.triggerPercent,
   })
   if (
     settings.enabled === normalized.enabled &&
     settings.expanded === normalized.expanded &&
     settings.locale === normalized.locale &&
-    settings.contextLimit === normalized.contextLimit
+    settings.contextLimit === normalized.contextLimit &&
+    settings.triggerPercent === normalized.triggerPercent
   ) {
     return
   }

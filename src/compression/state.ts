@@ -1,0 +1,124 @@
+import type { Schema } from "effect"
+
+import type { SummaryFields } from "./schema.ts"
+
+/** 一个已落盘或待落盘的压缩块。 */
+export interface Block {
+  readonly id: string
+  readonly tier: 1
+  readonly summary: SummaryFields
+  readonly fromId: string
+  readonly toId: string
+  readonly tokensBefore: number
+  readonly tokensAfter: number
+  readonly at: number
+}
+
+/** 每个会话一份的压缩状态。 */
+export interface State {
+  readonly v: 1
+  readonly blocks: readonly Block[]
+  readonly pending?: Block
+  readonly autoInFlight?: boolean
+  readonly attempts: number
+  readonly lastError?: string
+}
+
+/** 服务端 storage 的最小接口，便于测试替身。 */
+export interface StorageLike {
+  get(key: string): Promise<Schema.Json | undefined>
+  set(key: string, value: Schema.Json): Promise<void>
+  remove(key: string): Promise<void>
+}
+
+export const STATE_PREFIX = "compression:state:"
+
+export const EMPTY_STATE: State = { v: 1, blocks: [], attempts: 0 }
+
+/** 输入：sessionID；输出：storage key。 */
+export function stateKey(sessionID: string): string {
+  return STATE_PREFIX + sessionID
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+}
+
+function isBlock(value: unknown): value is Block {
+  if (typeof value !== "object" || value === null) return false
+  const block = value as Record<string, unknown>
+  if (typeof block["id"] !== "string") return false
+  if (block["tier"] !== 1) return false
+  if (typeof block["fromId"] !== "string" || typeof block["toId"] !== "string") return false
+  if (typeof block["tokensBefore"] !== "number" || typeof block["tokensAfter"] !== "number") return false
+  if (typeof block["at"] !== "number") return false
+  const summary = block["summary"]
+  if (typeof summary !== "object" || summary === null) return false
+  const fields = summary as Record<string, unknown>
+  if (typeof fields["goal"] !== "string") return false
+  if (!isStringArray(fields["constraints"])) return false
+  if (!isStringArray(fields["decisions"])) return false
+  if (!isStringArray(fields["open_items"])) return false
+  if (!isStringArray(fields["files"])) return false
+  if (!isStringArray(fields["facts"])) return false
+  const progress = fields["progress"]
+  if (typeof progress !== "object" || progress === null) return false
+  const p = progress as Record<string, unknown>
+  return isStringArray(p["completed"]) && isStringArray(p["active"]) && isStringArray(p["blocked"])
+}
+
+/**
+ * 输入：storage 里的原始值。
+ * 输出：合法状态；损坏或版本不符时返回空状态。
+ * 预期：绝不抛错，坏数据只会丢历史块。
+ */
+export function parseState(value: unknown): State {
+  if (typeof value !== "object" || value === null) return EMPTY_STATE
+  const record = value as Record<string, unknown>
+  if (record["v"] !== 1) return EMPTY_STATE
+  const blocks = Array.isArray(record["blocks"]) ? record["blocks"].filter(isBlock) : []
+  const pending = isBlock(record["pending"]) ? record["pending"] : undefined
+  const attempts = typeof record["attempts"] === "number" ? record["attempts"] : 0
+  const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
+  if (pending === undefined) {
+    return lastError === undefined ? { v: 1, blocks, attempts } : { v: 1, blocks, attempts, lastError }
+  }
+  return lastError === undefined
+    ? { v: 1, blocks, pending, attempts }
+    : { v: 1, blocks, pending, attempts, lastError }
+}
+
+/** 输入：storage + sessionID；输出：状态。 */
+export async function loadState(storage: StorageLike, sessionID: string): Promise<State> {
+  return parseState(await storage.get(stateKey(sessionID)))
+}
+
+/** 输入：storage + sessionID + 状态；输出：无；预期：写入 JSON。 */
+export async function saveState(storage: StorageLike, sessionID: string, state: State): Promise<void> {
+  await storage.set(stateKey(sessionID), state as unknown as Schema.Json)
+}
+
+/** 输入：状态；输出：pending 转正后的新状态。 */
+export function commitPending(state: State): State {
+  if (!state.pending) return state
+  return {
+    v: 1,
+    blocks: [...state.blocks, state.pending],
+    attempts: 0,
+  }
+}
+
+/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态。 */
+export function dropPending(state: State, error: string): State {
+  return {
+    v: 1,
+    blocks: state.blocks,
+    attempts: state.attempts + 1,
+    lastError: error,
+  }
+}
+
+/** 输入：状态 + 新块；输出：挂上 pending 的新状态。 */
+export function withPending(state: State, block: Block): State {
+  return { ...state, pending: block }
+}

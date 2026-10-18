@@ -12,6 +12,10 @@ export type LocaleSetting = (typeof LOCALE_SETTINGS)[number]
 /** 上下文窗口上限：auto 复用模型原生值，数字表示自定义 token 数。 */
 export type ContextLimit = "auto" | number
 
+export const MIN_TRIGGER_PERCENT = 60
+export const MAX_TRIGGER_PERCENT = 95
+export const DEFAULT_TRIGGER_PERCENT = 80
+
 export interface Settings {
   /** 是否显示整块上下文面板 */
   enabled: boolean
@@ -21,6 +25,8 @@ export interface Settings {
   locale: LocaleSetting
   /** 上下文窗口上限 */
   contextLimit: ContextLimit
+  /** 强制压缩阈值（占用百分比） */
+  triggerPercent: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -28,6 +34,7 @@ export const DEFAULT_SETTINGS: Settings = {
   expanded: true,
   locale: "auto",
   contextLimit: "auto",
+  triggerPercent: DEFAULT_TRIGGER_PERCENT,
 }
 
 /** 自定义上限允许的范围。 */
@@ -87,11 +94,16 @@ function readContextLimit(value: unknown): ContextLimit {
  * 预期：用于启动时迁移 storage 里的旧数据，绝不抛错。
  */
 export function normalizeSettings(value: Readonly<Record<string, unknown>>): Settings {
+  const percent = value["triggerPercent"]
   return {
     enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_SETTINGS.enabled,
     expanded: typeof value["expanded"] === "boolean" ? value["expanded"] : DEFAULT_SETTINGS.expanded,
     locale: isLocaleSetting(value["locale"]) ? value["locale"] : DEFAULT_SETTINGS.locale,
     contextLimit: readContextLimit(value["contextLimit"]),
+    triggerPercent:
+      typeof percent === "number" && Number.isFinite(percent) && percent >= MIN_TRIGGER_PERCENT && percent <= MAX_TRIGGER_PERCENT
+        ? Math.round(percent)
+        : DEFAULT_SETTINGS.triggerPercent,
   }
 }
 

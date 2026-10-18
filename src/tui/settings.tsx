@@ -1,11 +1,14 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, createSignal, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, Show } from "solid-js"
 
 import { formatTokens } from "../format.ts"
 import { resolveMessages, type Messages } from "../i18n/index.ts"
+import { ContextRpc } from "../rpc.ts"
 import {
   isContextLimit,
   localeArgument,
+  MAX_TRIGGER_PERCENT,
+  MIN_TRIGGER_PERCENT,
   parseTokenLimit,
   sanitizeLimitInput,
   type ContextLimit,
@@ -98,6 +101,64 @@ function LimitDialog(props: {
 }
 
 /**
+ * 输入：TUI 上下文 + 文案 + 初始值 + 确认回调。
+ * 输出：压缩阈值的输入对话框。
+ * 预期：只接受 60 ~ 95 的整数；解析失败回车不生效。
+ */
+function ThresholdDialog(props: {
+  readonly context: Context
+  readonly copy: Messages
+  readonly initial: string
+  readonly onConfirm: (value: number) => void
+}) {
+  const theme = props.context.theme
+  const [text, setText] = createSignal(props.initial)
+  const parsed = createMemo(() => {
+    const value = Number.parseInt(text(), 10)
+    if (!Number.isFinite(value) || value < MIN_TRIGGER_PERCENT || value > MAX_TRIGGER_PERCENT) return undefined
+    return value
+  })
+
+  const confirm = (): void => {
+    const value = parsed()
+    if (value === undefined) return
+    props.onConfirm(value)
+    props.context.ui.dialog.clear()
+  }
+
+  return (
+    <box flexDirection="column" gap={1}>
+      <text fg={theme.text.base}>
+        <b>{props.copy.settings.threshold}</b>
+      </text>
+      <input
+        value={text()}
+        placeholder="80"
+        onInput={(value: string) => {
+          setText(value.replace(/[^0-9]/g, "").slice(0, 2))
+        }}
+        onSubmit={confirm}
+        ref={(input) => {
+          setTimeout(() => {
+            if (!input.isDestroyed) input.focus()
+          }, 1)
+        }}
+      />
+      <Show
+        when={parsed()}
+        fallback={<text fg={theme.text.feedback.error.base}>{props.copy.settings.thresholdInvalid}</text>}
+      >
+        {(value: () => number) => (
+          <text fg={theme.text.muted}>{props.copy.settings.thresholdPreview(value().toString())}</text>
+        )}
+      </Show>
+      <text fg={theme.text.muted}>{props.copy.settings.thresholdHint}</text>
+      <text fg={theme.text.muted}>{props.copy.settings.limitHelp}</text>
+    </box>
+  )
+}
+
+/**
  * 输入：TUI 插件上下文 + 设置。
  * 输出：注册 /compressed-context 命令（斜杠 + 命令面板）。
  * 预期：打开设置菜单；所有文案来自语言文件，切换语言后命令会重新注册。
@@ -108,6 +169,38 @@ export function SettingsCommand(props: {
   readonly updateSettings: UpdateSettings
 }) {
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
+
+  // 设置变化时推给服务端；服务端插件未加载时静默忽略。
+  createEffect(() => {
+    const payload = {
+      contextLimit: props.settings.contextLimit,
+      triggerPercent: props.settings.triggerPercent,
+    }
+    try {
+      // ContextRpc 是 PortableDefinition，具体方法名在类型上退化成索引签名，这里补回调用形状。
+      const rpc = props.context.client.rpc(ContextRpc) as unknown as {
+        settingsSet(input: { contextLimit: "auto" | number; triggerPercent: number }): Promise<unknown>
+      }
+      void rpc.settingsSet(payload).catch(() => undefined)
+    } catch {
+      // server plugin not loaded
+    }
+  })
+
+  const openThreshold = (): void => {
+    props.context.ui.dialog.show(() => (
+      <ThresholdDialog
+        context={props.context}
+        copy={copy()}
+        initial={props.settings.triggerPercent.toString()}
+        onConfirm={(value) => {
+          void props.updateSettings((draft) => {
+            draft.triggerPercent = value
+          })
+        }}
+      />
+    ))
+  }
 
   const openLocale = async (): Promise<void> => {
     const picked = await props.context.ui.dialog.select<LocaleSetting>({
@@ -171,6 +264,11 @@ export function SettingsCommand(props: {
           footer: props.settings.enabled ? copy().settings.on : copy().settings.off,
         },
         { title: copy().settings.limit, value: "limit", footer: limitLabel(props.settings, copy()) },
+        {
+          title: copy().settings.threshold,
+          value: "threshold",
+          footer: `${props.settings.triggerPercent.toString()}%`,
+        },
         { title: copy().settings.language, value: "language", footer: localeLabel(props.settings, copy()) },
         { title: copy().settings.close, value: "close" },
       ],
@@ -186,6 +284,10 @@ export function SettingsCommand(props: {
       const custom = await openLimit()
       // 自定义对话框已经打开时不要再弹主菜单，否则会把它顶掉。
       if (!custom) void openSettings()
+      return
+    }
+    if (picked === "threshold") {
+      openThreshold()
       return
     }
     if (picked === "language") {

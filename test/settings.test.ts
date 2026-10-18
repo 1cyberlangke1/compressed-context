@@ -20,6 +20,7 @@ describe("initialSettings / normalizeSettings", () => {
       expanded: true,
       locale: "en",
       contextLimit: 200_000,
+      triggerPercent: 80,
     })
   })
 

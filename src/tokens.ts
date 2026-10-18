@@ -10,11 +10,11 @@
 /** 单条消息内容的最小结构，避免绑定 @opencode/ai 的具体类。 */
 export interface ContentPartLike {
   readonly type: string
-  readonly text?: string | null
-  readonly name?: string
+  readonly text?: string | null | undefined
+  readonly name?: string | undefined
   readonly input?: unknown
   readonly result?: unknown
-  readonly media?: { readonly mediaType?: string }
+  readonly media?: { readonly mediaType?: string | undefined } | undefined
 }
 
 export interface MessageLike {
@@ -123,7 +123,9 @@ export function estimateCategories(input: {
     for (const part of message.content) {
       switch (part.type) {
         case "text": {
-          text += countText(part.text ?? "")
+          const value = part.text ?? ""
+          if (value.trimStart().startsWith("<conversation-checkpoint>")) summaries += countText(value)
+          else text += countText(value)
           break
         }
         case "reasoning": {
