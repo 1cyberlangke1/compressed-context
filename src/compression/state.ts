@@ -2,20 +2,30 @@ import type { Schema } from "effect"
 
 import type { SummaryFields } from "./schema.ts"
 
+/** 压缩层级：1 = 原文摘要，2/3 = 摘要再蒸馏。 */
+export type Tier = 1 | 2 | 3
+
 /** 一个已落盘或待落盘的压缩块。 */
 export interface Block {
   readonly id: string
-  readonly tier: 1
+  readonly tier: Tier
   readonly summary: SummaryFields
   readonly fromId: string
   readonly toId: string
   readonly tokensBefore: number
   readonly tokensAfter: number
   readonly at: number
+  /** active 链中的顺序；合并块占第一个源块的位置。 */
+  readonly order: number
+  /** 被本块合并的源块；空表示原始 T1 块。 */
+  readonly sourceBlockIds?: readonly string[]
 }
 
+/** 旧版本没有 order；读取时按下标补齐。 */
+type StoredBlock = Omit<Block, "order"> & { readonly order?: number }
+
 /** 旧版本把 title 存成可选；读取时补上，避免丢块。 */
-type LegacyBlock = Omit<Block, "summary"> & {
+type LegacyBlock = Omit<StoredBlock, "summary"> & {
   readonly summary: Omit<SummaryFields, "title"> & { readonly title?: string }
 }
 
@@ -25,6 +35,8 @@ export interface State {
   readonly blocks: readonly Block[]
   readonly pending?: Block
   readonly autoInFlight?: boolean
+  /** 连续摘要合并轮数；T1 提交后归零。 */
+  readonly distillDepth?: number
   readonly attempts: number
   readonly lastError?: string
 }
@@ -45,12 +57,17 @@ export function stateKey(sessionID: string): string {
   return STATE_PREFIX + sessionID
 }
 
+/** 输入：块列表；输出：下一个可用的 order。 */
+export function nextOrder(blocks: readonly Block[]): number {
+  return blocks.reduce((max, block) => Math.max(max, block.order), 0) + 1
+}
+
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
 }
 
 /** 输入：旧块；输出：标题非空的块；预期：缺标题时用 goal 的前 80 个字符补。 */
-function withTitle(block: LegacyBlock): Block {
+function withTitle(block: LegacyBlock): StoredBlock {
   const title = block.summary.title?.trim()
   const goal = block.summary.goal.trim().replace(/\s+/g, " ")
   const fallback = goal.length === 0 ? "untitled" : goal.length <= 80 ? goal : `${goal.slice(0, 77)}...`
@@ -67,10 +84,15 @@ function isBlock(value: unknown): value is LegacyBlock {
   if (typeof value !== "object" || value === null) return false
   const block = value as Record<string, unknown>
   if (typeof block["id"] !== "string") return false
-  if (block["tier"] !== 1) return false
+  const tier = block["tier"]
+  if (tier !== 1 && tier !== 2 && tier !== 3) return false
   if (typeof block["fromId"] !== "string" || typeof block["toId"] !== "string") return false
   if (typeof block["tokensBefore"] !== "number" || typeof block["tokensAfter"] !== "number") return false
   if (typeof block["at"] !== "number") return false
+  const order = block["order"]
+  if (order !== undefined && typeof order !== "number") return false
+  const sourceBlockIds = block["sourceBlockIds"]
+  if (sourceBlockIds !== undefined && !isStringArray(sourceBlockIds)) return false
   const summary = block["summary"]
   if (typeof summary !== "object" || summary === null) return false
   const fields = summary as Record<string, unknown>
@@ -87,6 +109,12 @@ function isBlock(value: unknown): value is LegacyBlock {
   return isStringArray(p["completed"]) && isStringArray(p["active"]) && isStringArray(p["blocked"])
 }
 
+/** 输入：旧块 + 缺省 order；输出：补齐后的块。 */
+function normalizeBlock(block: LegacyBlock, fallbackOrder: number): Block {
+  const titled = withTitle(block)
+  return { ...titled, order: titled.order ?? fallbackOrder }
+}
+
 /**
  * 输入：storage 里的原始值。
  * 输出：合法状态；损坏或版本不符时返回空状态。
@@ -96,16 +124,21 @@ export function parseState(value: unknown): State {
   if (typeof value !== "object" || value === null) return EMPTY_STATE
   const record = value as Record<string, unknown>
   if (record["v"] !== 1) return EMPTY_STATE
-  const blocks = Array.isArray(record["blocks"]) ? record["blocks"].filter(isBlock).map(withTitle) : []
-  const pending = isBlock(record["pending"]) ? withTitle(record["pending"]) : undefined
+  const blocks = Array.isArray(record["blocks"])
+    ? record["blocks"].filter(isBlock).map((block, index) => normalizeBlock(block, index))
+    : []
+  const pending = isBlock(record["pending"]) ? normalizeBlock(record["pending"], blocks.length) : undefined
   const attempts = typeof record["attempts"] === "number" ? record["attempts"] : 0
   const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
-  if (pending === undefined) {
-    return lastError === undefined ? { v: 1, blocks, attempts } : { v: 1, blocks, attempts, lastError }
+  const distillDepth = typeof record["distillDepth"] === "number" ? record["distillDepth"] : undefined
+  return {
+    v: 1,
+    blocks,
+    attempts,
+    ...(pending === undefined ? {} : { pending }),
+    ...(lastError === undefined ? {} : { lastError }),
+    ...(distillDepth === undefined ? {} : { distillDepth }),
   }
-  return lastError === undefined
-    ? { v: 1, blocks, pending, attempts }
-    : { v: 1, blocks, pending, attempts, lastError }
 }
 
 /** 输入：storage + sessionID；输出：状态。 */
@@ -118,23 +151,26 @@ export async function saveState(storage: StorageLike, sessionID: string, state: 
   await storage.set(stateKey(sessionID), state as unknown as Schema.Json)
 }
 
-/** 输入：状态；输出：pending 转正后的新状态。 */
+/** 输入：状态；输出：pending 转正后的新状态；预期：合并块增加蒸馏轮数，T1 归零。 */
 export function commitPending(state: State): State {
   if (!state.pending) return state
+  const merged = (state.pending.sourceBlockIds?.length ?? 0) > 0
   return {
     v: 1,
     blocks: [...state.blocks, state.pending],
     attempts: 0,
+    distillDepth: merged ? (state.distillDepth ?? 0) + 1 : 0,
   }
 }
 
-/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态。 */
-export function dropPending(state: State, error: string): State {
+/** 输入：状态 + 错误 + 是否计入失败次数；输出：丢弃 pending 后的新状态。 */
+export function dropPending(state: State, error: string, countAttempt = true): State {
   return {
     v: 1,
     blocks: state.blocks,
-    attempts: state.attempts + 1,
+    attempts: countAttempt ? state.attempts + 1 : state.attempts,
     lastError: error,
+    distillDepth: state.distillDepth ?? 0,
   }
 }
 

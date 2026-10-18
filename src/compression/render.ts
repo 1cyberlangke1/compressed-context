@@ -49,8 +49,23 @@ export function renderBlock(block: Block): string {
   return `${header}\n\n${renderSummary(block.summary)}`
 }
 
+/**
+ * 输入：已落盘块 + 可选 pending 块。
+ * 输出：active 顶层块，按 order 排序。
+ * 预期：被任何块 sourceBlockIds 引用的块不显示；合并块占据第一个源块的位置。
+ */
+export function activeBlocks(blocks: readonly Block[], pending?: Block): readonly Block[] {
+  const all = pending === undefined ? blocks : [...blocks, pending]
+  const consumed = new Set<string>()
+  for (const block of all) {
+    for (const sourceId of block.sourceBlockIds ?? []) consumed.add(sourceId)
+  }
+  return all
+    .filter((block) => !consumed.has(block.id))
+    .sort((a, b) => a.order - b.order || a.at - b.at || a.id.localeCompare(b.id))
+}
+
 /** 输入：已落盘块 + 可选的 pending 块；输出：拼接后的 checkpoint 文本。 */
 export function renderAll(blocks: readonly Block[], pending?: Block): string {
-  const all = pending ? [...blocks, pending] : blocks
-  return all.map(renderBlock).join("\n\n")
+  return activeBlocks(blocks, pending).map(renderBlock).join("\n\n")
 }

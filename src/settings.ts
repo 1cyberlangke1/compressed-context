@@ -16,6 +16,11 @@ export const MIN_TRIGGER_PERCENT = 60
 export const MAX_TRIGGER_PERCENT = 95
 export const DEFAULT_TRIGGER_PERCENT = 80
 
+/** 摘要链预算：超过后自动合并摘要块。 */
+export const MIN_SUMMARY_BUDGET = 5_000
+export const MAX_SUMMARY_BUDGET = 1_000_000
+export const DEFAULT_SUMMARY_BUDGET = 50_000
+
 export interface Settings {
   /** 是否显示整块上下文面板 */
   enabled: boolean
@@ -27,6 +32,8 @@ export interface Settings {
   contextLimit: ContextLimit
   /** 强制压缩阈值（占用百分比） */
   triggerPercent: number
+  /** 摘要链 token 预算 */
+  summaryBudgetTokens: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -35,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   locale: "auto",
   contextLimit: "auto",
   triggerPercent: DEFAULT_TRIGGER_PERCENT,
+  summaryBudgetTokens: DEFAULT_SUMMARY_BUDGET,
 }
 
 /** 自定义上限允许的范围。 */
@@ -47,11 +55,11 @@ export function isLocaleSetting(value: unknown): value is LocaleSetting {
 }
 
 /**
- * 输入：用户输入的 token 上限文本（支持 `200k` / `1m` / `200000`）。
+ * 输入：用户输入的 token 文本（支持 `200k` / `1m` / `200000`）+ 范围。
  * 输出：token 数；非法或越界返回 undefined。
  * 预期：大小写不敏感，允许小数（如 `1.5m`）。
  */
-export function parseTokenLimit(text: string): number | undefined {
+export function parseTokenCount(text: string, min: number, max: number): number | undefined {
   const match = /^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(text.trim())
   if (match === null) return undefined
   const value = Number(match[1])
@@ -59,8 +67,13 @@ export function parseTokenLimit(text: string): number | undefined {
   const unit = match[2]?.toLowerCase()
   const multiplier = unit === "k" ? 1_000 : unit === "m" ? 1_000_000 : 1
   const tokens = Math.round(value * multiplier)
-  if (tokens < MIN_CONTEXT_LIMIT || tokens > MAX_CONTEXT_LIMIT) return undefined
+  if (tokens < min || tokens > max) return undefined
   return tokens
+}
+
+/** 输入：用户输入的上下文上限文本；输出：token 数；非法或越界返回 undefined。 */
+export function parseTokenLimit(text: string): number | undefined {
+  return parseTokenCount(text, MIN_CONTEXT_LIMIT, MAX_CONTEXT_LIMIT)
 }
 
 /** 输入：任意输入文本；输出：只保留数字 + 结尾单个 k/m 的合法形态。 */
@@ -88,6 +101,22 @@ function readContextLimit(value: unknown): ContextLimit {
   return DEFAULT_SETTINGS.contextLimit
 }
 
+/** 输入：任意值；输出：合法的摘要预算设置（支持 `50k` 这类字符串）。 */
+function readSummaryBudget(value: unknown): number {
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_SUMMARY_BUDGET &&
+    value <= MAX_SUMMARY_BUDGET
+  ) {
+    return Math.round(value)
+  }
+  if (typeof value === "string") {
+    return parseTokenCount(value, MIN_SUMMARY_BUDGET, MAX_SUMMARY_BUDGET) ?? DEFAULT_SUMMARY_BUDGET
+  }
+  return DEFAULT_SUMMARY_BUDGET
+}
+
 /**
  * 输入：任意设置对象（可能来自旧版本、缺字段或类型不对）。
  * 输出：补齐后的合法设置。
@@ -104,6 +133,7 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
       typeof percent === "number" && Number.isFinite(percent) && percent >= MIN_TRIGGER_PERCENT && percent <= MAX_TRIGGER_PERCENT
         ? Math.round(percent)
         : DEFAULT_SETTINGS.triggerPercent,
+    summaryBudgetTokens: readSummaryBudget(value["summaryBudgetTokens"]),
   }
 }
 

@@ -1,12 +1,13 @@
 import { Plugin } from "@opencode/plugin"
 
 import { maybeAutoCompress } from "./compression/auto.ts"
+import { maybeDistill } from "./compression/distill.ts"
 import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
 import { renderAll } from "./compression/render.ts"
 import { eligibleMessages, type MessageLike } from "./compression/select.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
-import { loadState, saveState, withPending, type Block } from "./compression/state.ts"
-import { summarize, type GenerateLike } from "./compression/summarize.ts"
+import { loadState, nextOrder, saveState, withPending, type Block } from "./compression/state.ts"
+import { summarize, type GenerateLike, type ModelRefLike } from "./compression/summarize.ts"
 import { registerCompressTool } from "./compression/tool.ts"
 import { buildTranscript } from "./compression/transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./compression/validate.ts"
@@ -24,6 +25,7 @@ export default Plugin.define({
   async setup(ctx) {
     const cache = new Map<string, readonly MessageLike[]>()
     const published = new Map<string, ContextStats>()
+    const models = new Map<string, ModelRefLike>()
     const disposables: Disposable[] = []
 
     const publishStats = async (sessionID: string, stats: ContextStats): Promise<void> => {
@@ -36,13 +38,16 @@ export default Plugin.define({
 
     disposables.push(await registerCompressTool(ctx, cache))
     disposables.push(await registerSettingsRpc(ctx))
-    const stopEvents = startCompactionEvents(ctx)
+    const stopEvents = startCompactionEvents(ctx, (sessionID) => {
+      void maybeDistill({ ctx, sessionID, model: models.get(sessionID) })
+    })
     void reconcileAll(ctx)
 
     disposables.push(
       await ctx.session.hook("context", (event) => {
         const eligible = eligibleMessages(event.messages)
         cache.set(event.sessionID, eligible)
+        models.set(event.sessionID, event.model)
 
         const stats = createStats(
           estimateCategories({
@@ -57,19 +62,29 @@ export default Plugin.define({
           void publishStats(event.sessionID, stats).catch(() => undefined)
         }
 
-        void maybeAutoCompress({
-          ctx,
-          sessionID: event.sessionID,
-          messages: event.messages,
-          system: event.system,
-          tools: event.tools,
-          model: event.model,
-        })
+        void (async () => {
+          const handled = await maybeDistill({
+            ctx,
+            sessionID: event.sessionID,
+            model: event.model,
+            resetDepth: true,
+          })
+          if (handled) return
+          await maybeAutoCompress({
+            ctx,
+            sessionID: event.sessionID,
+            messages: event.messages,
+            system: event.system,
+            tools: event.tools,
+            model: event.model,
+          })
+        })()
       }),
     )
 
     disposables.push(
       await ctx.session.hook("compaction", async (event) => {
+        models.set(event.sessionID, event.model)
         const state = await loadState(ctx.storage, event.sessionID)
         if (state.pending) {
           event.result = { summary: renderAll(state.blocks, state.pending) }
@@ -105,6 +120,7 @@ export default Plugin.define({
           tokensBefore: Math.ceil(sourceChars / 4),
           tokensAfter: Math.ceil(JSON.stringify(summary).length / 4),
           at: Date.now(),
+          order: nextOrder(state.blocks),
         }
         await saveState(ctx.storage, event.sessionID, withPending(state, block))
         event.result = { summary: renderAll(state.blocks, block) }

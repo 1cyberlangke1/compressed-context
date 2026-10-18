@@ -2,9 +2,10 @@ import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
 import { SummaryFields } from "./schema.ts"
-import { eligibleMessages, textChars, type MessageLike } from "./select.ts"
-import { loadState, saveState, withPending, type Block } from "./state.ts"
+import { eligibleMessages, type MessageLike } from "./select.ts"
+import { loadState, nextOrder, saveState, withPending, type Block } from "./state.ts"
 import type { Disposable } from "./settings-rpc.ts"
+import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
 
 const DESCRIPTION =
@@ -47,7 +48,8 @@ export async function registerCompressTool(
 
         const messages = cache.get(sessionID) ?? []
         const eligible = eligibleMessages(messages)
-        const sourceChars = textChars(eligible)
+        const transcript = buildTranscript(eligible)
+        const sourceChars = transcript.length
         if (eligible.length === 0) return failure("nothing to compress")
         if (sourceChars < MIN_SOURCE_CHARS) {
           return failure(
@@ -73,6 +75,7 @@ export async function registerCompressTool(
           tokensBefore: Math.ceil(sourceChars / 4),
           tokensAfter: Math.ceil(JSON.stringify(input).length / 4),
           at: Date.now(),
+          order: nextOrder(state.blocks),
         }
 
         await saveState(ctx.storage, sessionID, withPending(state, block))

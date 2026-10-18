@@ -3,7 +3,7 @@ import type { Plugin } from "@opencode/plugin"
 import { estimateCategories, totalCategories } from "../tokens.ts"
 import { eligibleMessages, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
-import { loadState, saveState, withPending, type Block } from "./state.ts"
+import { loadState, nextOrder, saveState, withPending, type Block } from "./state.ts"
 import { summarize, type GenerateLike, type ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
@@ -118,6 +118,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
       tokensBefore: Math.ceil(sourceChars / 4),
       tokensAfter: Math.ceil(JSON.stringify(summary).length / 4),
       at: Date.now(),
+      order: nextOrder(state.blocks),
     }
     await saveState(input.ctx.storage, input.sessionID, withPending({ ...state, autoInFlight: true }, block))
     await input.ctx.session.compact({ sessionID: input.sessionID })

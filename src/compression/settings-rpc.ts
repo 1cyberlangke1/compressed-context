@@ -17,10 +17,15 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
   return ctx.rpc.register(ContextRpc, {
     settingsGet: async () => {
       const settings = await loadServerSettings(ctx.storage)
-      return { contextLimit: settings.contextLimit, triggerPercent: settings.triggerPercent }
+      return {
+        contextLimit: settings.contextLimit,
+        triggerPercent: settings.triggerPercent,
+        summaryBudgetTokens: settings.summaryBudgetTokens,
+      }
     },
     settingsSet: async (input) => {
-      const parsed = parseServerSettings(input)
+      const current = await loadServerSettings(ctx.storage)
+      const parsed = parseServerSettings({ ...current, ...(input as Record<string, unknown>) })
       if (!parsed) return { ok: false }
       await saveServerSettings(ctx.storage, parsed)
       return { ok: true }

@@ -6,6 +6,7 @@ import {
   initialSettings,
   localeArgument,
   normalizeSettings,
+  parseTokenCount,
   parseTokenLimit,
   sanitizeLimitInput,
   type ContextLimit,
@@ -21,6 +22,7 @@ describe("initialSettings / normalizeSettings", () => {
       locale: "en",
       contextLimit: 200_000,
       triggerPercent: 80,
+      summaryBudgetTokens: 50_000,
     })
   })
 
@@ -29,6 +31,8 @@ describe("initialSettings / normalizeSettings", () => {
       DEFAULT_SETTINGS,
     )
     expect(normalizeSettings({ enabled: true, locale: "zh" }).contextLimit).toBe("auto")
+    expect(normalizeSettings({ summaryBudgetTokens: "80k" }).summaryBudgetTokens).toBe(80_000)
+    expect(normalizeSettings({ summaryBudgetTokens: 4_999 }).summaryBudgetTokens).toBe(50_000)
   })
 })
 
@@ -45,6 +49,16 @@ describe("parseTokenLimit", () => {
     expect(parseTokenLimit("abc")).toBeUndefined()
     expect(parseTokenLimit("10")).toBeUndefined()
     expect(parseTokenLimit("100m")).toBeUndefined()
+  })
+})
+
+describe("parseTokenCount", () => {
+  it("按传入范围解析预算", () => {
+    expect(parseTokenCount("50k", 5_000, 1_000_000)).toBe(50_000)
+    expect(parseTokenCount("50000", 5_000, 1_000_000)).toBe(50_000)
+    expect(parseTokenCount("1m", 5_000, 1_000_000)).toBe(1_000_000)
+    expect(parseTokenCount("4k", 5_000, 1_000_000)).toBeUndefined()
+    expect(parseTokenCount("2m", 5_000, 1_000_000)).toBeUndefined()
   })
 })
 

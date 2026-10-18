@@ -28,6 +28,10 @@ export interface Messages {
     readonly thresholdHint: string
     readonly thresholdInvalid: string
     readonly thresholdPreview: (value: string) => string
+    readonly summaryBudget: string
+    readonly summaryBudgetHint: string
+    readonly summaryBudgetInvalid: string
+    readonly summaryBudgetPlaceholder: string
     readonly submit: string
     readonly language: string
     readonly auto: string

@@ -7,9 +7,13 @@ import { ContextRpc } from "../rpc.ts"
 import {
   isContextLimit,
   localeArgument,
+  MAX_CONTEXT_LIMIT,
+  MAX_SUMMARY_BUDGET,
   MAX_TRIGGER_PERCENT,
+  MIN_CONTEXT_LIMIT,
+  MIN_SUMMARY_BUDGET,
   MIN_TRIGGER_PERCENT,
-  parseTokenLimit,
+  parseTokenCount,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
@@ -76,19 +80,25 @@ function DialogFrame(
 }
 
 /**
- * 输入：TUI 上下文 + 文案 + 初始值 + 确认回调。
- * 输出：自定义上下文上限的输入对话框。
+ * 输入：TUI 上下文 + 文案 + 标题/提示 + 初始值 + 合法范围 + 确认回调。
+ * 输出：通用 token 输入对话框；上下文上限和摘要预算共用。
  * 预期：只接受数字 + 结尾 k/m；解析成功才允许回车提交，非法时只提示不写入。
  */
-function LimitDialog(props: {
+function TokenDialog(props: {
   readonly context: Context
   readonly copy: Messages
+  readonly title: string
+  readonly hint: string
+  readonly invalid: string
+  readonly placeholder: string
   readonly initial: string
+  readonly min: number
+  readonly max: number
   readonly onConfirm: (value: number) => void
 }) {
   const theme = props.context.theme
   const [text, setText] = createSignal(props.initial)
-  const parsed = createMemo(() => parseTokenLimit(text()))
+  const parsed = createMemo(() => parseTokenCount(text(), props.min, props.max))
   let area: { plainText: string } | undefined
 
   const confirm = (): void => {
@@ -106,12 +116,12 @@ function LimitDialog(props: {
   }))
 
   return (
-    <DialogFrame context={props.context} title={props.copy.settings.limit} submit={props.copy.settings.submit}>
+    <DialogFrame context={props.context} title={props.title} submit={props.copy.settings.submit}>
       <textarea
         height={1}
         wrapMode="none"
         initialValue={props.initial}
-        placeholder={props.copy.settings.limitPlaceholder}
+        placeholder={props.placeholder}
         placeholderColor={theme.text.muted}
         textColor={theme.text.formfield.base}
         focusedTextColor={theme.text.formfield.base}
@@ -126,13 +136,13 @@ function LimitDialog(props: {
       />
       <Show
         when={parsed()}
-        fallback={<text fg={theme.text.feedback.error.base}>{props.copy.settings.limitInvalid}</text>}
+        fallback={<text fg={theme.text.feedback.error.base}>{props.invalid}</text>}
       >
         {(value: () => number) => (
           <text fg={theme.text.muted}>{props.copy.settings.limitPreview(formatTokens(value()))}</text>
         )}
       </Show>
-      <text fg={theme.text.muted}>{props.copy.settings.limitHint}</text>
+      <text fg={theme.text.muted}>{props.hint}</text>
     </DialogFrame>
   )
 }
@@ -221,11 +231,16 @@ export function SettingsCommand(props: {
     const payload = {
       contextLimit: props.settings.contextLimit,
       triggerPercent: props.settings.triggerPercent,
+      summaryBudgetTokens: props.settings.summaryBudgetTokens,
     }
     try {
       // ContextRpc 是 PortableDefinition，具体方法名在类型上退化成索引签名，这里补回调用形状。
       const rpc = props.context.client.rpc(ContextRpc) as unknown as {
-        settingsSet(input: { contextLimit: "auto" | number; triggerPercent: number }): Promise<unknown>
+        settingsSet(input: {
+          contextLimit: "auto" | number
+          triggerPercent: number
+          summaryBudgetTokens: number
+        }): Promise<unknown>
       }
       void rpc.settingsSet(payload).catch(() => undefined)
     } catch {
@@ -266,13 +281,40 @@ export function SettingsCommand(props: {
 
   const openCustom = (): void => {
     props.context.ui.dialog.show(() => (
-      <LimitDialog
+      <TokenDialog
         context={props.context}
         copy={copy()}
+        title={copy().settings.limit}
+        hint={copy().settings.limitHint}
+        invalid={copy().settings.limitInvalid}
+        placeholder={copy().settings.limitPlaceholder}
         initial={props.settings.contextLimit === "auto" ? "" : props.settings.contextLimit.toString()}
+        min={MIN_CONTEXT_LIMIT}
+        max={MAX_CONTEXT_LIMIT}
         onConfirm={(value) => {
           void props.updateSettings((draft) => {
             draft.contextLimit = value
+          })
+        }}
+      />
+    ))
+  }
+
+  const openBudget = (): void => {
+    props.context.ui.dialog.show(() => (
+      <TokenDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.summaryBudget}
+        hint={copy().settings.summaryBudgetHint}
+        invalid={copy().settings.summaryBudgetInvalid}
+        placeholder={copy().settings.summaryBudgetPlaceholder}
+        initial={props.settings.summaryBudgetTokens.toString()}
+        min={MIN_SUMMARY_BUDGET}
+        max={MAX_SUMMARY_BUDGET}
+        onConfirm={(value) => {
+          void props.updateSettings((draft) => {
+            draft.summaryBudgetTokens = value
           })
         }}
       />
@@ -315,6 +357,11 @@ export function SettingsCommand(props: {
           value: "threshold",
           footer: `${props.settings.triggerPercent.toString()}%`,
         },
+        {
+          title: copy().settings.summaryBudget,
+          value: "budget",
+          footer: formatTokens(props.settings.summaryBudgetTokens),
+        },
         { title: copy().settings.language, value: "language", footer: localeLabel(props.settings, copy()) },
         { title: copy().settings.close, value: "close" },
       ],
@@ -334,6 +381,10 @@ export function SettingsCommand(props: {
     }
     if (picked === "threshold") {
       openThreshold()
+      return
+    }
+    if (picked === "budget") {
+      openBudget()
       return
     }
     if (picked === "language") {

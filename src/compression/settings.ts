@@ -6,6 +6,7 @@ import type { StorageLike } from "./state.ts"
 export interface ServerSettings {
   readonly contextLimit: "auto" | number
   readonly triggerPercent: number
+  readonly summaryBudgetTokens: number
 }
 
 export const SETTINGS_KEY = "settings"
@@ -13,10 +14,14 @@ export const MIN_TRIGGER_PERCENT = 60
 export const MAX_TRIGGER_PERCENT = 95
 export const MIN_CONTEXT_LIMIT = 1_000
 export const MAX_CONTEXT_LIMIT = 10_000_000
+export const MIN_SUMMARY_BUDGET = 5_000
+export const MAX_SUMMARY_BUDGET = 1_000_000
+export const DEFAULT_SUMMARY_BUDGET = 50_000
 
 export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   contextLimit: "auto",
   triggerPercent: 80,
+  summaryBudgetTokens: DEFAULT_SUMMARY_BUDGET,
 }
 
 /**
@@ -29,6 +34,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   const record = value as Record<string, unknown>
   const limit = record["contextLimit"]
   const percent = record["triggerPercent"]
+  const budget = record["summaryBudgetTokens"] ?? DEFAULT_SUMMARY_BUDGET
   if (
     limit !== "auto" &&
     (typeof limit !== "number" ||
@@ -46,7 +52,15 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   ) {
     return undefined
   }
-  return { contextLimit: limit, triggerPercent: Math.round(percent) }
+  if (
+    typeof budget !== "number" ||
+    !Number.isFinite(budget) ||
+    budget < MIN_SUMMARY_BUDGET ||
+    budget > MAX_SUMMARY_BUDGET
+  ) {
+    return undefined
+  }
+  return { contextLimit: limit, triggerPercent: Math.round(percent), summaryBudgetTokens: Math.round(budget) }
 }
 
 /** 输入：storage；输出：设置（缺失或损坏时用默认值）。 */

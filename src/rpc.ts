@@ -13,6 +13,7 @@ const SettingsJson = {
       anyOf: [{ type: "string", enum: ["auto"] }, { type: "number" }],
     },
     triggerPercent: { type: "number" },
+    summaryBudgetTokens: { type: "number" },
   },
   required: ["contextLimit", "triggerPercent"],
   additionalProperties: false,
