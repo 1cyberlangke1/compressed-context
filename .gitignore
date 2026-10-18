@@ -46,6 +46,13 @@ __pycache__/
 .cache/
 .coverage
 
+# Node / 前端依赖与产物
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+*.tsbuildinfo
+
 # 编译产物
 build/
 build-*/

@@ -1,0 +1,24 @@
+{
+  "name": "compressed-context",
+  "version": "0.0.0",
+  "description": "OpenCode 上下文管理插件：按需压缩、自包含摘要",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.0.32",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
