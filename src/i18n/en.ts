@@ -19,7 +19,6 @@ export const en: Messages = {
   settings: {
     title: "Context panel settings",
     show: "Show panel",
-    expand: "Expand panel",
     language: "Language",
     auto: "Auto",
     on: "On",

@@ -19,7 +19,6 @@ export const zh: Messages = {
   settings: {
     title: "上下文面板设置",
     show: "显示面板",
-    expand: "展开面板",
     language: "语言",
     auto: "自动",
     on: "开",

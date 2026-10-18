@@ -197,11 +197,6 @@ function Commands(props: {
           footer: props.settings.enabled ? copy().settings.on : copy().settings.off,
         },
         {
-          title: copy().settings.expand,
-          value: "expand",
-          footer: props.settings.expanded ? copy().settings.on : copy().settings.off,
-        },
-        {
           title: copy().settings.language,
           value: "language",
           footer: localeLabel(props.settings, copy()),
@@ -212,13 +207,6 @@ function Commands(props: {
     if (picked === "show") {
       await props.updateSettings((draft) => {
         draft.enabled = !draft.enabled
-      })
-      void openSettings()
-      return
-    }
-    if (picked === "expand") {
-      await props.updateSettings((draft) => {
-        draft.expanded = !draft.expanded
       })
       void openSettings()
       return

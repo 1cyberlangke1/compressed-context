@@ -16,7 +16,6 @@ export interface Messages {
   readonly settings: {
     readonly title: string
     readonly show: string
-    readonly expand: string
     readonly language: string
     readonly auto: string
     readonly on: string
