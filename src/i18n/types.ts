@@ -22,13 +22,13 @@ export interface Messages {
     readonly limitCustom: string
     readonly limitHint: string
     readonly limitInvalid: string
-    readonly limitHelp: string
     readonly limitPlaceholder: string
     readonly limitPreview: (value: string) => string
     readonly threshold: string
     readonly thresholdHint: string
     readonly thresholdInvalid: string
     readonly thresholdPreview: (value: string) => string
+    readonly submit: string
     readonly language: string
     readonly auto: string
     readonly on: string

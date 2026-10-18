@@ -10,7 +10,7 @@ import type { TokenCategories } from "./tokens.ts"
 /** metadata 里存放统计的键名，避免和其他插件撞车。 */
 export const STATS_KEY = "compressed-context"
 
-export const CATEGORY_KEYS = ["system", "tools", "tool", "text", "summaries", "media"] as const
+export const CATEGORY_KEYS = ["system", "tools", "tool", "text", "recent", "summaries", "media"] as const
 
 export type CategoryKey = (typeof CATEGORY_KEYS)[number]
 
@@ -29,6 +29,7 @@ export function createStats(categories: TokenCategories, now: number): ContextSt
     categories.tools +
     categories.tool +
     categories.text +
+    categories.recent +
     categories.summaries +
     categories.media
   return { ...categories, estimatedTotal, at: now }
@@ -51,6 +52,8 @@ export function parseStats(value: unknown): ContextStats | undefined {
   const tools = readNumber(record["tools"])
   const tool = readNumber(record["tool"])
   const text = readNumber(record["text"])
+  // 旧版本没有 recent 字段；缺省按 0 处理，避免统计整块失效。
+  const recent = record["recent"] === undefined ? 0 : readNumber(record["recent"])
   const summaries = readNumber(record["summaries"])
   const media = readNumber(record["media"])
   const estimatedTotal = readNumber(record["estimatedTotal"])
@@ -60,6 +63,7 @@ export function parseStats(value: unknown): ContextStats | undefined {
     tools === undefined ||
     tool === undefined ||
     text === undefined ||
+    recent === undefined ||
     summaries === undefined ||
     media === undefined ||
     estimatedTotal === undefined ||
@@ -67,7 +71,7 @@ export function parseStats(value: unknown): ContextStats | undefined {
   ) {
     return undefined
   }
-  return { system, tools, tool, text, summaries, media, estimatedTotal, at }
+  return { system, tools, tool, text, recent, summaries, media, estimatedTotal, at }
 }
 
 /**
@@ -99,6 +103,7 @@ export function mergeMetadata(
       tools: stats.tools,
       tool: stats.tool,
       text: stats.text,
+      recent: stats.recent,
       summaries: stats.summaries,
       media: stats.media,
       estimatedTotal: stats.estimatedTotal,

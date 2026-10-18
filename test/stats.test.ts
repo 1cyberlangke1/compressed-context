@@ -16,6 +16,7 @@ const categories = {
   tools: 500,
   tool: 2_000,
   text: 1_500,
+  recent: 0,
   summaries: 0,
   media: 0,
 }
@@ -32,6 +33,12 @@ describe("createStats / parseStats", () => {
     expect(parseStats("nope")).toBeUndefined()
     expect(parseStats({})).toBeUndefined()
     expect(parseStats({ ...createStats(categories, 1), system: -1 })).toBeUndefined()
+  })
+
+  it("旧统计缺少 recent 时按 0 兼容", () => {
+    const legacy: Record<string, unknown> = { ...createStats(categories, 1) }
+    delete legacy["recent"]
+    expect(parseStats(legacy)?.recent).toBe(0)
   })
 })
 
@@ -77,7 +84,7 @@ describe("scaleCategories", () => {
   })
 
   it("估算为 0 时全部为 0", () => {
-    const stats = createStats({ system: 0, tools: 0, tool: 0, text: 0, summaries: 0, media: 0 }, 1)
+    const stats = createStats({ system: 0, tools: 0, tool: 0, text: 0, recent: 0, summaries: 0, media: 0 }, 1)
     expect(scaleCategories(stats, 10_000).every((row) => row.value === 0 && row.pct === 0)).toBe(true)
   })
 })

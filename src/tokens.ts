@@ -37,6 +37,7 @@ export interface TokenCategories {
   readonly tools: number
   readonly tool: number
   readonly text: number
+  readonly recent: number
   readonly summaries: number
   readonly media: number
 }
@@ -94,6 +95,25 @@ function countToolResult(result: unknown): number {
   return countText(stringify(typed.value))
 }
 
+const CHECKPOINT_PREFIX = "<conversation-checkpoint>"
+const SUMMARY_TAG = /<summary>([\s\S]*?)<\/summary>/
+const RECENT_TAG = /<recent-context>([\s\S]*?)<\/recent-context>/
+
+/**
+ * 输入：checkpoint 文本。
+ * 输出：摘要与最近上下文两部分的 token 估算。
+ * 预期：只把 <summary> 计入摘要；<recent-context> 是逐字保留的最近对话，
+ *       单独计数，避免把最近上下文误当成摘要。
+ */
+function countCheckpoint(text: string): { readonly summary: number; readonly recent: number } {
+  const summary = SUMMARY_TAG.exec(text)?.[1]
+  const recent = RECENT_TAG.exec(text)?.[1]
+  if (summary === undefined && recent === undefined) {
+    return { summary: countText(text), recent: 0 }
+  }
+  return { summary: countText(summary ?? ""), recent: countText(recent ?? "") }
+}
+
 /**
  * 输入：system 片段、工具定义表、消息列表。
  * 输出：按类别汇总的 token 估算。
@@ -116,6 +136,7 @@ export function estimateCategories(input: {
 
   let tool = 0
   let text = 0
+  let recent = 0
   let summaries = 0
   let media = 0
 
@@ -124,8 +145,11 @@ export function estimateCategories(input: {
       switch (part.type) {
         case "text": {
           const value = part.text ?? ""
-          if (value.trimStart().startsWith("<conversation-checkpoint>")) summaries += countText(value)
-          else text += countText(value)
+          if (value.trimStart().startsWith(CHECKPOINT_PREFIX)) {
+            const checkpoint = countCheckpoint(value)
+            summaries += checkpoint.summary
+            recent += checkpoint.recent
+          } else text += countText(value)
           break
         }
         case "reasoning": {
@@ -155,5 +179,5 @@ export function estimateCategories(input: {
     }
   }
 
-  return { system, tools, tool, text, summaries, media }
+  return { system, tools, tool, text, recent, summaries, media }
 }

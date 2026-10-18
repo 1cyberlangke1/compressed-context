@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createEffect, createMemo, createSignal, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, Show, type ParentProps } from "solid-js"
 
 import { formatTokens } from "../format.ts"
 import { resolveMessages, type Messages } from "../i18n/index.ts"
@@ -10,7 +10,6 @@ import {
   MAX_TRIGGER_PERCENT,
   MIN_TRIGGER_PERCENT,
   parseTokenLimit,
-  sanitizeLimitInput,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
@@ -47,6 +46,36 @@ function limitLabel(settings: Settings, copy: Messages): string {
 }
 
 /**
+ * 输入：TUI 上下文 + 标题 + 内容。
+ * 输出：与原生对话框一致的外框（左右 3 格内边距、标题栏、底部操作行）。
+ * 预期：标题在左、esc 在右；内容区与底部操作行各留一空行。
+ */
+function DialogFrame(
+  props: ParentProps<{ readonly context: Context; readonly title: string; readonly submit: string }>,
+) {
+  const theme = props.context.theme
+  return (
+    <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text fg={theme.text.base}>
+          <b>{props.title}</b>
+        </text>
+        <text
+          fg={theme.text.muted}
+          onMouseUp={() => {
+            props.context.ui.dialog.clear()
+          }}
+        >
+          esc
+        </text>
+      </box>
+      <box gap={1}>{props.children}</box>
+      <text fg={theme.text.muted}>{props.submit} enter</text>
+    </box>
+  )
+}
+
+/**
  * 输入：TUI 上下文 + 文案 + 初始值 + 确认回调。
  * 输出：自定义上下文上限的输入对话框。
  * 预期：只接受数字 + 结尾 k/m；解析成功才允许回车提交，非法时只提示不写入。
@@ -60,6 +89,7 @@ function LimitDialog(props: {
   const theme = props.context.theme
   const [text, setText] = createSignal(props.initial)
   const parsed = createMemo(() => parseTokenLimit(text()))
+  let area: { plainText: string } | undefined
 
   const confirm = (): void => {
     const value = parsed()
@@ -68,19 +98,27 @@ function LimitDialog(props: {
     props.context.ui.dialog.clear()
   }
 
+  // 原生 DialogPrompt 用模态层接管回车；这里同样注册，避免 textarea 插入换行。
+  props.context.keymap.layer(() => ({
+    mode: "modal",
+    priority: 1,
+    commands: [{ bind: "enter", title: "Submit", group: "Dialog", run: confirm }],
+  }))
+
   return (
-    <box flexDirection="column" gap={1}>
-      <text fg={theme.text.base}>
-        <b>{props.copy.settings.limit}</b>
-      </text>
-      <input
-        value={text()}
+    <DialogFrame context={props.context} title={props.copy.settings.limit} submit={props.copy.settings.submit}>
+      <textarea
+        height={1}
+        wrapMode="none"
+        initialValue={props.initial}
         placeholder={props.copy.settings.limitPlaceholder}
-        onInput={(value: string) => {
-          setText(sanitizeLimitInput(value))
-        }}
-        onSubmit={confirm}
+        placeholderColor={theme.text.muted}
+        textColor={theme.text.formfield.base}
+        focusedTextColor={theme.text.formfield.base}
+        cursorColor={theme.text.base}
+        onContentChange={() => setText(area?.plainText ?? "")}
         ref={(input) => {
+          area = input
           setTimeout(() => {
             if (!input.isDestroyed) input.focus()
           }, 1)
@@ -95,8 +133,7 @@ function LimitDialog(props: {
         )}
       </Show>
       <text fg={theme.text.muted}>{props.copy.settings.limitHint}</text>
-      <text fg={theme.text.muted}>{props.copy.settings.limitHelp}</text>
-    </box>
+    </DialogFrame>
   )
 }
 
@@ -114,10 +151,12 @@ function ThresholdDialog(props: {
   const theme = props.context.theme
   const [text, setText] = createSignal(props.initial)
   const parsed = createMemo(() => {
-    const value = Number.parseInt(text(), 10)
-    if (!Number.isFinite(value) || value < MIN_TRIGGER_PERCENT || value > MAX_TRIGGER_PERCENT) return undefined
+    if (!/^\d{1,2}$/.test(text())) return undefined
+    const value = Number(text())
+    if (value < MIN_TRIGGER_PERCENT || value > MAX_TRIGGER_PERCENT) return undefined
     return value
   })
+  let area: { plainText: string } | undefined
 
   const confirm = (): void => {
     const value = parsed()
@@ -126,19 +165,27 @@ function ThresholdDialog(props: {
     props.context.ui.dialog.clear()
   }
 
+  // 原生 DialogPrompt 用模态层接管回车；这里同样注册，避免 textarea 插入换行。
+  props.context.keymap.layer(() => ({
+    mode: "modal",
+    priority: 1,
+    commands: [{ bind: "enter", title: "Submit", group: "Dialog", run: confirm }],
+  }))
+
   return (
-    <box flexDirection="column" gap={1}>
-      <text fg={theme.text.base}>
-        <b>{props.copy.settings.threshold}</b>
-      </text>
-      <input
-        value={text()}
+    <DialogFrame context={props.context} title={props.copy.settings.threshold} submit={props.copy.settings.submit}>
+      <textarea
+        height={1}
+        wrapMode="none"
+        initialValue={props.initial}
         placeholder="80"
-        onInput={(value: string) => {
-          setText(value.replace(/[^0-9]/g, "").slice(0, 2))
-        }}
-        onSubmit={confirm}
+        placeholderColor={theme.text.muted}
+        textColor={theme.text.formfield.base}
+        focusedTextColor={theme.text.formfield.base}
+        cursorColor={theme.text.base}
+        onContentChange={() => setText(area?.plainText ?? "")}
         ref={(input) => {
+          area = input
           setTimeout(() => {
             if (!input.isDestroyed) input.focus()
           }, 1)
@@ -153,8 +200,7 @@ function ThresholdDialog(props: {
         )}
       </Show>
       <text fg={theme.text.muted}>{props.copy.settings.thresholdHint}</text>
-      <text fg={theme.text.muted}>{props.copy.settings.limitHelp}</text>
-    </box>
+    </DialogFrame>
   )
 }
 

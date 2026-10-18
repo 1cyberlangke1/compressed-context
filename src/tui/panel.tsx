@@ -18,6 +18,8 @@ function categoryColor(key: CategoryKey, theme: Context["theme"]) {
       return theme.text.feedback.warning.base
     case "text":
       return theme.text.base
+    case "recent":
+      return theme.hue.interactive[200]
     case "summaries":
       return theme.hue.interactive[500]
     case "media":

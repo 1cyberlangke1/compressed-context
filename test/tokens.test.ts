@@ -70,12 +70,31 @@ describe("estimateCategories", () => {
     expect(result.tool).toBe(2)
   })
 
+  it("checkpoint 的 summary 与 recent 分开计数", () => {
+    const result = estimateCategories({
+      system: [],
+      tools: {},
+      messages: [
+        {
+          content: [
+            {
+              type: "text",
+              text: "<conversation-checkpoint>\n<summary>abcd</summary>\n<recent-context>abcdefgh</recent-context>\n</conversation-checkpoint>",
+            },
+          ],
+        },
+      ],
+    })
+    expect(result.summaries).toBe(1)
+    expect(result.recent).toBe(2)
+  })
+
   it("未知 part 类型不计入任何分类", () => {
     const result = estimateCategories({
       system: [],
       tools: {},
       messages: [{ content: [{ type: "effort" }] }],
     })
-    expect(result).toEqual({ system: 0, tools: 0, tool: 0, text: 0, summaries: 0, media: 0 })
+    expect(result).toEqual({ system: 0, tools: 0, tool: 0, text: 0, recent: 0, summaries: 0, media: 0 })
   })
 })
