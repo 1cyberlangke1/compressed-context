@@ -58,16 +58,9 @@ build-*/
 # AI AGENT 本地笔记（不入库）
 AGENTS.md
 PLAN.md
-handoff.md
 HANDOFF.md
-FEATURES.md
 findings.md
-finding.md
 progress.md
 task_plan.md
-EVAL_LOG.md
-调研报告.md
-.opencode-toolkit/
 .claude/
 .playwright-mcp/
-.kaggle/
