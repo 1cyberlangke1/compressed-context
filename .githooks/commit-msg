@@ -1,0 +1,116 @@
+#!/bin/sh
+msg_file="$1"
+
+# 强制字节模式：UTF-8 locale 下 GNU sed 对 4 字节字符（𖥦）的字符类解析会出错，
+# 把标题前缀截坏（提交类型校验误判）；C locale 下 sed/grep 全部按字节处理，行为确定。
+export LC_ALL=C LANG=C
+
+# ===== 颜文字合法性校验（白名单直接内嵌，来源全局 AGENTS.md「心情颜文字」清单）=====
+# 眼睛是 ╸（U+2578），瞳孔是 𖥦（U+16966）；睡眠颜文字原样为 ₍^ ╸ ˕ ╸^₎⟆zzZ，
+# 消息提取 token 只到 ⟆，所以白名单放基础形（不含 zzZ）。
+tokens=$(grep -oE '₍\^[^^]*\^₎(⟆|∫)' "$msg_file")
+if [ -n "$tokens" ]; then
+    list_file="$msg_file.kamojis"
+    cat > "$list_file" <<'EOF'
+₍^˶ ╸𖥦 ╸˵^₎⟆
+₍^ ⸝⸝ ╸𖥦 ╸⸝⸝ ^₎⟆
+₍^ > ヮ < ^₎⟆
+₍^ ̳• ◡ • ̳^₎⟆
+₍^ ✿ ╸𖥦 ╸✿ ^₎⟆
+₍^ ✧ 𖥦 ✧ ^₎⟆
+₍^ ╸ ﹃ ╸ ^₎⟆
+₍^ ╸ ▵ ╸^₎⟆
+₍^ . . ^₎⟆
+₍^ ╹ ꇴ ╹ ^₎⟆
+₍^ ? ╸𖥦 ╸? ^₎⟆
+₍^ ō . ō ^₎⟆
+₍^ ˋ ⌂ ˊ ^₎⟆
+₍^ ಠ . ಠ ^₎⟆
+₍^ > ▵ < ^₎∫
+₍^ ╸︵ ╸^₎⟆
+₍^ ̥_ _ ̥^₎⟆
+₍^ ╸ ˕ ╸^₎⟆
+₍^ ◞ . ◟ ^₎⟆
+₍^ ╥﹏╥^₎⟆
+EOF
+    invalid=$(printf '%s\n' "$tokens" | grep -Fxv -f "$list_file")
+    rm -f "$list_file"
+    if [ -n "$invalid" ]; then
+        echo "❌ 非法颜文字：$invalid"
+        echo "   只允许 AGENTS.md「心情颜文字」清单中的原样（眼睛 ╸、瞳孔 𖥦、睡眠 ₍^ ╸ ˕ ╸^₎⟆zzZ），禁止自造变体"
+        exit 1
+    fi
+fi
+
+title=$(head -n1 "$msg_file")
+
+# 标准化中文符号：全角括号/冒号转半角（不要引入反斜杠）
+title=$(printf '%s' "$title" | sed -e 's/（/(/g' -e 's/）/)/g' -e 's/：/: /g')
+
+# 已知英文 prefix 无冒号时补冒号
+prefix=$(printf '%s' "$title" | sed -E 's/^([a-zA-Z]+).*/\1/')
+case "$prefix" in
+    feat|fix|docs|refactor|chore|style|perf|test|ci|build|revert|merge|update|optimize|cleanup)
+        printf '%s' "$title" | grep -qE '^[a-zA-Z]+(\([^)]+\))?:' || {
+            body=$(printf '%s' "$title" | sed -E 's/^[a-zA-Z]+[[:space:]]*//')
+            title="$prefix: $body"
+        }
+        ;;
+esac
+
+# 解析 prefix
+prefix=$(printf '%s' "$title" | sed -E 's/^([^( :]+).*/\1/')
+
+# 如果没冒号（无 prefix），直接过
+printf '%s' "$title" | grep -qE '^[^( :]+(\([^)]+\))?:' || exit 0
+
+# 去掉前缀后的正文
+body=$(printf '%s' "$title" | sed -E 's/^[^( :]+(\([^)]+\))?:[ ]*//')
+
+# 英→中 + 合法中文类型
+case "$prefix" in
+    feat) type="新增" ;;
+    fix) type="修复" ;;
+    docs) type="文档" ;;
+    refactor) type="重构" ;;
+    chore) type="杂项" ;;
+    style) type="样式" ;;
+    perf) type="性能" ;;
+    test) type="测试" ;;
+    ci) type="集成" ;;
+    build) type="构建" ;;
+    revert) type="回退" ;;
+    merge) type="合并" ;;
+    update) type="更新" ;;
+    optimize) type="优化" ;;
+    cleanup) type="清理" ;;
+    新增|修复|文档|重构|杂项|样式|性能|测试|集成|构建|回退|合并|更新|优化|清理)
+        type="$prefix" ;;
+    简化|进游戏支持) type="优化" ;;
+    构建/测试配置) type="构建" ;;
+    *)
+        echo "❌ 提交类型不合法（$prefix）"
+        echo "允许：feat/新增 fix/修复 docs/文档 refactor/重构 chore/杂项"
+        echo "      style/样式 perf/性能 test/测试 ci/集成 build/构建"
+        echo "      revert/回退 merge/合并 update/更新 optimize/优化 cleanup/清理"
+        exit 1
+        ;;
+esac
+
+new_title="$type: $body"
+
+# 检查正文是否包含中文字符
+body_part=$(printf '%s' "$new_title" | sed -E 's/^[^:]+:[ \t]*//')
+if ! printf '%s' "$body_part" | grep -qE '[一-龥]'; then
+    echo "❌ 提交正文必须包含中文字符"
+    echo "  当前正文: $body_part"
+    exit 1
+fi
+
+# 只替换第一行为规范化后的标题，保留其余行（body / Co-authored-by）。
+# 不用 sed -i：Git for Windows 上会 Invalid cross-device link 静默失败；
+# 用同目录临时文件重写，并检查每一步失败。
+tmp="$msg_file.tmp"
+{ printf '%s\n' "$new_title"; tail -n +2 "$msg_file"; } > "$tmp" || exit 1
+mv "$tmp" "$msg_file" || exit 1
+exit 0

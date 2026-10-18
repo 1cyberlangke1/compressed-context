@@ -1,0 +1,73 @@
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 编辑器 / IDE
+.vscode/
+.vs/
+.idea/
+*.swp
+*~
+*.iml
+*.ipr
+*.iws
+
+# 敏感信息 / 凭据（永不提交）
+.env
+*.env
+*.pem
+*.key
+*.jks
+secrets.*
+credentials.*
+
+# 日志 / 临时文件
+*.log
+logs/
+*.tmp
+*.bak
+*.hprof
+hs_err_pid*
+
+# 本地打包产物
+*.zip
+*.7z
+*.rar
+
+# 临时 clone / 临时目录
+tmp/
+
+# Python 虚拟环境 / 缓存
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.cache/
+.coverage
+
+# 编译产物
+build/
+build-*/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+
+# AI AGENT 本地笔记（不入库）
+AGENTS.md
+PLAN.md
+handoff.md
+HANDOFF.md
+FEATURES.md
+findings.md
+finding.md
+progress.md
+task_plan.md
+EVAL_LOG.md
+调研报告.md
+.opencode-toolkit/
+.claude/
+.playwright-mcp/
+.kaggle/
