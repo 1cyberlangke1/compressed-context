@@ -10,7 +10,6 @@ import {
   isContextLimit,
   localeArgument,
   normalizeSettings,
-  parseTokenLimit,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
@@ -66,8 +65,21 @@ function limitLabel(settings: Settings, copy: Messages): string {
   return formatTokens(value)
 }
 
-/** 自定义上限的快捷选项。 */
-const PRESET_LIMITS = [128_000, 200_000, 256_000, 400_000, 1_000_000] as const
+/** 可选上限预设；菜单里只出现合法值，不存在非法输入。 */
+const PRESET_LIMITS = [
+  32_000,
+  64_000,
+  100_000,
+  128_000,
+  200_000,
+  256_000,
+  300_000,
+  400_000,
+  512_000,
+  768_000,
+  1_000_000,
+  2_000_000,
+] as const
 
 /**
  * 输入：TUI 插件上下文 + sessionID + 设置。
@@ -228,33 +240,15 @@ function Commands(props: {
   }
 
   const openLimit = async (): Promise<void> => {
-    const picked = await props.context.ui.dialog.select<ContextLimit | "custom">({
+    const picked = await props.context.ui.dialog.select<ContextLimit>({
       title: copy().settings.limit,
       current: props.settings.contextLimit,
       options: [
         { title: copy().settings.limitAuto, value: "auto" },
         ...PRESET_LIMITS.map((value) => ({ title: formatTokens(value), value })),
-        { title: copy().settings.limitCustom, value: "custom" as const },
       ],
     })
     if (picked === undefined) return
-    if (picked === "custom") {
-      const input = await props.context.ui.dialog.prompt({
-        title: copy().settings.limit,
-        placeholder: "200k",
-        value: props.settings.contextLimit === "auto" ? "" : props.settings.contextLimit.toString(),
-      })
-      if (input === undefined) return
-      const parsed = parseTokenLimit(input)
-      if (parsed === undefined) {
-        props.context.ui.toast.show({ variant: "error", message: copy().settings.limitInvalid })
-        return
-      }
-      await props.updateSettings((draft) => {
-        draft.contextLimit = parsed
-      })
-      return
-    }
     await props.updateSettings((draft) => {
       draft.contextLimit = picked
     })
