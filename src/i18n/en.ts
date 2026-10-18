@@ -12,4 +12,22 @@ export const en: Messages = {
     media: "Media",
   },
   approximate: "~",
+  command: {
+    title: "Compressed context settings",
+    description: "Open context panel settings",
+  },
+  settings: {
+    title: "Context panel settings",
+    show: "Show panel",
+    expand: "Expand panel",
+    language: "Language",
+    auto: "Auto",
+    on: "On",
+    off: "Off",
+    close: "Close",
+  },
+  languages: {
+    zh: "中文",
+    en: "English",
+  },
 }

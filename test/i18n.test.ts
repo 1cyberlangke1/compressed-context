@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest"
 
+import { en } from "../src/i18n/en.ts"
 import { detectLocale, resolveMessages } from "../src/i18n/index.ts"
+import { zh } from "../src/i18n/zh.ts"
+
+/** 输入：任意嵌套对象；输出：点分隔的叶子键路径。 */
+function leafKeys(value: unknown, prefix = ""): string[] {
+  if (typeof value !== "object" || value === null) return [prefix]
+  return Object.entries(value).flatMap(([key, child]) => leafKeys(child, prefix === "" ? key : `${prefix}.${key}`))
+}
+
+/** 输入：任意嵌套对象；输出：所有字符串叶子值。 */
+function stringValues(value: unknown): string[] {
+  if (typeof value === "string") return [value]
+  if (typeof value !== "object" || value === null) return []
+  return Object.values(value).flatMap((child) => stringValues(child))
+}
 
 describe("resolveMessages", () => {
   it("zh* 返回中文", () => {
@@ -29,6 +44,18 @@ describe("resolveMessages", () => {
         "tool",
         "tools",
       ])
+    }
+  })
+})
+
+describe("语言文件", () => {
+  it("中英文键完全一致", () => {
+    expect(leafKeys(zh).sort()).toEqual(leafKeys(en).sort())
+  })
+
+  it("没有空文案", () => {
+    for (const messages of [zh, en]) {
+      expect(stringValues(messages).every((value) => value.trim().length > 0)).toBe(true)
     }
   })
 })

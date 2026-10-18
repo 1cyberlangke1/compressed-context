@@ -1,16 +1,13 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
-import { createEffect, createMemo, createSignal, For, onCleanup } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 
 import { formatTokens } from "./format.ts"
 import { resolveMessages, type Messages } from "./i18n/index.ts"
+import { initialSettings, localeArgument, type LocaleSetting, type Settings } from "./settings.ts"
 import { parseStats, scaleCategories, STATS_KEY, type CategoryKey, type ContextStats } from "./stats.ts"
 
-/** TUI 侧可配置项，来自 cli.json / opencode.json 的插件 options。 */
-interface TuiOptions {
-  readonly enabled?: boolean
-  readonly locale?: string
-}
+type UpdateSettings = (mutation: (draft: Settings) => void) => Promise<void>
 
 /**
  * 输入：分类 key。
@@ -45,14 +42,27 @@ function percentWidth(value: number): `${number}%` {
   return `${clamped.toString()}%` as `${number}%`
 }
 
+/** 输入：设置；输出：当前语言标签；预期：用于设置菜单右侧的当前值。 */
+function localeLabel(settings: Settings, copy: Messages): string {
+  if (settings.locale === "auto") return copy.settings.auto
+  if (settings.locale === "zh") return copy.languages.zh
+  return copy.languages.en
+}
+
 /**
- * 输入：TUI 插件上下文 + sessionID + 文案。
- * 输出：侧栏里的上下文分类面板。
+ * 输入：TUI 插件上下文 + sessionID + 设置。
+ * 输出：侧栏里的上下文分类面板（可折叠）。
  * 预期：只显示分类条；总量交给内置 Context 区块，避免重复。
  */
-function ContextBlock(props: { readonly context: Context; readonly sessionID: string; readonly copy: Messages }) {
+function ContextBlock(props: {
+  readonly context: Context
+  readonly sessionID: string
+  readonly settings: Settings
+  readonly updateSettings: UpdateSettings
+}) {
   const theme = props.context.theme
   const [stats, setStats] = createSignal<ContextStats>()
+  const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
 
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const messages = createMemo(() => props.context.data.session.message.list(props.sessionID))
@@ -109,31 +119,134 @@ function ContextBlock(props: { readonly context: Context; readonly sessionID: st
     return scaleCategories(value, usage()?.used ?? 0).filter((row) => row.value > 0)
   })
 
+  const toggleExpanded = (): void => {
+    void props.updateSettings((draft) => {
+      draft.expanded = !draft.expanded
+    })
+  }
+
   return (
-    <box width="100%" flexDirection="column">
-      <text fg={theme.text.base}>
-        <b>{props.copy.title}</b>
-      </text>
-      <For each={rows()}>
-        {(row) => (
-          <box flexDirection="row" height={1} gap={1}>
-            <text fg={theme.text.muted} width={10} flexShrink={0}>
-              {props.copy.labels[row.key]}
-            </text>
-            <box flexGrow={1} height={1} backgroundColor={theme.background.raised.high}>
-              <box height={1} width={percentWidth(row.pct)} backgroundColor={categoryColor(row.key, theme)} />
-            </box>
-            <text fg={theme.text.muted} width={4} flexShrink={0} textAlign="right">
-              {`${row.pct.toString()}%`}
-            </text>
-            <text fg={theme.text.muted} width={7} flexShrink={0} textAlign="right">
-              {`${formatTokens(row.value)}${props.copy.approximate}`}
-            </text>
-          </box>
-        )}
-      </For>
-    </box>
+    <Show when={props.settings.enabled}>
+      <box width="100%" flexDirection="column">
+        <box flexDirection="row" height={1} gap={1} onMouseDown={toggleExpanded}>
+          <text fg={theme.text.muted}>{props.settings.expanded ? "▼" : "▶"}</text>
+          <text fg={theme.text.base}>
+            <b>{copy().title}</b>
+          </text>
+        </box>
+        <Show when={props.settings.expanded}>
+          <For each={rows()}>
+            {(row) => (
+              <box flexDirection="row" height={1} gap={1}>
+                <text fg={theme.text.muted} width={10} flexShrink={0}>
+                  {copy().labels[row.key]}
+                </text>
+                <box flexGrow={1} height={1} backgroundColor={theme.background.raised.high}>
+                  <box height={1} width={percentWidth(row.pct)} backgroundColor={categoryColor(row.key, theme)} />
+                </box>
+                <text fg={theme.text.muted} width={4} flexShrink={0} textAlign="right">
+                  {`${row.pct.toString()}%`}
+                </text>
+                <text fg={theme.text.muted} width={7} flexShrink={0} textAlign="right">
+                  {`${formatTokens(row.value)}${copy().approximate}`}
+                </text>
+              </box>
+            )}
+          </For>
+        </Show>
+      </box>
+    </Show>
   )
+}
+
+/**
+ * 输入：TUI 插件上下文 + 设置。
+ * 输出：注册 /compressed-context 命令（斜杠 + 命令面板）。
+ * 预期：打开设置菜单；所有文案来自语言文件，切换语言后命令会重新注册。
+ */
+function Commands(props: {
+  readonly context: Context
+  readonly settings: Settings
+  readonly updateSettings: UpdateSettings
+}) {
+  const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
+
+  const openLocale = async (): Promise<void> => {
+    const picked = await props.context.ui.dialog.select<LocaleSetting>({
+      title: copy().settings.language,
+      current: props.settings.locale,
+      options: [
+        { title: copy().settings.auto, value: "auto" },
+        { title: copy().languages.zh, value: "zh" },
+        { title: copy().languages.en, value: "en" },
+      ],
+    })
+    if (picked === undefined) return
+    await props.updateSettings((draft) => {
+      draft.locale = picked
+    })
+  }
+
+  const openSettings = async (): Promise<void> => {
+    const picked = await props.context.ui.dialog.select<string>({
+      title: copy().settings.title,
+      options: [
+        {
+          title: copy().settings.show,
+          value: "show",
+          footer: props.settings.enabled ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.expand,
+          value: "expand",
+          footer: props.settings.expanded ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.language,
+          value: "language",
+          footer: localeLabel(props.settings, copy()),
+        },
+        { title: copy().settings.close, value: "close" },
+      ],
+    })
+    if (picked === "show") {
+      await props.updateSettings((draft) => {
+        draft.enabled = !draft.enabled
+      })
+      void openSettings()
+      return
+    }
+    if (picked === "expand") {
+      await props.updateSettings((draft) => {
+        draft.expanded = !draft.expanded
+      })
+      void openSettings()
+      return
+    }
+    if (picked === "language") {
+      await openLocale()
+      void openSettings()
+    }
+  }
+
+  props.context.keymap.layer(() => ({
+    mode: "global",
+    commands: [
+      {
+        id: "compressed-context.settings",
+        title: copy().command.title,
+        description: copy().command.description,
+        group: "Plugins",
+        slash: { name: "compressed-context" },
+        palette: true,
+        run() {
+          void openSettings()
+        },
+      },
+    ],
+  }))
+
+  return null
 }
 
 export default Plugin.define({
@@ -141,19 +254,34 @@ export default Plugin.define({
 
   /**
    * 输入：TUI 插件上下文（含插件 options）。
-   * 输出：向 sidebar.content 追加分类面板，并返回注销函数。
-   * 预期：`options.enabled === false` 时不注册；`options.locale` 可强制语言。
+   * 输出：侧栏面板 + /compressed-context 设置命令。
+   * 预期：设置存在 TUI storage 里；options 只作为首次默认值。
    */
   setup(context) {
-    const options = context.options as TuiOptions
-    if (options.enabled === false) return
-    const copy = resolveMessages(options.locale)
-    const disposeSlot = context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => <ContextBlock context={context} sessionID={input.sessionID} copy={copy} />,
+    const [settings, updateSettings] = context.storage.store<Settings>("settings", {
+      initial: initialSettings(context.options),
     })
+
+    const disposeSidebar = context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => (
+        <ContextBlock
+          context={context}
+          sessionID={input.sessionID}
+          settings={settings}
+          updateSettings={updateSettings}
+        />
+      ),
+    })
+
+    const disposeCommands = context.ui.slot({
+      append: "app",
+      render: () => <Commands context={context} settings={settings} updateSettings={updateSettings} />,
+    })
+
     return () => {
-      disposeSlot()
+      disposeSidebar()
+      disposeCommands()
     }
   },
 })

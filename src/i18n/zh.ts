@@ -12,4 +12,22 @@ export const zh: Messages = {
     media: "媒体",
   },
   approximate: "~",
+  command: {
+    title: "压缩上下文设置",
+    description: "打开上下文面板设置",
+  },
+  settings: {
+    title: "上下文面板设置",
+    show: "显示面板",
+    expand: "展开面板",
+    language: "语言",
+    auto: "自动",
+    on: "开",
+    off: "关",
+    close: "关闭",
+  },
+  languages: {
+    zh: "中文",
+    en: "English",
+  },
 }
