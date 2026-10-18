@@ -14,11 +14,11 @@ export const zh: Messages = {
   approximate: "~",
   command: {
     title: "压缩上下文设置",
-    description: "打开上下文面板设置",
+    description: "打开插件设置",
     group: "插件",
   },
   settings: {
-    title: "上下文面板设置",
+    title: "压缩上下文插件设置",
     show: "显示面板",
     limit: "上下文上限",
     limitAuto: "模型原生",

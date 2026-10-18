@@ -14,11 +14,11 @@ export const en: Messages = {
   approximate: "~",
   command: {
     title: "Compressed context settings",
-    description: "Open context panel settings",
+    description: "Open plugin settings",
     group: "Plugins",
   },
   settings: {
-    title: "Context panel settings",
+    title: "Compressed context plugin settings",
     show: "Show panel",
     limit: "Context limit",
     limitAuto: "Model native",
