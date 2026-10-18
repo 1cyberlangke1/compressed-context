@@ -4,27 +4,22 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 import { formatTokens } from "../format.ts"
 import { resolveMessages } from "../i18n/index.ts"
 import { effectiveLimit, localeArgument, type Settings } from "../settings.ts"
-import { parseStats, scaleCategories, STATS_KEY, type CategoryKey, type ContextStats } from "../stats.ts"
+import { parseStats, scaleCategories, STATS_KEY, type ContextStats } from "../stats.ts"
 import type { UpdateSettings } from "./types.ts"
 
-/** 输入：分类 key；输出：该分类柱子的颜色；预期：跟随主题 token。 */
-function categoryColor(key: CategoryKey, theme: Context["theme"]) {
-  switch (key) {
-    case "system":
-      return theme.text.feedback.info.base
-    case "tools":
-      return theme.hue.accent[500]
-    case "tool":
-      return theme.text.feedback.warning.base
-    case "text":
-      return theme.text.base
-    case "recent":
-      return theme.hue.interactive[200]
-    case "summaries":
-      return theme.hue.interactive[500]
-    case "media":
-      return theme.text.muted
-  }
+/** 分类占比低于这个值显示绿色。 */
+const GREEN_MAX_PCT = 15
+/** 分类占比低于这个值显示黄色，再高显示红色。 */
+const YELLOW_MAX_PCT = 30
+
+/**
+ * 输入：该分类占上下文总量的百分比 + 主题。
+ * 输出：绿 → 黄 → 红；占比越小越绿，越大越红。
+ */
+function occupancyColor(pct: number, theme: Context["theme"]) {
+  if (pct <= GREEN_MAX_PCT) return theme.text.feedback.success.base
+  if (pct <= YELLOW_MAX_PCT) return theme.text.feedback.warning.base
+  return theme.text.feedback.error.base
 }
 
 /**
@@ -151,7 +146,7 @@ export function Panel(props: {
                   {copy().labels[row.key]}
                 </text>
                 <box flexGrow={1} height={1} backgroundColor={theme.background.raised.high}>
-                  <box height={1} width={percentWidth(row.pct)} backgroundColor={categoryColor(row.key, theme)} />
+                  <box height={1} width={percentWidth(row.pct)} backgroundColor={occupancyColor(row.pct, theme)} />
                 </box>
                 <text fg={theme.text.muted} width={4} flexShrink={0} textAlign="right">
                   {`${row.pct.toString()}%`}

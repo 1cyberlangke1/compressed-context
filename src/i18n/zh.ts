@@ -8,7 +8,7 @@ export const zh: Messages = {
     tools: "工具定义",
     tool: "工具结果",
     text: "文本",
-    recent: "保留",
+    recent: "最近保留",
     summaries: "摘要",
     media: "媒体",
   },
