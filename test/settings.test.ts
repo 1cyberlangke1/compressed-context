@@ -6,7 +6,9 @@ import {
   initialSettings,
   isLocaleSetting,
   localeArgument,
+  normalizeSettings,
   parseTokenLimit,
+  type ContextLimit,
   type Settings,
 } from "../src/settings.ts"
 
@@ -81,6 +83,25 @@ describe("isLocaleSetting", () => {
   })
 })
 
+describe("normalizeSettings", () => {
+  it("补齐旧版本缺字段的设置", () => {
+    expect(normalizeSettings({ enabled: true, expanded: true, locale: "zh" })).toEqual({
+      enabled: true,
+      expanded: true,
+      locale: "zh",
+      contextLimit: "auto",
+    })
+  })
+
+  it("把字符串上限转成数字", () => {
+    expect(normalizeSettings({ contextLimit: "200k" }).contextLimit).toBe(200_000)
+  })
+
+  it("非法字段回退默认值", () => {
+    expect(normalizeSettings({ enabled: "x", locale: "fr", contextLimit: -1 })).toEqual(DEFAULT_SETTINGS)
+  })
+})
+
 describe("effectiveLimit", () => {
   const base: Settings = DEFAULT_SETTINGS
 
@@ -94,5 +115,10 @@ describe("effectiveLimit", () => {
 
   it("原生值未知时返回 undefined", () => {
     expect(effectiveLimit(base, 0)).toBeUndefined()
+  })
+
+  it("运行时的非法值按 auto 处理", () => {
+    const broken = { ...base, contextLimit: undefined as unknown as ContextLimit }
+    expect(effectiveLimit(broken, 128_000)).toBe(128_000)
   })
 })

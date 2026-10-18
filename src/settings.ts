@@ -56,15 +56,36 @@ export function parseTokenLimit(text: string): number | undefined {
   return tokens
 }
 
-/** 输入：任意值；输出：合法的上下文上限设置。 */
+/** 输入：任意值；输出：是否是合法上下文上限。 */
+export function isContextLimit(value: unknown): value is ContextLimit {
+  if (value === "auto") return true
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_CONTEXT_LIMIT &&
+    value <= MAX_CONTEXT_LIMIT
+  )
+}
+
+/** 输入：任意值；输出：合法的上下文上限设置（支持 `200k` 这类字符串）。 */
 function readContextLimit(value: unknown): ContextLimit {
-  if (value === "auto") return "auto"
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const rounded = Math.round(value)
-    return rounded >= MIN_CONTEXT_LIMIT && rounded <= MAX_CONTEXT_LIMIT ? rounded : "auto"
+  if (isContextLimit(value)) return value
+  if (typeof value === "string") return parseTokenLimit(value) ?? DEFAULT_SETTINGS.contextLimit
+  return DEFAULT_SETTINGS.contextLimit
+}
+
+/**
+ * 输入：任意设置对象（可能来自旧版本、缺字段或类型不对）。
+ * 输出：补齐后的合法设置。
+ * 预期：用于启动时迁移 storage 里的旧数据，绝不抛错。
+ */
+export function normalizeSettings(value: Readonly<Record<string, unknown>>): Settings {
+  return {
+    enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_SETTINGS.enabled,
+    expanded: typeof value["expanded"] === "boolean" ? value["expanded"] : DEFAULT_SETTINGS.expanded,
+    locale: isLocaleSetting(value["locale"]) ? value["locale"] : DEFAULT_SETTINGS.locale,
+    contextLimit: readContextLimit(value["contextLimit"]),
   }
-  if (typeof value === "string") return parseTokenLimit(value) ?? "auto"
-  return "auto"
 }
 
 /**
@@ -73,12 +94,7 @@ function readContextLimit(value: unknown): ContextLimit {
  * 预期：非法值回退默认值，绝不抛错。
  */
 export function initialSettings(options: Readonly<Record<string, unknown>>): Settings {
-  return {
-    enabled: typeof options["enabled"] === "boolean" ? options["enabled"] : DEFAULT_SETTINGS.enabled,
-    expanded: typeof options["expanded"] === "boolean" ? options["expanded"] : DEFAULT_SETTINGS.expanded,
-    locale: isLocaleSetting(options["locale"]) ? options["locale"] : DEFAULT_SETTINGS.locale,
-    contextLimit: readContextLimit(options["contextLimit"]),
-  }
+  return normalizeSettings(options)
 }
 
 /**
@@ -96,6 +112,7 @@ export function localeArgument(locale: LocaleSetting): string | undefined {
  * 预期：自定义值优先；auto 时回退模型原生值。
  */
 export function effectiveLimit(settings: Settings, native: number): number | undefined {
-  if (settings.contextLimit !== "auto") return settings.contextLimit
+  const value: unknown = settings.contextLimit
+  if (isContextLimit(value) && value !== "auto") return value
   return native > 0 ? native : undefined
 }

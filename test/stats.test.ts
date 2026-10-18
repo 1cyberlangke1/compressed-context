@@ -119,6 +119,12 @@ describe("formatTokens", () => {
     expect(formatTokens(1_500_000)).toBe("1.5M")
     expect(formatTokens(15_000_000)).toBe("15M")
   })
+
+  it("非法输入不会显示 NaNM", () => {
+    expect(formatTokens(Number.NaN)).toBe("0")
+    expect(formatTokens(-1)).toBe("0")
+    expect(formatTokens(Number.POSITIVE_INFINITY)).toBe("0")
+  })
 })
 
 describe("ContextStats 类型", () => {

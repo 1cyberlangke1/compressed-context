@@ -4,7 +4,17 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import { formatTokens } from "./format.ts"
 import { resolveMessages, type Messages } from "./i18n/index.ts"
-import { initialSettings, effectiveLimit, localeArgument, parseTokenLimit, type ContextLimit, type LocaleSetting, type Settings } from "./settings.ts"
+import {
+  initialSettings,
+  effectiveLimit,
+  isContextLimit,
+  localeArgument,
+  normalizeSettings,
+  parseTokenLimit,
+  type ContextLimit,
+  type LocaleSetting,
+  type Settings,
+} from "./settings.ts"
 import { parseStats, scaleCategories, STATS_KEY, type CategoryKey, type ContextStats } from "./stats.ts"
 
 type UpdateSettings = (mutation: (draft: Settings) => void) => Promise<void>
@@ -51,8 +61,9 @@ function localeLabel(settings: Settings, copy: Messages): string {
 
 /** 输入：设置；输出：当前上下文上限标签；预期：auto 显示「模型原生」。 */
 function limitLabel(settings: Settings, copy: Messages): string {
-  if (settings.contextLimit === "auto") return copy.settings.limitAuto
-  return formatTokens(settings.contextLimit)
+  const value: unknown = settings.contextLimit
+  if (!isContextLimit(value) || value === "auto") return copy.settings.limitAuto
+  return formatTokens(value)
 }
 
 /** 自定义上限的快捷选项。 */
@@ -321,6 +332,24 @@ export default Plugin.define({
     const [settings, updateSettings] = context.storage.store<Settings>("settings", {
       initial: initialSettings(context.options),
     })
+
+    // 旧版本存下来的设置可能缺字段（例如没有 contextLimit），启动时补齐并写回。
+    const normalized = normalizeSettings({
+      enabled: settings.enabled,
+      expanded: settings.expanded,
+      locale: settings.locale,
+      contextLimit: settings.contextLimit,
+    })
+    if (
+      settings.enabled !== normalized.enabled ||
+      settings.expanded !== normalized.expanded ||
+      settings.locale !== normalized.locale ||
+      settings.contextLimit !== normalized.contextLimit
+    ) {
+      void updateSettings((draft) => {
+        Object.assign(draft, normalized)
+      })
+    }
 
     const disposeSidebar = context.ui.slot({
       append: "sidebar.content",
