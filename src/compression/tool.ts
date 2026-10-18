@@ -9,8 +9,15 @@ import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
 
 const DESCRIPTION =
   "Compress the conversation so far into a structured checkpoint. Call this when the context is getting full. " +
-  "It summarizes every message since the last compressed block, up to the current user message, and replaces them " +
-  "with one block. All fields are required. Do not call while a compression is already pending."
+  "It covers every message since the last compressed block, up to the current user message, and replaces them with " +
+  "one block. All fields are required; do not call while a compression is already pending. " +
+  "The block is the only remaining record of those messages, so copy exact paths with line numbers, signatures, the " +
+  "code lines that carry the logic, error text, versions, config keys, thresholds, and measured values. " +
+  "Give the reason for each decision, keep the objective and any pivots, why important actions were taken, unanswered " +
+  "questions, and work the user still expects. Describe the past as past, not as a new instruction. " +
+  "Leave out logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why), and " +
+  "repeated status checks. If space is tight, keep objective and constraints first, then decisions and reasons, then " +
+  "exact technical facts, then conclusions, then lessons. Write short factual entries, not prose."
 
 function failure(message: string) {
   return { content: `ERROR: ${message}`, metadata: { error: true } }

@@ -17,35 +17,39 @@ export interface GenerateLike {
 }
 
 const SHAPE = `{
-  "goal": "one or two sentences",
-  "constraints": ["..."],
-  "decisions": ["decision — because ..."],
+  "goal": "the objective and any pivots it went through",
+  "constraints": ["hard limits and user preferences"],
+  "decisions": ["what was decided — why"],
   "progress": {
-    "completed": ["..."],
-    "active": ["..."],
-    "blocked": ["..."]
+    "completed": ["finished work"],
+    "active": ["work in progress, including what the user still expects"],
+    "blocked": ["what is blocked — why"]
   },
-  "open_items": ["..."],
-  "files": ["path — why it matters"],
-  "facts": ["exact errors, versions, config keys, signatures"]
+  "open_items": ["unanswered questions, TODOs, next actions"],
+  "files": ["full/path.ext:line — role in the work"],
+  "facts": ["exact errors, signatures, versions, config keys, thresholds, measured values"]
 }`
+
+const TIER1_RULES = `Guidance:
+- This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own.
+- Describe what already happened as history. Do not turn a recorded plan or request into an instruction to act now.
+- Copy exact identifiers instead of describing them: full paths with line numbers, function and type signatures, the line of code that carries the logic, error text, versions, config keys, thresholds, and measured numbers.
+- For each decision, say why it was made. Keep discovered constraints, the user's objective and any change of direction, the reason behind important actions, unanswered questions, and work the user still expects.
+- Quote the user only when the exact wording matters; otherwise paraphrase and never invent a quote.
+- Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (keep one line on why they failed), repeated status checks, and discussion that has already reached a conclusion.
+- If space is tight, keep in this order: objective and constraints; decisions and reasons; exact technical facts; conclusions; lessons from failures.
+- Prefer short factual entries over prose. Group related entries under the field that fits them.`
 
 function buildPrompt(transcript: string): string {
   return [
     "You are writing a checkpoint that will replace an older part of a conversation.",
-    "A later reader must be able to continue the work using only this checkpoint plus the messages that follow it.",
+    "The checkpoint and the messages after it are all the next reader will see; make it self-contained.",
     "",
     "Return ONLY a JSON object with this exact shape (no markdown fences, no commentary):",
     SHAPE,
     "",
-    "Rules:",
-    "- Record the past as history. Never phrase recorded state as a live instruction.",
-    "- Preserve exact file paths with line numbers, function/type signatures, error strings, commands, versions, and config keys.",
-    "- Decisions must include the reason.",
-    "- Keep unresolved user objectives and open questions.",
-    "- Drop logs, duplicate reads, status checks, and dead ends (keep one line of the lesson).",
+    TIER1_RULES,
     "- Write in the source conversation's primary language.",
-    "- Keep it compact. No preamble.",
     "",
     "Conversation:",
     transcript,
