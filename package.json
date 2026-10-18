@@ -6,7 +6,7 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
-    "./tui": "./src/tui.tsx"
+    "./tui": "./src/tui/index.tsx"
   },
   "files": [
     "src"

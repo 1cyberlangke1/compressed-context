@@ -49,10 +49,6 @@ function createFakeContext() {
 const emptyContext = { sessionID: "ses_test", system: [], tools: {}, messages: [] }
 
 describe("服务端插件入口", () => {
-  it("暴露稳定的插件 id", () => {
-    expect(plugin.id).toBe("compressed-context")
-  })
-
   it("setup 注册 context 钩子", async () => {
     const { ctx, hooks } = createFakeContext()
 

@@ -56,6 +56,13 @@ export function parseTokenLimit(text: string): number | undefined {
   return tokens
 }
 
+/** 输入：任意输入文本；输出：只保留数字 + 结尾单个 k/m 的合法形态。 */
+export function sanitizeLimitInput(value: string): string {
+  const cleaned = value.toLowerCase().replace(/[^0-9km]/g, "")
+  const match = /^(\d*)([km]?)/.exec(cleaned)
+  return `${match?.[1] ?? ""}${match?.[2] ?? ""}`
+}
+
 /** 输入：任意值；输出：是否是合法上下文上限。 */
 export function isContextLimit(value: unknown): value is ContextLimit {
   if (value === "auto") return true
