@@ -17,6 +17,7 @@ export interface GenerateLike {
 }
 
 const SHAPE = `{
+  "title": "short label for this block",
   "goal": "the objective and any pivots it went through",
   "constraints": ["hard limits and user preferences"],
   "decisions": ["what was decided — why"],

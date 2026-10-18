@@ -44,7 +44,9 @@ export function renderSummary(summary: SummaryFields): string {
 
 /** 输入：一个块；输出：带块头的完整文本。 */
 export function renderBlock(block: Block): string {
-  return `${blockMarker(block.id)}\n\n${renderSummary(block.summary)}`
+  const title = block.summary.title.trim()
+  const header = title ? `${blockMarker(block.id)} ${title}` : blockMarker(block.id)
+  return `${header}\n\n${renderSummary(block.summary)}`
 }
 
 /** 输入：已落盘块 + 可选的 pending 块；输出：拼接后的 checkpoint 文本。 */

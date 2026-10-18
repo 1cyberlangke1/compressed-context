@@ -24,6 +24,7 @@ export function summaryChars(summary: SummaryFields): number {
 export function validateSummary(summary: SummaryFields, sourceChars: number): ValidationResult {
   const fields: string[] = []
   if (summary.goal.trim().length === 0) fields.push("goal")
+  if (summary.title.trim().length === 0 || summary.title.length > 80) fields.push("title")
   if (summary.constraints.some((item) => item.trim().length === 0)) fields.push("constraints")
   if (summary.decisions.some((item) => item.trim().length === 0)) fields.push("decisions")
   if (summary.open_items.some((item) => item.trim().length === 0)) fields.push("open_items")

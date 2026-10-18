@@ -11,6 +11,7 @@ const DESCRIPTION =
   "Compress the conversation so far into a structured checkpoint. Call this when the context is getting full. " +
   "It covers every message since the last compressed block, up to the current user message, and replaces them with " +
   "one block. All fields are required; do not call while a compression is already pending. " +
+  "Add a short title for the block. " +
   "The block is the only remaining record of those messages, so copy exact paths with line numbers, signatures, the " +
   "code lines that carry the logic, error text, versions, config keys, thresholds, and measured values. " +
   "Give the reason for each decision, keep the objective and any pivots, why important actions were taken, unanswered " +

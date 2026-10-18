@@ -14,6 +14,11 @@ export interface Block {
   readonly at: number
 }
 
+/** 旧版本把 title 存成可选；读取时补上，避免丢块。 */
+type LegacyBlock = Omit<Block, "summary"> & {
+  readonly summary: Omit<SummaryFields, "title"> & { readonly title?: string }
+}
+
 /** 每个会话一份的压缩状态。 */
 export interface State {
   readonly v: 1
@@ -44,7 +49,21 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
 }
 
-function isBlock(value: unknown): value is Block {
+/** 输入：旧块；输出：标题非空的块；预期：缺标题时用 goal 的前 80 个字符补。 */
+function withTitle(block: LegacyBlock): Block {
+  const title = block.summary.title?.trim()
+  const goal = block.summary.goal.trim().replace(/\s+/g, " ")
+  const fallback = goal.length === 0 ? "untitled" : goal.length <= 80 ? goal : `${goal.slice(0, 77)}...`
+  return {
+    ...block,
+    summary: {
+      ...block.summary,
+      title: title !== undefined && title.length > 0 ? title : fallback,
+    },
+  }
+}
+
+function isBlock(value: unknown): value is LegacyBlock {
   if (typeof value !== "object" || value === null) return false
   const block = value as Record<string, unknown>
   if (typeof block["id"] !== "string") return false
@@ -56,6 +75,7 @@ function isBlock(value: unknown): value is Block {
   if (typeof summary !== "object" || summary === null) return false
   const fields = summary as Record<string, unknown>
   if (typeof fields["goal"] !== "string") return false
+  if (fields["title"] !== undefined && typeof fields["title"] !== "string") return false
   if (!isStringArray(fields["constraints"])) return false
   if (!isStringArray(fields["decisions"])) return false
   if (!isStringArray(fields["open_items"])) return false
@@ -76,8 +96,8 @@ export function parseState(value: unknown): State {
   if (typeof value !== "object" || value === null) return EMPTY_STATE
   const record = value as Record<string, unknown>
   if (record["v"] !== 1) return EMPTY_STATE
-  const blocks = Array.isArray(record["blocks"]) ? record["blocks"].filter(isBlock) : []
-  const pending = isBlock(record["pending"]) ? record["pending"] : undefined
+  const blocks = Array.isArray(record["blocks"]) ? record["blocks"].filter(isBlock).map(withTitle) : []
+  const pending = isBlock(record["pending"]) ? withTitle(record["pending"]) : undefined
   const attempts = typeof record["attempts"] === "number" ? record["attempts"] : 0
   const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
   if (pending === undefined) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { parseServerSettings } from "../src/compression/settings.ts"
-import { blockMarker, renderAll } from "../src/compression/render.ts"
+import { blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, textChars, type MessageLike } from "../src/compression/select.ts"
 import { commitPending, dropPending, parseState, withPending, type Block } from "../src/compression/state.ts"
@@ -10,6 +10,7 @@ import { buildTranscript } from "../src/compression/transcript.ts"
 import { validateSummary } from "../src/compression/validate.ts"
 
 const summary: SummaryFields = {
+  title: "compress core",
   goal: "implement compression",
   constraints: ["no native fallback", "keep history intact"],
   decisions: ["use compaction pipeline — it is the only way to advance history"],
@@ -70,6 +71,22 @@ describe("状态", () => {
     expect(parseState({ v: 2 })).toEqual({ v: 1, blocks: [], attempts: 0 })
     expect(parseState({ v: 1, blocks: [{}] }).blocks).toEqual([])
   })
+
+  it("旧块缺少标题时用 goal 补", () => {
+    const legacy = {
+      ...block,
+      summary: {
+        goal: summary.goal,
+        constraints: summary.constraints,
+        decisions: summary.decisions,
+        progress: summary.progress,
+        open_items: summary.open_items,
+        files: summary.files,
+        facts: summary.facts,
+      },
+    }
+    expect(parseState({ v: 1, blocks: [legacy], attempts: 0 }).blocks[0]?.summary.title).toBe("implement compression")
+  })
 })
 
 describe("渲染", () => {
@@ -80,6 +97,12 @@ describe("渲染", () => {
     expect(text).toContain("## Goal")
     expect(text).toContain("implement compression")
     expect(text.indexOf(blockMarker("b1"))).toBeLessThan(text.indexOf(blockMarker("b2")))
+  })
+
+  it("块头可以带标题，标记仍可被 includes 命中", () => {
+    const titled = renderBlock({ ...block, summary: { ...summary, title: "压缩内核" } })
+    expect(titled.startsWith(`${blockMarker("b1")} 压缩内核`)).toBe(true)
+    expect(titled).toContain(blockMarker("b1"))
   })
 })
 
@@ -93,6 +116,11 @@ describe("校验", () => {
     expect(validateSummary({ ...summary, facts: [] }, 300).ok).toBe(false)
     expect(validateSummary(summary, 100).ok).toBe(false)
   })
+
+  it("拒绝空标题与超长标题", () => {
+    expect(validateSummary({ ...summary, title: " " }, 10_000).fields).toContain("title")
+    expect(validateSummary({ ...summary, title: "x".repeat(81) }, 10_000).fields).toContain("title")
+  })
 })
 
 describe("服务端设置", () => {
@@ -102,12 +130,6 @@ describe("服务端设置", () => {
       triggerPercent: 80,
     })
     expect(parseServerSettings({ contextLimit: 200_000, triggerPercent: 95 })).toBeDefined()
-    expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 59 })).toBeUndefined()
-    expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 96 })).toBeUndefined()
-    expect(parseServerSettings({ contextLimit: "nope", triggerPercent: 80 })).toBeUndefined()
-  })
-
-  it("拒绝越界值", () => {
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 59 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 96 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "nope", triggerPercent: 80 })).toBeUndefined()

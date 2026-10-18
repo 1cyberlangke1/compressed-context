@@ -7,6 +7,7 @@ import { Schema } from "effect"
  * 所有字段必填，缺字段会在工具边界直接被拒。
  */
 export const SummaryFields = Schema.Struct({
+  title: Schema.String,
   goal: Schema.String,
   constraints: Schema.Array(Schema.String),
   decisions: Schema.Array(Schema.String),
