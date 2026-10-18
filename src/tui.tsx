@@ -129,7 +129,7 @@ function ContextBlock(props: {
     <Show when={props.settings.enabled}>
       <box width="100%" flexDirection="column">
         <box flexDirection="row" height={1} gap={1} onMouseDown={toggleExpanded}>
-          <text fg={theme.text.muted}>{props.settings.expanded ? "▼" : "▶"}</text>
+          <text fg={theme.text.base}>{props.settings.expanded ? "▼" : "▶"}</text>
           <text fg={theme.text.base}>
             <b>{copy().title}</b>
           </text>
