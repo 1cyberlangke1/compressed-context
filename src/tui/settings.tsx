@@ -27,7 +27,6 @@ const PRESET_LIMITS = [
   512_000,
   768_000,
   1_000_000,
-  2_000_000,
 ] as const
 
 /** 输入：设置；输出：当前语言标签；预期：用于设置菜单右侧的当前值。 */
@@ -139,7 +138,7 @@ export function SettingsCommand(props: {
     ))
   }
 
-  const openLimit = async (): Promise<void> => {
+  const openLimit = async (): Promise<boolean> => {
     const picked = await props.context.ui.dialog.select<ContextLimit | "custom">({
       title: copy().settings.limit,
       current: props.settings.contextLimit,
@@ -149,14 +148,15 @@ export function SettingsCommand(props: {
         { title: copy().settings.limitCustom, value: "custom" as const },
       ],
     })
-    if (picked === undefined) return
+    if (picked === undefined) return false
     if (picked === "custom") {
       openCustom()
-      return
+      return true
     }
     await props.updateSettings((draft) => {
       draft.contextLimit = picked
     })
+    return false
   }
 
   const openSettings = async (): Promise<void> => {
@@ -181,8 +181,9 @@ export function SettingsCommand(props: {
       return
     }
     if (picked === "limit") {
-      await openLimit()
-      void openSettings()
+      const custom = await openLimit()
+      // 自定义对话框已经打开时不要再弹主菜单，否则会把它顶掉。
+      if (!custom) void openSettings()
       return
     }
     if (picked === "language") {
