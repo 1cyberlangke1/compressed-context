@@ -3,7 +3,7 @@ import { Plugin } from "@opencode/plugin"
 import { maybeAutoCompress } from "./compression/auto.ts"
 import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
 import { renderAll } from "./compression/render.ts"
-import { eligibleMessages, textChars, type MessageLike } from "./compression/select.ts"
+import { eligibleMessages, type MessageLike } from "./compression/select.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
 import { loadState, saveState, withPending, type Block } from "./compression/state.ts"
 import { summarize, type GenerateLike } from "./compression/summarize.ts"
@@ -77,12 +77,13 @@ export default Plugin.define({
         }
 
         const eligible = eligibleMessages(event.messages)
-        const sourceChars = textChars(eligible)
+        const transcript = buildTranscript(eligible)
+        const sourceChars = transcript.length
         if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) {
           throw new Error("nothing to compress")
         }
         const summary = await summarize({
-          transcript: buildTranscript(eligible),
+          transcript,
           sourceChars,
           generate: ctx.generate as unknown as GenerateLike,
           model: event.model,

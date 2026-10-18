@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { estimateCategories, totalCategories } from "../tokens.ts"
-import { eligibleMessages, textChars, type MessageLike } from "./select.ts"
+import { eligibleMessages, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
 import { loadState, saveState, withPending, type Block } from "./state.ts"
 import { summarize, type GenerateLike, type ModelRefLike } from "./summarize.ts"
@@ -72,7 +72,8 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (estimateTotal(input) < limit * (settings.triggerPercent / 100)) return
 
     const eligible = eligibleMessages(input.messages)
-    const sourceChars = textChars(eligible)
+    const transcript = buildTranscript(eligible)
+    const sourceChars = transcript.length
     if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
 
     const first = eligible.find((message) => message.id !== undefined)
@@ -82,7 +83,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     await saveState(input.ctx.storage, input.sessionID, { ...state, autoInFlight: true })
 
     const summary = await summarize({
-      transcript: buildTranscript(eligible),
+      transcript,
       sourceChars,
       generate: input.ctx.generate as unknown as GenerateLike,
       model: input.model,

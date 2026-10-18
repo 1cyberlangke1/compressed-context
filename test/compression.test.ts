@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest"
+import type { Schema } from "effect"
+import type { Plugin } from "@opencode/plugin"
 
-import { parseServerSettings } from "../src/compression/settings.ts"
+import { maybeAutoCompress } from "../src/compression/auto.ts"
+import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, textChars, type MessageLike } from "../src/compression/select.ts"
-import { commitPending, dropPending, parseState, withPending, type Block } from "../src/compression/state.ts"
+import { commitPending, dropPending, loadState, parseState, stateKey, withPending, type Block, type StorageLike } from "../src/compression/state.ts"
 import { summarize } from "../src/compression/summarize.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
 import { validateSummary } from "../src/compression/validate.ts"
@@ -36,6 +39,36 @@ const message = (role: string, text: string, id?: string): MessageLike => ({
   role,
   content: [{ type: "text", text }],
 })
+
+/** 输入：初始键值；输出：内存版 StorageLike。 */
+function memoryStorage(initial: Record<string, unknown> = {}): StorageLike {
+  const values = new Map<string, Schema.Json>(Object.entries(initial) as [string, Schema.Json][])
+  return {
+    get: (key) => Promise.resolve(values.get(key)),
+    set: (key, value) => {
+      values.set(key, value)
+      return Promise.resolve()
+    },
+    remove: (key) => {
+      values.delete(key)
+      return Promise.resolve()
+    },
+  }
+}
+
+/** 输入：storage / 摘要回复 / compact 回调；输出：够 maybeAutoCompress 用的假 ctx。 */
+function fakeCtx(
+  storage: StorageLike,
+  text: () => Promise<{ text: string }>,
+  compact: () => Promise<void>,
+): Plugin.Context {
+  return {
+    storage,
+    model: { list: () => Promise.resolve({ data: [] }) },
+    generate: { text },
+    session: { compact },
+  } as unknown as Plugin.Context
+}
 
 describe("选区", () => {
   it("取最后一条 user 之前、排除 checkpoint", () => {
@@ -182,5 +215,112 @@ describe("侧调用摘要", () => {
       generate: { text: () => Promise.resolve({ text: "nope" }) },
     })
     expect(result).toBeUndefined()
+  })
+})
+
+describe("自动压缩", () => {
+  /** 输入：无；输出：纯文本少、工具输出多的消息。 */
+  const autoMessages = (): MessageLike[] => [
+    message("user", "hi", "m1"),
+    {
+      id: "m2",
+      role: "assistant",
+      content: [
+        { type: "text", text: "short" },
+        ...Array.from({ length: 3 }, () => ({
+          type: "tool-result",
+          name: "shell",
+          result: "x".repeat(6_000),
+        })),
+      ],
+    },
+    message("user", "continue", "m3"),
+  ]
+
+  it("纯文本不够但工具输出足够时仍然触发", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 1_000, triggerPercent: 60 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    const state = await loadState(storage, "ses_test")
+    expect(compacts).toBe(1)
+    expect(state.pending?.summary.goal).toBe(summary.goal)
+  })
+
+  it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 1_000, triggerPercent: 60 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    const checkpoint = message(
+      "user",
+      `<conversation-checkpoint><summary>old</summary><recent-context>${"x".repeat(20_000)}</recent-context></conversation-checkpoint>`,
+      "m0",
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: [
+        checkpoint,
+        message("user", "hi", "m1"),
+        message("assistant", "short", "m2"),
+        message("user", "continue", "m3"),
+      ],
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    const state = await loadState(storage, "ses_test")
+    expect(compacts).toBe(0)
+    expect(state.pending).toBeUndefined()
+  })
+
+  it("摘要失败时保留已有块并记一次失败", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 1_000, triggerPercent: 60 },
+      [stateKey("ses_test")]: { v: 1, blocks: [block], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: "not json" }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    const state = await loadState(storage, "ses_test")
+    expect(compacts).toBe(0)
+    expect(state.blocks).toHaveLength(1)
+    expect(state.attempts).toBe(1)
+    expect(state.lastError).toBe("auto summary failed")
   })
 })
