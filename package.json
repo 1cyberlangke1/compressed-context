@@ -5,11 +5,18 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.tsx"
   },
   "files": [
     "src"
   ],
+  "peerDependencies": {
+    "@opencode/plugin": "^2.0.32",
+    "@opentui/core": ">=0.5.17",
+    "@opentui/solid": ">=0.5.17",
+    "solid-js": ">=1.9.0"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -20,8 +27,12 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@opencode/plugin": "^2.0.32",
+    "@opencode/theme": "2.0.32",
+    "@opentui/core": "0.5.17",
+    "@opentui/solid": "0.5.17",
     "@types/node": "^26.6.5",
     "eslint": "^10.13.0",
+    "solid-js": "1.9.15",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.2",
     "vitest": "^5.0.5"

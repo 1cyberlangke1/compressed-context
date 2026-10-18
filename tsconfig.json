@@ -1,10 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "types": ["node"],
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -26,5 +28,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "test", "vitest.config.ts"]
+  "include": ["src", "test", "index.ts", "tui.ts", "vitest.config.ts"]
 }
