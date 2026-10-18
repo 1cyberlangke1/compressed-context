@@ -72,7 +72,7 @@ function LimitDialog(props: {
       </text>
       <input
         value={text()}
-        placeholder="200k"
+        placeholder={props.copy.settings.limitPlaceholder}
         onInput={(value: string) => {
           setText(sanitizeLimitInput(value))
         }}
@@ -87,7 +87,9 @@ function LimitDialog(props: {
         when={parsed()}
         fallback={<text fg={theme.text.feedback.error.base}>{props.copy.settings.limitInvalid}</text>}
       >
-        {(value: () => number) => <text fg={theme.text.muted}>{`= ${formatTokens(value())} tokens`}</text>}
+        {(value: () => number) => (
+          <text fg={theme.text.muted}>{props.copy.settings.limitPreview(formatTokens(value()))}</text>
+        )}
       </Show>
       <text fg={theme.text.muted}>{props.copy.settings.limitHint}</text>
       <text fg={theme.text.muted}>{props.copy.settings.limitHelp}</text>
@@ -199,7 +201,7 @@ export function SettingsCommand(props: {
         id: "compressed-context.settings",
         title: copy().command.title,
         description: copy().command.description,
-        group: "Plugins",
+        group: copy().command.group,
         slash: { name: "compressed-context" },
         palette: true,
         run() {

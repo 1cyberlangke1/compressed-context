@@ -12,6 +12,7 @@ export interface Messages {
   readonly command: {
     readonly title: string
     readonly description: string
+    readonly group: string
   }
   readonly settings: {
     readonly title: string
@@ -22,6 +23,8 @@ export interface Messages {
     readonly limitHint: string
     readonly limitInvalid: string
     readonly limitHelp: string
+    readonly limitPlaceholder: string
+    readonly limitPreview: (value: string) => string
     readonly language: string
     readonly auto: string
     readonly on: string

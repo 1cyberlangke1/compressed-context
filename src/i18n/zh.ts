@@ -15,6 +15,7 @@ export const zh: Messages = {
   command: {
     title: "压缩上下文设置",
     description: "打开上下文面板设置",
+    group: "插件",
   },
   settings: {
     title: "上下文面板设置",
@@ -25,6 +26,8 @@ export const zh: Messages = {
     limitHint: "输入纯数字，或带 k/m 后缀（如 200000、200k、1m）",
     limitInvalid: "请输入有效的 token 数",
     limitHelp: "回车确认 · Esc 取消",
+    limitPlaceholder: "200k",
+    limitPreview: (value) => `= ${value} tokens`,
     language: "语言",
     auto: "自动",
     on: "开",

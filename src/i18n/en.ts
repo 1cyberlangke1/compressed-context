@@ -15,6 +15,7 @@ export const en: Messages = {
   command: {
     title: "Compressed context settings",
     description: "Open context panel settings",
+    group: "Plugins",
   },
   settings: {
     title: "Context panel settings",
@@ -25,6 +26,8 @@ export const en: Messages = {
     limitHint: "Digits, or a k/m suffix (e.g. 200000, 200k, 1m)",
     limitInvalid: "Enter a valid token count",
     limitHelp: "Enter to confirm · Esc to cancel",
+    limitPlaceholder: "200k",
+    limitPreview: (value) => `= ${value} tokens`,
     language: "Language",
     auto: "Auto",
     on: "On",
