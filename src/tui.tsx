@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import { formatTokens } from "./format.ts"
 import { resolveMessages, type Messages } from "./i18n/index.ts"
-import { initialSettings, localeArgument, type LocaleSetting, type Settings } from "./settings.ts"
+import { initialSettings, effectiveLimit, localeArgument, parseTokenLimit, type ContextLimit, type LocaleSetting, type Settings } from "./settings.ts"
 import { parseStats, scaleCategories, STATS_KEY, type CategoryKey, type ContextStats } from "./stats.ts"
 
 type UpdateSettings = (mutation: (draft: Settings) => void) => Promise<void>
@@ -49,6 +49,15 @@ function localeLabel(settings: Settings, copy: Messages): string {
   return copy.languages.en
 }
 
+/** 输入：设置；输出：当前上下文上限标签；预期：auto 显示「模型原生」。 */
+function limitLabel(settings: Settings, copy: Messages): string {
+  if (settings.contextLimit === "auto") return copy.settings.limitAuto
+  return formatTokens(settings.contextLimit)
+}
+
+/** 自定义上限的快捷选项。 */
+const PRESET_LIMITS = [128_000, 200_000, 256_000, 400_000, 1_000_000] as const
+
 /**
  * 输入：TUI 插件上下文 + sessionID + 设置。
  * 输出：侧栏里的上下文分类面板（可折叠）。
@@ -83,9 +92,24 @@ function ContextBlock(props: {
       const model = props.context.data.location.model
         .list(session()?.location)
         ?.find((item) => item.providerID === message.model.providerID && item.id === message.model.id)
-      return { used: tokens, limit: model?.limit.context ?? 0 }
+      return { used: tokens, nativeLimit: model?.limit.context ?? 0 }
     }
     return undefined
+  })
+
+  /** 实际生效的上下文上限：自定义优先，否则模型原生。 */
+  const limit = createMemo(() => {
+    const value = usage()
+    if (value === undefined) return undefined
+    return effectiveLimit(props.settings, value.nativeLimit)
+  })
+
+  /** 仅当用户自定义上限时展示百分比（auto 时内置区块已经显示了）。 */
+  const percent = createMemo(() => {
+    const value = usage()
+    const max = limit()
+    if (value === undefined || max === undefined || max <= 0) return undefined
+    return Math.round((value.used / max) * 100)
   })
 
   /** 输入：无；输出：无；预期：从服务端重新拉取 session metadata 里的统计。 */
@@ -128,11 +152,16 @@ function ContextBlock(props: {
   return (
     <Show when={props.settings.enabled}>
       <box width="100%" flexDirection="column">
-        <box flexDirection="row" height={1} gap={1} onMouseDown={toggleExpanded}>
-          <text fg={theme.text.base}>{props.settings.expanded ? "▼" : "▶"}</text>
-          <text fg={theme.text.base}>
-            <b>{copy().title}</b>
-          </text>
+        <box flexDirection="row" height={1} justifyContent="space-between" onMouseDown={toggleExpanded}>
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.text.base}>{props.settings.expanded ? "▼" : "▶"}</text>
+            <text fg={theme.text.base}>
+              <b>{copy().title}</b>
+            </text>
+          </box>
+          <Show when={props.settings.contextLimit !== "auto" && percent() !== undefined}>
+            <text fg={theme.text.muted}>{`${(percent() ?? 0).toString()}%`}</text>
+          </Show>
         </box>
         <Show when={props.settings.expanded}>
           <For each={rows()}>
@@ -187,6 +216,39 @@ function Commands(props: {
     })
   }
 
+  const openLimit = async (): Promise<void> => {
+    const picked = await props.context.ui.dialog.select<ContextLimit | "custom">({
+      title: copy().settings.limit,
+      current: props.settings.contextLimit,
+      options: [
+        { title: copy().settings.limitAuto, value: "auto" },
+        ...PRESET_LIMITS.map((value) => ({ title: formatTokens(value), value })),
+        { title: copy().settings.limitCustom, value: "custom" as const },
+      ],
+    })
+    if (picked === undefined) return
+    if (picked === "custom") {
+      const input = await props.context.ui.dialog.prompt({
+        title: copy().settings.limit,
+        placeholder: "200k",
+        value: props.settings.contextLimit === "auto" ? "" : props.settings.contextLimit.toString(),
+      })
+      if (input === undefined) return
+      const parsed = parseTokenLimit(input)
+      if (parsed === undefined) {
+        props.context.ui.toast.show({ variant: "error", message: copy().settings.limitInvalid })
+        return
+      }
+      await props.updateSettings((draft) => {
+        draft.contextLimit = parsed
+      })
+      return
+    }
+    await props.updateSettings((draft) => {
+      draft.contextLimit = picked
+    })
+  }
+
   const openSettings = async (): Promise<void> => {
     const picked = await props.context.ui.dialog.select<string>({
       title: copy().settings.title,
@@ -195,6 +257,11 @@ function Commands(props: {
           title: copy().settings.show,
           value: "show",
           footer: props.settings.enabled ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.limit,
+          value: "limit",
+          footer: limitLabel(props.settings, copy()),
         },
         {
           title: copy().settings.language,
@@ -208,6 +275,11 @@ function Commands(props: {
       await props.updateSettings((draft) => {
         draft.enabled = !draft.enabled
       })
+      void openSettings()
+      return
+    }
+    if (picked === "limit") {
+      await openLimit()
       void openSettings()
       return
     }

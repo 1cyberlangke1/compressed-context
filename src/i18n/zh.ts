@@ -19,6 +19,11 @@ export const zh: Messages = {
   settings: {
     title: "上下文面板设置",
     show: "显示面板",
+    limit: "上下文上限",
+    limitAuto: "模型原生",
+    limitCustom: "自定义…",
+    limitPrompt: "输入上限（如 200k）",
+    limitInvalid: "无效的上下文上限",
     language: "语言",
     auto: "自动",
     on: "开",

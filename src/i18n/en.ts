@@ -19,6 +19,11 @@ export const en: Messages = {
   settings: {
     title: "Context panel settings",
     show: "Show panel",
+    limit: "Context limit",
+    limitAuto: "Model native",
+    limitCustom: "Custom…",
+    limitPrompt: "Enter limit (e.g. 200k)",
+    limitInvalid: "Invalid context limit",
     language: "Language",
     auto: "Auto",
     on: "On",

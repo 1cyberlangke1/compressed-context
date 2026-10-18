@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 
-import { DEFAULT_SETTINGS, initialSettings, isLocaleSetting, localeArgument } from "../src/settings.ts"
+import {
+  DEFAULT_SETTINGS,
+  effectiveLimit,
+  initialSettings,
+  isLocaleSetting,
+  localeArgument,
+  parseTokenLimit,
+  type Settings,
+} from "../src/settings.ts"
 
 describe("initialSettings", () => {
   it("没有 options 时使用默认值", () => {
@@ -8,15 +16,46 @@ describe("initialSettings", () => {
   })
 
   it("合法 options 覆盖默认值", () => {
-    expect(initialSettings({ enabled: false, expanded: false, locale: "en" })).toEqual({
+    expect(
+      initialSettings({ enabled: false, expanded: false, locale: "en", contextLimit: 200_000 }),
+    ).toEqual({
       enabled: false,
       expanded: false,
       locale: "en",
+      contextLimit: 200_000,
     })
   })
 
+  it("contextLimit 支持 auto / 数字 / 带单位字符串", () => {
+    expect(initialSettings({ contextLimit: "auto" }).contextLimit).toBe("auto")
+    expect(initialSettings({ contextLimit: 128_000 }).contextLimit).toBe(128_000)
+    expect(initialSettings({ contextLimit: "200k" }).contextLimit).toBe(200_000)
+    expect(initialSettings({ contextLimit: "1.5m" }).contextLimit).toBe(1_500_000)
+  })
+
   it("非法值回退默认值", () => {
-    expect(initialSettings({ enabled: "no", expanded: 1, locale: "fr" })).toEqual(DEFAULT_SETTINGS)
+    expect(initialSettings({ enabled: "no", expanded: 1, locale: "fr", contextLimit: "abc" })).toEqual(
+      DEFAULT_SETTINGS,
+    )
+  })
+})
+
+describe("parseTokenLimit", () => {
+  it("解析数字与单位", () => {
+    expect(parseTokenLimit("200000")).toBe(200_000)
+    expect(parseTokenLimit("200k")).toBe(200_000)
+    expect(parseTokenLimit("200K")).toBe(200_000)
+    expect(parseTokenLimit("1m")).toBe(1_000_000)
+    expect(parseTokenLimit("1.5m")).toBe(1_500_000)
+    expect(parseTokenLimit(" 200k ")).toBe(200_000)
+  })
+
+  it("拒绝非法值与越界值", () => {
+    expect(parseTokenLimit("")).toBeUndefined()
+    expect(parseTokenLimit("abc")).toBeUndefined()
+    expect(parseTokenLimit("0")).toBeUndefined()
+    expect(parseTokenLimit("10")).toBeUndefined()
+    expect(parseTokenLimit("100m")).toBeUndefined()
   })
 })
 
@@ -39,5 +78,21 @@ describe("isLocaleSetting", () => {
     expect(isLocaleSetting("fr")).toBe(false)
     expect(isLocaleSetting(1)).toBe(false)
     expect(isLocaleSetting(undefined)).toBe(false)
+  })
+})
+
+describe("effectiveLimit", () => {
+  const base: Settings = DEFAULT_SETTINGS
+
+  it("自定义值优先", () => {
+    expect(effectiveLimit({ ...base, contextLimit: 200_000 }, 1_000_000)).toBe(200_000)
+  })
+
+  it("auto 回退模型原生值", () => {
+    expect(effectiveLimit(base, 128_000)).toBe(128_000)
+  })
+
+  it("原生值未知时返回 undefined", () => {
+    expect(effectiveLimit(base, 0)).toBeUndefined()
   })
 })
