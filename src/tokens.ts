@@ -181,3 +181,16 @@ export function estimateCategories(input: {
 
   return { system, tools, tool, text, recent, summaries, media }
 }
+
+/** 输入：分类估算；输出：各类之和。 */
+export function totalCategories(categories: TokenCategories): number {
+  return (
+    categories.system +
+    categories.tools +
+    categories.tool +
+    categories.text +
+    categories.recent +
+    categories.summaries +
+    categories.media
+  )
+}

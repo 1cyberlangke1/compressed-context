@@ -5,7 +5,7 @@
  * 本模块只放纯函数：构造、校验、节流判断、metadata 合并、缩放。
  */
 
-import type { TokenCategories } from "./tokens.ts"
+import { totalCategories, type TokenCategories } from "./tokens.ts"
 
 /** metadata 里存放统计的键名，避免和其他插件撞车。 */
 export const STATS_KEY = "compressed-context"
@@ -24,15 +24,7 @@ export const PUBLISH_MIN_DELTA = 2_000
 
 /** 输入：分类估算 + 时间戳；输出：带合计的统计对象。 */
 export function createStats(categories: TokenCategories, now: number): ContextStats {
-  const estimatedTotal =
-    categories.system +
-    categories.tools +
-    categories.tool +
-    categories.text +
-    categories.recent +
-    categories.summaries +
-    categories.media
-  return { ...categories, estimatedTotal, at: now }
+  return { ...categories, estimatedTotal: totalCategories(categories), at: now }
 }
 
 /** 输入：任意 metadata 值；输出：合法数字或 undefined。 */

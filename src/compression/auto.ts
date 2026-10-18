@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode/plugin"
 
-import { estimateCategories } from "../tokens.ts"
+import { estimateCategories, totalCategories } from "../tokens.ts"
 import { eligibleMessages, textChars, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
 import { loadState, saveState, withPending, type Block } from "./state.ts"
@@ -46,18 +46,12 @@ async function resolveLimit(ctx: Plugin.Context, model: ModelRefLike, setting: "
 
 /** 输入：system / tools / messages；输出：估算总 token。 */
 function estimateTotal(input: AutoInput): number {
-  const categories = estimateCategories({
-    system: input.system,
-    tools: input.tools,
-    messages: input.messages,
-  })
-  return (
-    categories.system +
-    categories.tools +
-    categories.tool +
-    categories.text +
-    categories.summaries +
-    categories.media
+  return totalCategories(
+    estimateCategories({
+      system: input.system,
+      tools: input.tools,
+      messages: input.messages,
+    }),
   )
 }
 
@@ -128,10 +122,11 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     await input.ctx.session.compact({ sessionID: input.sessionID })
   } catch (error) {
     try {
+      const current = await loadState(input.ctx.storage, input.sessionID)
       await saveState(input.ctx.storage, input.sessionID, {
-        v: 1,
-        blocks: [],
-        attempts: 1,
+        ...current,
+        autoInFlight: false,
+        attempts: current.attempts + 1,
         lastError: String(error),
       })
     } catch {
