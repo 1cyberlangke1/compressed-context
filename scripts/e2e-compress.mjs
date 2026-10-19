@@ -133,46 +133,57 @@ function toolResponse(tool) {
   }
 }
 
-/** 输入：OpenAI 请求；输出：compress 工具调用或 undefined。 */
+/** 输入：OpenAI 请求；输出：compress / decompress 工具调用或 undefined。 */
+let decompressTriggered = false
 function fakeToolCall(body) {
-  if (mode !== "tool-compress") return undefined
+  if (mode !== "tool-compress" && mode !== "tool-decompress") return undefined
   const messages = Array.isArray(body?.messages) ? body.messages : []
-  const lastUserMessage = [...messages].reverse().find((message) => message?.role === "user")
-  const lastUser =
-    typeof lastUserMessage?.content === "string"
-      ? lastUserMessage.content
-      : Array.isArray(lastUserMessage?.content)
-        ? lastUserMessage.content.map((part) => part?.text ?? "").join("\n")
-        : ""
-  if (
-    !lastUser.includes("use compress tool") ||
-    lastUser.includes("You are writing a checkpoint") ||
-    lastUser.includes("checkpoint at the top of the conversation")
-  ) {
-    return undefined
-  }
-  const hasToolResult = messages.some(
-    (message) =>
-      message?.role === "tool" ||
-      (Array.isArray(message?.content) && message.content.some((part) => part?.type === "tool-result")),
-  )
-  if (hasToolResult) return undefined
+  const allUserText = messages
+    .filter((message) => message?.role === "user")
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : Array.isArray(message.content)
+          ? message.content.map((part) => part?.text ?? "").join("\n")
+          : "",
+    )
+    .join("\n")
+  // 防止 checkpoint 摘要轮被误判成工具轮
+  if (allUserText.includes("You are writing a checkpoint")) return undefined
+  const wantsDecompress = allUserText.includes("use decompress tool")
+  const wantsCompress = allUserText.includes("use compress tool")
+  if (!wantsDecompress && !wantsCompress) return undefined
+
   toolPromptCount += 1
-  console.log("fakeToolCall", { toolPromptCount, lastUser: lastUser.slice(0, 80) })
-  console.log("fakeToolCall returning compress")
-  return {
-    name: "compress",
-    arguments: JSON.stringify({
-      title: "Tool T1",
-      goal: "verify compress tool",
-      constraints: ["no production interference"],
-      decisions: ["tool provides the summary"],
-      progress: { completed: ["tool"], active: [], blocked: [] },
-      open_items: [],
-      files: [],
-      facts: ["x".repeat(300)],
-    }),
+  console.log("fakeToolCall", { toolPromptCount, lastUser: allUserText.slice(-80) })
+
+  // decompress 一次性：触发过一次（无论成败）就不再返回 decompress 调用，防死循环
+  if (wantsDecompress && !decompressTriggered) {
+    decompressTriggered = true
+    console.log("fakeToolCall returning decompress")
+    return {
+      name: "decompress",
+      arguments: JSON.stringify({ block: "b1", full: true }),
+    }
   }
+  // compress 只在用户明确要求且从未成功过时触发；排队成功后由 tool result 文本兜底
+  if (wantsCompress && !allUserText.includes("queued compression b1")) {
+    console.log("fakeToolCall returning compress")
+    return {
+      name: "compress",
+      arguments: JSON.stringify({
+        title: "Tool T1",
+        goal: "verify compress tool",
+        constraints: ["no production interference"],
+        decisions: ["tool provides the summary"],
+        progress: { completed: ["tool"], active: [], blocked: [] },
+        open_items: [],
+        files: [],
+        facts: ["x".repeat(300)],
+      }),
+    }
+  }
+  return undefined
 }
 
 function fakeText(body) {
@@ -260,7 +271,7 @@ const fake = Bun.serve({
       return new Response("not found", { status: 404 })
     }
     const body = await request.json()
-    if (mode === "tool-compress") {
+    if (mode === "tool-compress" || mode === "tool-decompress") {
       const names = Array.isArray(body.tools)
         ? body.tools.map((item) => item?.function?.name ?? item?.name)
         : body.tools
@@ -661,6 +672,49 @@ try {
     "compress tool should create a Tool T1 block",
   )
   console.log("case passed: compress tool creates T1")
+
+  // case: decompress 工具取回已压缩块的原文
+  // 走 compress 工具排队 T1（contextLimit=1M 永远到不了自动触发的百分比线）
+  mode = "tool-decompress"
+  toolPromptCount = 0
+  decompressTriggered = false
+  setSettings(50_000, 1_000_000, 95)
+  const decompressSession = await newSession("e2e-tool-decompress")
+  await promptSession(decompressSession, longText)
+  await promptSession(decompressSession, "use compress tool")
+  await promptSession(decompressSession, "continue")
+  // 等 T1 完成，拿到块
+  let decompressState = stateFor(decompressSession)
+  for (let index = 0; index < 40 && (decompressState?.blocks?.length ?? 0) === 0; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    decompressState = stateFor(decompressSession)
+  }
+  assert.ok((decompressState?.blocks?.length ?? 0) > 0, "decompress case needs a compressed block")
+  const decompressBlock = decompressState?.blocks?.[0]
+  assert.ok(decompressBlock, "decompress case needs a block")
+  // 让模型调用 decompress 取回原文
+  await promptSession(decompressSession, "use decompress tool")
+  await waitSession(decompressSession)
+  const decompressMessages = await messagesFor(decompressSession)
+  const decompressParts = decompressMessages.flatMap((message) =>
+    (message.parts ?? message.content ?? [])
+      .filter((part) => part.type === "tool")
+      .map((part) => ({
+        name: part.name,
+        status: part.state?.status,
+        error: part.state?.error,
+        content: JSON.stringify(part.state?.content ?? "").slice(0, 400),
+      })),
+  )
+  console.log("decompress parts:", JSON.stringify(decompressParts))
+  const decompressCall = decompressParts.find((part) => part.name === "decompress")
+  assert.ok(decompressCall, "model should call decompress tool")
+  assert.equal(decompressCall.status, "completed", "decompress tool should complete")
+  assert.ok(
+    !(decompressCall.content ?? "").includes("unavailable"),
+    "decompress should restore original transcript from the DB",
+  )
+  console.log("case passed: decompress tool restores content")
 
   // case: 超大摘要上限被运行时钳制，压缩仍成功
   mode = "normal"

@@ -85,13 +85,13 @@ const emptyContext = {
 }
 
 describe("服务端插件入口", () => {
-  it("setup 注册 context / compaction 钩子与 compress 工具", async () => {
+  it("setup 注册 context / compaction 钩子与 compress / decompress 工具", async () => {
     const { ctx, hooks, tools } = createFakeContext()
 
     await plugin.setup(ctx)
 
     expect(hooks.map((hook) => hook.name)).toEqual(["context", "compaction"])
-    expect(tools).toEqual(["compress"])
+    expect(tools).toEqual(["compress", "decompress"])
   })
 
   it("context 钩子把统计合并进 session metadata", async () => {

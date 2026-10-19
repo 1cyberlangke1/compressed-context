@@ -23,6 +23,7 @@ import {
   summarizeInstruction,
 } from "./compression/summarize.ts"
 import { registerCompressTool } from "./compression/tool.ts"
+import { registerDecompressTool } from "./compression/decompress-tool.ts"
 import { buildTranscript } from "./compression/transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./compression/validate.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./stats.ts"
@@ -62,6 +63,7 @@ export default Plugin.define({
     }
 
     disposables.push(await registerCompressTool(ctx, cache))
+    disposables.push(await registerDecompressTool(ctx))
     disposables.push(await registerSettingsRpc(ctx))
     const stopEvents = startCompactionEvents(ctx, (sessionID) => {
       void enqueueNext(sessionID)
