@@ -32,6 +32,15 @@ export interface Messages {
     readonly summaryBudgetHint: string
     readonly summaryBudgetInvalid: string
     readonly summaryBudgetPlaceholder: string
+    readonly summaryBlockChars: string
+    readonly summaryBlockCharsHint: string
+    readonly summaryBlockCharsInvalid: string
+    readonly summaryBlockCharsPlaceholder: string
+    readonly summaryTotalChars: string
+    readonly summaryTotalCharsHint: string
+    readonly summaryTotalCharsInvalid: string
+    readonly summaryTotalCharsPlaceholder: string
+    readonly summaryLanguage: string
     readonly submit: string
     readonly language: string
     readonly auto: string

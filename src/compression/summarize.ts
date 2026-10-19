@@ -1,9 +1,35 @@
 import { Schema } from "effect"
 import { jsonrepair } from "jsonrepair"
 
+import type { SummaryLanguage } from "../settings.ts"
 import { SummaryFields, type SummaryFields as Summary } from "./schema.ts"
 import type { Tier } from "./state.ts"
-import { validateSummary } from "./validate.ts"
+import { MAX_SUMMARY_CHARS, MIN_SUMMARY_CHARS, minSummaryChars, validateSummary } from "./validate.ts"
+
+/** 摘要提示词的可调部分；只改尾部指令，不改会话前缀。 */
+export interface SummaryPromptOptions {
+  readonly maxChars?: number
+  readonly totalChars?: number
+  readonly language?: SummaryLanguage
+}
+
+/** 输入：摘要语言；输出：只用于提示词的语言约束。 */
+function languageLine(language: SummaryLanguage | undefined): string {
+  if (language === "zh") return "Write the summary in Chinese."
+  if (language === "en") return "Write the summary in English."
+  return "Write in the source conversation's primary language."
+}
+
+/** 输入：选项；输出：长度和语言提示行。 */
+function promptRules(options: SummaryPromptOptions | undefined): string[] {
+  const maxChars = options?.maxChars ?? MAX_SUMMARY_CHARS
+  const lines = [`- Keep this summary under ${maxChars.toString()} characters.`]
+  if (options?.totalChars !== undefined) {
+    lines.push(`- The whole active checkpoint chain must stay under ${options.totalChars.toString()} characters.`)
+  }
+  lines.push(`- ${languageLine(options?.language)}`)
+  return lines
+}
 
 /** 模型引用的最小结构。 */
 export interface ModelRefLike {
@@ -27,6 +53,9 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
   return {
     text: async ({ prompt }) => {
       const response = await session.generate({ sessionID, prompt })
+      if (typeof response.text !== "string") {
+        throw new Error("session.generate returned no text")
+      }
       return { text: response.text }
     },
   }
@@ -85,7 +114,7 @@ function openingFor(tier: Tier): string {
   return "You are merging existing checkpoint blocks into one denser checkpoint."
 }
 
-function buildPrompt(transcript: string, tier: Tier): string {
+function buildPrompt(transcript: string, tier: Tier, options?: SummaryPromptOptions): string {
   return [
     openingFor(tier),
     "The checkpoint and the messages after it are all the next reader will see; make it self-contained.",
@@ -94,7 +123,7 @@ function buildPrompt(transcript: string, tier: Tier): string {
     SHAPE,
     "",
     rulesFor(tier),
-    "- Write in the source conversation's primary language.",
+    ...promptRules(options),
     "",
     "Sources:",
     transcript,
@@ -102,7 +131,7 @@ function buildPrompt(transcript: string, tier: Tier): string {
 }
 
 /** T1 的会话内指令：历史已经在 session 前缀里，只追加这段。 */
-export function buildT1Instruction(): string {
+export function buildT1Instruction(options?: SummaryPromptOptions): string {
   return [
     "You are writing a checkpoint for the older part of the conversation above.",
     "Summarize only the messages before the final user message; ignore the final user message and anything after it.",
@@ -112,12 +141,15 @@ export function buildT1Instruction(): string {
     SHAPE,
     "",
     rulesFor(1),
-    "- Write in the source conversation's primary language.",
+    ...promptRules(options),
   ].join("\n")
 }
 
 /** T2/T3 的会话内指令：checkpoint 已经在 session 前缀里，只追加候选和规则。 */
-export function buildMergeInstruction(candidates: readonly SummaryChoiceCandidate[]): string {
+export function buildMergeInstruction(
+  candidates: readonly SummaryChoiceCandidate[],
+  options?: SummaryPromptOptions,
+): string {
   const lines = candidates.map((candidate) => `${candidate.index.toString()}. ${candidate.description}`)
   return [
     "The checkpoint at the top of the conversation contains summary blocks.",
@@ -128,6 +160,7 @@ export function buildMergeInstruction(candidates: readonly SummaryChoiceCandidat
     SHAPE,
     "",
     CHOICE_RULES,
+    ...promptRules(options),
     "",
     "Candidates (oldest first):",
     ...lines,
@@ -157,6 +190,7 @@ function buildChoicePrompt(
   context: string,
   task: string,
   candidates: readonly SummaryChoiceCandidate[],
+  options?: SummaryPromptOptions,
 ): string {
   const lines = candidates.map((candidate) => `${candidate.index.toString()}. ${candidate.description}`)
   return [
@@ -167,6 +201,7 @@ function buildChoicePrompt(
     SHAPE,
     "",
     CHOICE_RULES,
+    ...promptRules(options),
     "",
     "Current task:",
     task,
@@ -184,7 +219,13 @@ function parseJson(text: string): unknown {
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "")
-  return JSON.parse(jsonrepair(cleaned))
+  // 真实模型常会在 JSON 前后加一句说明；只取第一个对象范围再修复。
+  const start = cleaned.indexOf("{")
+  const end = cleaned.lastIndexOf("}")
+  const candidate = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned
+  const parsed: unknown = JSON.parse(jsonrepair(candidate))
+  // 有些模型会把 JSON 再编码成字符串；解一层。
+  return typeof parsed === "string" ? JSON.parse(jsonrepair(parsed)) : parsed
 }
 
 function parseJsonSafe(text: string): unknown {
@@ -195,9 +236,53 @@ function parseJsonSafe(text: string): unknown {
   }
 }
 
+/** 输入：任意模型字段；输出：字符串数组；预期：字符串包成单元素数组，其他丢弃。 */
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+  }
+  if (typeof value === "string" && value.trim().length > 0) return [value]
+  return []
+}
+
+/**
+ * 输入：模型返回的原始 JSON 对象。
+ * 输出：补齐缺失字段后的对象。
+ * 预期：真实模型常漏 progress/files 或把数组写成字符串；先规范化再交给 schema。
+ */
+function normalizeSummary(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value
+  const record = value as Record<string, unknown>
+  const goal = typeof record["goal"] === "string" ? record["goal"] : ""
+  const title = (
+    typeof record["title"] === "string" && record["title"].trim().length > 0
+      ? record["title"]
+      : goal.trim() || "untitled"
+  ).slice(0, 80)
+  const progress =
+    typeof record["progress"] === "object" && record["progress"] !== null
+      ? (record["progress"] as Record<string, unknown>)
+      : {}
+  return {
+    ...record,
+    title,
+    goal,
+    constraints: stringArray(record["constraints"]),
+    decisions: stringArray(record["decisions"]),
+    progress: {
+      completed: stringArray(progress["completed"]),
+      active: stringArray(progress["active"]),
+      blocked: stringArray(progress["blocked"]),
+    },
+    open_items: stringArray(record["open_items"]),
+    files: stringArray(record["files"]),
+    facts: stringArray(record["facts"]),
+  }
+}
+
 function decode(value: unknown): Summary | undefined {
   try {
-    return Schema.decodeUnknownSync(SummaryFields)(value)
+    return Schema.decodeUnknownSync(SummaryFields)(normalizeSummary(value))
   } catch {
     return undefined
   }
@@ -208,27 +293,34 @@ async function runSummaryPrompt(
   sourceChars: number,
   generate: GenerateLike,
   model: ModelRefLike | undefined,
+  maxChars: number | undefined,
+  onFailure?: (reason: string) => void,
 ): Promise<Summary | undefined> {
   let prompt = base
+  let reason = "summary rejected"
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let text: string
     try {
       const response = await generate.text(model ? { prompt, model } : { prompt })
       text = response.text
-    } catch {
-      return undefined
+    } catch (error) {
+      onFailure?.(`generate failed: ${error instanceof Error ? error.message : String(error)}`)
+      throw error
     }
 
     const decoded = decode(parseJsonSafe(text))
     if (decoded) {
-      const result = validateSummary(decoded, sourceChars)
+      const result = validateSummary(decoded, sourceChars, MIN_SUMMARY_CHARS, maxChars)
       if (result.ok) return decoded
+      reason = result.message
       prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
       continue
     }
+    reason = "reply was not valid JSON matching the shape"
     prompt = `${base}\n\nYour previous reply was not valid JSON matching the shape. Return the corrected JSON only.`
   }
-  return undefined
+  onFailure?.(reason)
+  throw new Error(reason)
 }
 
 /**
@@ -242,9 +334,18 @@ export async function summarize(input: {
   readonly generate: GenerateLike
   readonly model?: ModelRefLike
   readonly tier?: Tier
+  readonly maxChars?: number
+  readonly totalChars?: number
+  readonly language?: SummaryLanguage
 }): Promise<Summary | undefined> {
   const tier = input.tier ?? 1
-  return runSummaryPrompt(buildPrompt(input.transcript, tier), input.sourceChars, input.generate, input.model)
+  return runSummaryPrompt(
+    buildPrompt(input.transcript, tier, input),
+    input.sourceChars,
+    input.generate,
+    input.model,
+    input.maxChars,
+  )
 }
 
 /** 输入：已经拼好的会话内指令；输出：摘要；失败返回 undefined。 */
@@ -253,8 +354,17 @@ export async function summarizeInstruction(input: {
   readonly sourceChars: number
   readonly generate: GenerateLike
   readonly model?: ModelRefLike
+  readonly maxChars?: number
+  readonly onFailure?: (reason: string) => void
 }): Promise<Summary | undefined> {
-  return runSummaryPrompt(input.prompt, input.sourceChars, input.generate, input.model)
+  return runSummaryPrompt(
+    input.prompt,
+    input.sourceChars,
+    input.generate,
+    input.model,
+    input.maxChars,
+    input.onFailure,
+  )
 }
 
 /** 输入：解析后的 JSON；输出：去掉 candidate 后的摘要值 + 原始 candidate。 */
@@ -271,15 +381,19 @@ async function runChoicePrompt(
   candidates: readonly SummaryChoiceCandidate[],
   generate: GenerateLike,
   model: ModelRefLike | undefined,
+  maxChars: number | undefined,
+  onFailure?: (reason: string) => void,
 ): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
   let prompt = base
+  let reason = "choice rejected"
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let text: string
     try {
       const response = await generate.text(model ? { prompt, model } : { prompt })
       text = response.text
-    } catch {
-      return undefined
+    } catch (error) {
+      onFailure?.(`generate failed: ${error instanceof Error ? error.message : String(error)}`)
+      throw error
     }
 
     const split = splitCandidate(parseJsonSafe(text))
@@ -288,16 +402,24 @@ async function runChoicePrompt(
       if (candidate !== undefined) {
         const decoded = decode(split.summary)
         if (decoded) {
-          const result = validateSummary(decoded, candidate.sourceChars)
+          const result = validateSummary(
+            decoded,
+            candidate.sourceChars,
+            minSummaryChars(candidate.tier),
+            maxChars,
+          )
           if (result.ok) return { summary: decoded, candidate }
+          reason = result.message
           prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
           continue
         }
       }
     }
+    reason = "reply was not valid JSON with a valid candidate and summary"
     prompt = `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only.`
   }
-  return undefined
+  onFailure?.(reason)
+  throw new Error(reason)
 }
 
 /**
@@ -311,12 +433,18 @@ export async function summarizeWithChoice(input: {
   readonly candidates: readonly SummaryChoiceCandidate[]
   readonly generate: GenerateLike
   readonly model?: ModelRefLike
+  readonly maxChars?: number
+  readonly totalChars?: number
+  readonly language?: SummaryLanguage
+  readonly onFailure?: (reason: string) => void
 }): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
   return runChoicePrompt(
-    buildChoicePrompt(input.context, input.task, input.candidates),
+    buildChoicePrompt(input.context, input.task, input.candidates, input),
     input.candidates,
     input.generate,
     input.model,
+    input.maxChars,
+    input.onFailure,
   )
 }
 
@@ -326,6 +454,15 @@ export async function summarizeChoiceInstruction(input: {
   readonly candidates: readonly SummaryChoiceCandidate[]
   readonly generate: GenerateLike
   readonly model?: ModelRefLike
+  readonly maxChars?: number
+  readonly onFailure?: (reason: string) => void
 }): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
-  return runChoicePrompt(input.prompt, input.candidates, input.generate, input.model)
+  return runChoicePrompt(
+    input.prompt,
+    input.candidates,
+    input.generate,
+    input.model,
+    input.maxChars,
+    input.onFailure,
+  )
 }

@@ -1,12 +1,13 @@
 import { Plugin } from "@opencode/plugin"
 
-import { maybeAutoCompress } from "./compression/auto.ts"
+import { markCompactionInFlight, maybeAutoCompress, resolveLimit } from "./compression/auto.ts"
 import { distillOnce, planT1Phase } from "./compression/distill.ts"
 import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
 import { activeBlocks, renderAll } from "./compression/render.ts"
 import { eligibleMessages, olderMessages, type MessageLike } from "./compression/select.ts"
 import { loadServerSettings } from "./compression/settings.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
+import { clampSummaryLimits } from "./settings.ts"
 import {
   loadState,
   nextBlockId,
@@ -50,7 +51,7 @@ export default Plugin.define({
 
     /** 输入：sessionID；输出：无；预期：compaction 结束后稍等投影删除 inbox 行，再入队下一层。 */
     const enqueueNext = async (sessionID: string): Promise<void> => {
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await new Promise((resolve) => setTimeout(resolve, 100))
       const state = await loadState(ctx.storage, sessionID)
       if (state.pending || state.phase === undefined) return
       try {
@@ -98,8 +99,13 @@ export default Plugin.define({
 
     disposables.push(
       await ctx.session.hook("compaction", async (event) => {
+        markCompactionInFlight(event.sessionID, true)
+        try {
         const state = await loadState(ctx.storage, event.sessionID)
         const settings = await loadServerSettings(ctx.storage)
+        // auto 窗口在运行时解析后钳制摘要上限；数字窗口已在保存时校验，这里统一再钳一次。
+        const windowTokens = await resolveLimit(ctx, event.model, settings.contextLimit)
+        const limits = clampSummaryLimits(settings, windowTokens)
 
         /** 保存这一层的结果；pending 可选，phase 由下一层决定。 */
         const save = async (
@@ -131,7 +137,10 @@ export default Plugin.define({
             sessionID: event.sessionID,
             state,
             pending: state.pending,
-            budgetTokens: settings.summaryBudgetTokens,
+            budgetTokens: limits.budgetTokens,
+            summaryBlockChars: limits.blockChars,
+            summaryTotalChars: limits.totalChars,
+            summaryLanguage: settings.summaryLanguage,
             phase: state.phase,
           })
           await save(result.blocks, result.pending, result.nextPhase, result.error)
@@ -149,13 +158,27 @@ export default Plugin.define({
           if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) {
             throw new Error("nothing to compress")
           }
+          let failure = "unknown"
           const summary = await summarizeInstruction({
-            prompt: buildT1Instruction(),
+            prompt: buildT1Instruction({
+              maxChars: limits.blockChars,
+              totalChars: limits.totalChars,
+              language: settings.summaryLanguage,
+            }),
             sourceChars,
+            maxChars: limits.blockChars,
             generate: sessionGenerator(ctx.session, event.sessionID),
+            onFailure: (reason) => {
+              failure = reason
+            },
           })
-          if (summary === undefined) throw new Error("compression failed")
-          const validation = validateSummary(summary, sourceChars)
+          if (summary === undefined) throw new Error(`compression failed: ${failure}`)
+          const validation = validateSummary(
+            summary,
+            sourceChars,
+            undefined,
+            limits.blockChars,
+          )
           if (!validation.ok) throw new Error(validation.message)
 
           const first = eligible.find((message) => message.id !== undefined)
@@ -178,9 +201,25 @@ export default Plugin.define({
         // T1 之后再检查预算；没超就不排 T2。
         const active = activeBlocks(state.blocks, pending)
         const summary = renderAll(state.blocks, pending)
-        const nextPhase = planT1Phase(summary, active, settings.summaryBudgetTokens)
+        const nextPhase = planT1Phase(
+          summary,
+          active,
+          limits.budgetTokens,
+          limits.totalChars,
+        )
         await save(state.blocks, pending, nextPhase, undefined)
         event.result = { summary }
+        } catch (error) {
+          // 把钩子里的真实异常留给失败事件和 TUI；不要只留下“compaction failed”。
+          const current = await loadState(ctx.storage, event.sessionID)
+          await saveState(ctx.storage, event.sessionID, {
+            ...current,
+            lastError: error instanceof Error ? (error.stack ?? error.message) : String(error),
+          })
+          throw error
+        } finally {
+          markCompactionInFlight(event.sessionID, false)
+        }
       }),
     )
 

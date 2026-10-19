@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest"
 import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
 
-import { maybeAutoCompress } from "../src/compression/auto.ts"
+import { markCompactionInFlight, maybeAutoCompress } from "../src/compression/auto.ts"
 import { distillOnce, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
-import { handleCompactionEvent } from "../src/compression/events.ts"
+import { handleCompactionEvent, isPermanentFailure, retryState } from "../src/compression/events.ts"
 import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
@@ -20,7 +20,7 @@ import {
 } from "../src/compression/summarize.ts"
 import { registerCompressTool } from "../src/compression/tool.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
-import { validateSummary } from "../src/compression/validate.ts"
+import { minSummaryChars, validateSummary } from "../src/compression/validate.ts"
 
 const summary: SummaryFields = {
   title: "compress core",
@@ -192,13 +192,38 @@ describe("校验", () => {
 
   it("拒绝空 goal、过短、比原文大", () => {
     expect(validateSummary({ ...summary, goal: " " }, 10_000).fields).toContain("goal")
-    expect(validateSummary({ ...summary, facts: [] }, 300).ok).toBe(false)
+    expect(validateSummary({ ...summary, facts: [] }, 150).ok).toBe(false)
     expect(validateSummary(summary, 100).ok).toBe(false)
   })
 
   it("拒绝空标题与超长标题", () => {
     expect(validateSummary({ ...summary, title: " " }, 10_000).fields).toContain("title")
     expect(validateSummary({ ...summary, title: "x".repeat(81) }, 10_000).fields).toContain("title")
+  })
+
+  it("maxChars 可配置", () => {
+    expect(validateSummary(summary, 10_000, undefined, 100).message).toContain("too long")
+    expect(validateSummary(summary, 10_000, undefined, 100_000).ok).toBe(true)
+  })
+
+  it("分层下限：T1 200，T2 80，T3 40", () => {
+    const tiny = {
+      ...summary,
+      title: "t",
+      goal: "x".repeat(80),
+      constraints: [],
+      decisions: [],
+      progress: { completed: [], active: [], blocked: [] },
+      open_items: [],
+      files: [],
+      facts: [],
+    }
+    expect(minSummaryChars(1)).toBe(200)
+    expect(minSummaryChars(2)).toBe(80)
+    expect(minSummaryChars(3)).toBe(40)
+    expect(validateSummary(tiny, 10_000, minSummaryChars(2)).ok).toBe(true)
+    expect(validateSummary(tiny, 10_000, minSummaryChars(1)).ok).toBe(false)
+    expect(validateSummary(tiny, 10_000, minSummaryChars(3)).ok).toBe(true)
   })
 })
 
@@ -208,17 +233,67 @@ describe("服务端设置", () => {
       contextLimit: "auto",
       triggerPercent: 80,
       summaryBudgetTokens: 50_000,
+      summaryBlockChars: 20_000,
+      summaryTotalChars: 100_000,
+      summaryLanguage: "auto",
     })
-    expect(parseServerSettings({ contextLimit: 200_000, triggerPercent: 95, summaryBudgetTokens: 20_000 })).toEqual({
+    expect(
+      parseServerSettings({
+        contextLimit: 200_000,
+        triggerPercent: 95,
+        summaryBudgetTokens: 20_000,
+        summaryBlockChars: 30_000,
+        summaryTotalChars: 190_000,
+        summaryLanguage: "zh",
+      }),
+    ).toEqual({
       contextLimit: 200_000,
       triggerPercent: 95,
       summaryBudgetTokens: 20_000,
+      summaryBlockChars: 30_000,
+      summaryTotalChars: 190_000,
+      summaryLanguage: "zh",
     })
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 59 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 96 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 80, summaryBudgetTokens: 4_999 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 80, summaryBudgetTokens: 1_000_001 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "nope", triggerPercent: 80 })).toBeUndefined()
+  })
+
+  it("拒绝任意非法摘要长度和语言", () => {
+    const base = { contextLimit: "auto", triggerPercent: 80 }
+    for (const bad of [499, 100_001, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(parseServerSettings({ ...base, summaryBlockChars: bad })).toBeUndefined()
+    }
+    for (const bad of [4_999, 1_000_001, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(parseServerSettings({ ...base, summaryTotalChars: bad })).toBeUndefined()
+    }
+    expect(
+      parseServerSettings({ ...base, summaryBlockChars: 30_000, summaryTotalChars: 20_000 }),
+    ).toBeUndefined()
+    expect(parseServerSettings({ ...base, summaryLanguage: "fr" })).toBeUndefined()
+  })
+
+  it("数字窗口下摘要上限不得超过窗口减预留", () => {
+    const base = { triggerPercent: 80, summaryLanguage: "auto" }
+    const limit = 30_000
+    const ceiling = limit - 10_000
+    expect(
+      parseServerSettings({ ...base, contextLimit: limit, summaryBlockChars: ceiling, summaryTotalChars: ceiling }),
+    ).toBeDefined()
+    expect(
+      parseServerSettings({ ...base, contextLimit: limit, summaryBlockChars: 500, summaryTotalChars: ceiling + 1 }),
+    ).toBeUndefined()
+    expect(
+      parseServerSettings({ ...base, contextLimit: limit, summaryBlockChars: ceiling + 1, summaryTotalChars: ceiling + 1 }),
+    ).toBeUndefined()
+    // 窗口小到装不下最小摘要时不校验（运行时兜底），设置照常接受。
+    expect(parseServerSettings({ ...base, contextLimit: 10_000, summaryBlockChars: 500 })).toBeDefined()
+    // auto 窗口保存时不校验，运行时钳制。
+    expect(
+      parseServerSettings({ ...base, contextLimit: "auto", summaryBlockChars: 100_000, summaryTotalChars: 200_000 }),
+    ).toBeDefined()
   })
 })
 
@@ -261,13 +336,44 @@ describe("侧调用摘要", () => {
     expect(result?.goal).toBe(summary.goal)
   })
 
-  it("两次都失败返回 undefined", async () => {
-    const result = await summarize({
-      transcript: "x",
-      sourceChars: 10_000,
-      generate: { text: () => Promise.resolve({ text: "nope" }) },
-    })
-    expect(result).toBeUndefined()
+  it("两次都失败时抛出解析原因", async () => {
+    await expect(
+      summarize({
+        transcript: "x",
+        sourceChars: 10_000,
+        generate: { text: () => Promise.resolve({ text: "nope" }) },
+      }),
+    ).rejects.toThrow("not valid JSON")
+  })
+
+  it("generate 抛错时保留真实原因并抛出", async () => {
+    let reason = ""
+    await expect(
+      summarizeInstruction({
+        prompt: "x",
+        sourceChars: 10_000,
+        generate: { text: () => Promise.reject(new Error("network down")) },
+        onFailure: (value) => {
+          reason = value
+        },
+      }),
+    ).rejects.toThrow("network down")
+    expect(reason).toContain("network down")
+  })
+
+  it("JSON 非法时保留解析原因并抛出", async () => {
+    let reason = ""
+    await expect(
+      summarizeInstruction({
+        prompt: "x",
+        sourceChars: 10_000,
+        generate: { text: () => Promise.resolve({ text: "nope" }) },
+        onFailure: (value) => {
+          reason = value
+        },
+      }),
+    ).rejects.toThrow("not valid JSON")
+    expect(reason).toContain("not valid JSON")
   })
 
   it("多候选时一次返回 candidate + 摘要", async () => {
@@ -281,6 +387,132 @@ describe("侧调用摘要", () => {
     })
     expect(result?.candidate.index).toBe(1)
     expect(result?.summary.goal).toBe(summary.goal)
+  })
+
+  it("多候选返回非法 candidate 时抛出原因", async () => {
+    await expect(
+      summarizeWithChoice({
+        context: "b1 + b2",
+        task: "continue",
+        candidates: [{ index: 1, description: "b1+b2", sourceChars: 10_000, tier: 2 }],
+        generate: { text: () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }) },
+      }),
+    ).rejects.toThrow("valid candidate")
+  })
+
+  it("解析前后带说明的 JSON", async () => {
+    const result = await summarize({
+      transcript: "x",
+      sourceChars: 10_000,
+      generate: {
+        text: () =>
+          Promise.resolve({
+            text: `Here is the checkpoint:\n${JSON.stringify(summary)}\nDone.`,
+          }),
+      },
+    })
+    expect(result?.goal).toBe(summary.goal)
+  })
+
+  it("补齐缺失字段和字符串数组", async () => {
+    const result = await summarize({
+      transcript: "x",
+      sourceChars: 10_000,
+      generate: {
+        text: () =>
+          Promise.resolve({
+            text: JSON.stringify({
+              title: "partial",
+              goal: "keep going",
+              facts: "x".repeat(300),
+            }),
+          }),
+      },
+    })
+    expect(result?.facts).toHaveLength(1)
+    expect(result?.progress).toEqual({ completed: [], active: [], blocked: [] })
+    expect(result?.constraints).toEqual([])
+  })
+
+  it("解析双编码 JSON", async () => {
+    const result = await summarize({
+      transcript: "x",
+      sourceChars: 10_000,
+      generate: { text: () => Promise.resolve({ text: JSON.stringify(JSON.stringify(summary)) }) },
+    })
+    expect(result?.goal).toBe(summary.goal)
+  })
+
+  it("修复截断 JSON", async () => {
+    const large = { ...summary, goal: "g".repeat(300) }
+    const result = await summarize({
+      transcript: "x",
+      sourceChars: 10_000,
+      generate: { text: () => Promise.resolve({ text: JSON.stringify(large).slice(0, -1) }) },
+    })
+    expect(result?.goal).toHaveLength(300)
+  })
+
+  it("超长 title 自动截断", async () => {
+    const result = await summarize({
+      transcript: "x",
+      sourceChars: 10_000,
+      generate: {
+        text: () => Promise.resolve({ text: JSON.stringify({ ...summary, title: "x".repeat(100) }) }),
+      },
+    })
+    expect(result?.title).toHaveLength(80)
+  })
+
+  it("空 goal 抛出精确原因", async () => {
+    await expect(
+      summarize({
+        transcript: "x",
+        sourceChars: 10_000,
+        generate: { text: () => Promise.resolve({ text: JSON.stringify({ ...summary, goal: "" }) }) },
+      }),
+    ).rejects.toThrow("empty field: goal")
+  })
+
+  it("摘要超过 maxChars 时抛出精确原因", async () => {
+    await expect(
+      summarize({
+        transcript: "x",
+        sourceChars: 10_000,
+        maxChars: 100,
+        generate: { text: () => Promise.resolve({ text: JSON.stringify(summary) }) },
+      }),
+    ).rejects.toThrow("summary too long")
+  })
+
+  it("摘要不小于原文时抛出精确原因", async () => {
+    await expect(
+      summarize({
+        transcript: "x",
+        sourceChars: 100,
+        generate: { text: () => Promise.resolve({ text: JSON.stringify(summary) }) },
+      }),
+    ).rejects.toThrow("not smaller than the source")
+  })
+
+  it("摘要长度和语言只改尾部提示词", () => {
+    const custom = buildT1Instruction({ maxChars: 1_234, totalChars: 5_678, language: "zh" })
+    expect(custom).toContain("under 1234 characters")
+    expect(custom).toContain("under 5678 characters")
+    expect(custom).toContain("Write the summary in Chinese")
+    expect(buildT1Instruction({ language: "en" })).toContain("Write the summary in English")
+    expect(buildT1Instruction({ language: "auto" })).toContain("source conversation's primary language")
+    expect(custom.startsWith(buildT1Instruction().split("\n")[0] ?? "")).toBe(true)
+  })
+
+  it("合并提示词也带长度和语言约束", () => {
+    const prompt = buildMergeInstruction(
+      [{ index: 1, description: "b1+b2", sourceChars: 10_000, tier: 2 }],
+      { maxChars: 800, totalChars: 2_000, language: "en" },
+    )
+    expect(prompt).toContain("under 800 characters")
+    expect(prompt).toContain("under 2000 characters")
+    expect(prompt).toContain("Write the summary in English")
   })
 
   it("session 生成只追加指令，不重发 transcript", async () => {
@@ -316,7 +548,7 @@ describe("自动压缩", () => {
         ...Array.from({ length: 3 }, () => ({
           type: "tool-result",
           name: "shell",
-          result: "x".repeat(6_000),
+          result: "x".repeat(20_000),
         })),
       ],
     },
@@ -324,7 +556,7 @@ describe("自动压缩", () => {
   ]
 
   it("纯文本不够但工具输出足够时仍然触发", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 1_000, triggerPercent: 60 } })
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
     let compacts = 0
     const ctx = fakeCtx(
       storage,
@@ -348,7 +580,7 @@ describe("自动压缩", () => {
   })
 
   it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 1_000, triggerPercent: 60 } })
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
     let compacts = 0
     const ctx = fakeCtx(
       storage,
@@ -383,7 +615,7 @@ describe("自动压缩", () => {
 
   it("已有块时只入队 compaction，不改 pending", async () => {
     const storage = memoryStorage({
-      [SETTINGS_KEY]: { contextLimit: 1_000, triggerPercent: 60 },
+      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
       [stateKey("ses_test")]: { v: 1, blocks: [block], attempts: 0 },
     })
     let compacts = 0
@@ -408,6 +640,133 @@ describe("自动压缩", () => {
     expect(state.blocks).toHaveLength(1)
     expect(state.pending).toBeUndefined()
     expect(state.attempts).toBe(0)
+  })
+
+  it("压缩进行中不再自动入队", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    markCompactionInFlight("ses_test", true)
+    try {
+      await maybeAutoCompress({
+        ctx,
+        sessionID: "ses_test",
+        messages: autoMessages(),
+        system: [],
+        tools: {},
+        model: { providerID: "test", id: "test" },
+      })
+    } finally {
+      markCompactionInFlight("ses_test", false)
+    }
+    expect(compacts).toBe(0)
+  })
+
+  it("压缩指令本身不再触发自动压缩", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    const messages = [...autoMessages().slice(0, -1), message("user", buildT1Instruction(), "m3")]
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages,
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("失败次数达到上限后不再自动入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+      [stateKey("ses_test")]: { v: 1, blocks: [], attempts: 3 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("pending 或 phase 非空时不再入队", async () => {
+    for (const initial of [
+      withPending({ v: 1, blocks: [], attempts: 0 }, block),
+      withPhase({ v: 1, blocks: [], attempts: 0 }, "t2"),
+    ]) {
+      const storage = memoryStorage({
+        [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+        [stateKey("ses_test")]: initial,
+      })
+      let compacts = 0
+      const ctx = fakeCtx(
+        storage,
+        () => Promise.resolve({ text: JSON.stringify(summary) }),
+        () => {
+          compacts += 1
+          return Promise.resolve()
+        },
+      )
+      await maybeAutoCompress({
+        ctx,
+        sessionID: "ses_test",
+        messages: autoMessages(),
+        system: [],
+        tools: {},
+        model: { providerID: "test", id: "test" },
+      })
+      expect(compacts).toBe(0)
+    }
+  })
+
+  it("模型窗口未知时不自动入队", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: "auto", triggerPercent: 60 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
   })
 })
 
@@ -489,6 +848,12 @@ describe("T1 phase 决策", () => {
       "t2",
     )
   })
+
+  it("总字符超限也排 T2", () => {
+    const blocks = [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)]
+    expect(planT1Phase("x".repeat(1_000), blocks, 999_999, 500)).toBe("t2")
+    expect(planT1Phase("x".repeat(1_000), blocks, 999_999, 2_000)).toBeUndefined()
+  })
 })
 
 describe("会话隔离", () => {
@@ -522,6 +887,7 @@ describe("compaction 事件", () => {
       session: {
         context: () =>
           Promise.resolve([{ type: "compaction", status: "completed", summary: latestSummary }]),
+        compact: () => Promise.resolve(),
       },
     }) as unknown as Plugin.Context
 
@@ -545,7 +911,7 @@ describe("compaction 事件", () => {
     expect(state.pending?.id).toBe("b1")
   })
 
-  it("失败事件丢弃 pending 和 phase", async () => {
+  it("失败事件保留 pending 和 phase 重试，超过上限才丢弃", async () => {
     const storage = memoryStorage({
       [stateKey("ses_event")]: withPhase(
         withPending({ v: 1, blocks: [], attempts: 0 }, block),
@@ -553,9 +919,55 @@ describe("compaction 事件", () => {
       ),
     })
     await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event")
+    const first = await loadState(storage, "ses_event")
+    expect(first.pending?.id).toBe("b1")
+    expect(first.phase).toBe("t2")
+    expect(first.attempts).toBe(1)
+
+    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event")
+    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event")
+    const final = await loadState(storage, "ses_event")
+    expect(final.pending).toBeUndefined()
+    expect(final.phase).toBeUndefined()
+    expect(final.attempts).toBe(3)
+  })
+
+  it("永久错误与瞬时错误分类", () => {
+    expect(isPermanentFailure("nothing to compress")).toBe(true)
+    expect(isPermanentFailure("empty field: goal")).toBe(true)
+    expect(isPermanentFailure("summary too short")).toBe(true)
+    expect(isPermanentFailure("network down")).toBe(false)
+  })
+
+  it("读取最新 checkpoint 失败时保留 pending", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+    })
+    const ctx = {
+      storage,
+      session: {
+        context: () => Promise.reject(new Error("boom")),
+        compact: () => Promise.resolve(),
+      },
+    } as unknown as Plugin.Context
+    await handleCompactionEvent(ctx, "ended", "ses_event")
     const state = await loadState(storage, "ses_event")
-    expect(state.pending).toBeUndefined()
-    expect(state.phase).toBeUndefined()
+    expect(state.pending?.id).toBe("b1")
+  })
+
+  it("retryState 未到上限保留状态，到上限丢弃", () => {
+    const initial = withPhase(withPending({ v: 1, blocks: [], attempts: 0 }, block), "t2")
+    const first = retryState(initial, "boom")
+    expect(first.retry).toBe(true)
+    expect(first.state.pending?.id).toBe("b1")
+    expect(first.state.phase).toBe("t2")
+    expect(first.state.attempts).toBe(1)
+
+    const last = retryState({ ...initial, attempts: 2 }, "boom")
+    expect(last.retry).toBe(false)
+    expect(last.state.pending).toBeUndefined()
+    expect(last.state.phase).toBeUndefined()
+    expect(last.state.attempts).toBe(3)
   })
 })
 
@@ -582,7 +994,10 @@ describe("compress 工具只做 T1", () => {
   }
 
   /** 输入：storage；输出：捕获工具定义。 */
-  const toolCtx = (storage: StorageLike): { ctx: Plugin.Context; tool: () => ToolDefinition } => {
+  const toolCtx = (
+    storage: StorageLike,
+    compact: () => Promise<void> = () => Promise.resolve(),
+  ): { ctx: Plugin.Context; tool: () => ToolDefinition } => {
     let definition: ToolDefinition | undefined
     const ctx = {
       storage,
@@ -593,7 +1008,7 @@ describe("compress 工具只做 T1", () => {
         },
       },
       session: {
-        compact: () => Promise.resolve(),
+        compact,
       },
     } as unknown as Plugin.Context
     return {
@@ -650,6 +1065,104 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(phase.ctx, new Map([["ses_test", toolMessages()]]))
     const phaseResult = await phase.tool().execute(summary, { sessionID: "ses_test" })
     expect(phaseResult.content).toContain("compression already in progress")
+  })
+
+  it("缓存已经是 eligible 时直接使用，不再二次筛选", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage)
+    const eligible = [
+      message("user", "hi", "m1"),
+      {
+        id: "m2",
+        role: "assistant",
+        content: [
+          { type: "text", text: "short" },
+          ...Array.from({ length: 3 }, () => ({
+            type: "tool-result",
+            name: "shell",
+            result: "x".repeat(6_000),
+          })),
+        ],
+      },
+    ]
+    await registerCompressTool(ctx, new Map([["ses_test", eligible]]))
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    expect(result.output?.block).toBe("b1")
+    expect((await loadState(storage, "ses_test")).pending?.id).toBe("b1")
+  })
+
+  it("无 eligible 时失败，且返回合法 output", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage)
+    await registerCompressTool(ctx, new Map())
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    expect(result.content).toContain("nothing to compress")
+    expect(result.output).toEqual({ block: "", status: "error" })
+  })
+
+  it("内容不足时失败", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage)
+    await registerCompressTool(
+      ctx,
+      new Map([["ses_test", [message("user", "hi", "m1"), message("assistant", "short", "m2")]]]),
+    )
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    expect(result.content).toContain("not enough content")
+  })
+
+  it("摘要非法时失败", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage)
+    await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
+    const result = await tool().execute({ ...summary, goal: "" }, { sessionID: "ses_test" })
+    expect(result.content).toContain("empty field: goal")
+  })
+
+  it("消息缺少 id 时失败", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage)
+    const noIds: MessageLike[] = [
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      {
+        role: "assistant",
+        content: Array.from({ length: 3 }, () => ({
+          type: "tool-result",
+          name: "shell",
+          result: "x".repeat(6_000),
+        })),
+      },
+    ]
+    await registerCompressTool(ctx, new Map([["ses_test", noIds]]))
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    expect(result.content).toContain("messages are missing ids")
+  })
+
+  it("按设置的单条上限拒绝过长摘要", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        contextLimit: "auto",
+        triggerPercent: 80,
+        summaryBudgetTokens: 50_000,
+        summaryBlockChars: 600,
+        summaryTotalChars: 100_000,
+        summaryLanguage: "auto",
+      },
+    })
+    const { ctx, tool } = toolCtx(storage)
+    await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
+    const bigFacts = { ...summary, facts: ["x".repeat(2_000)] }
+    const result = await tool().execute(bigFacts, { sessionID: "ses_test" })
+    expect(result.content).toContain("summary too long")
+  })
+
+  it("compact 失败时记录 lastError 并返回失败", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage, () => Promise.reject(new Error("boom")))
+    await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    expect(result.content).toContain("failed to start compaction")
+    expect((await loadState(storage, "ses_test")).lastError).toContain("boom")
   })
 })
 describe("摘要单层合并", () => {
@@ -758,23 +1271,77 @@ describe("摘要单层合并", () => {
     expect(result.nextPhase).toBe("t3")
   })
 
-  it("合并摘要失败时保留源块", async () => {
+  it("合并摘要失败时抛出原因", async () => {
     const ctx = fakeCtx(
       memoryStorage(),
       () => Promise.resolve({ text: "not json" }),
       () => Promise.resolve(),
     )
+    await expect(
+      distillOnce({
+        ctx,
+        sessionID: "ses_test",
+        state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        pending: longBlock("b2", 1, 2),
+        budgetTokens: 5_000,
+        phase: "t2",
+      }),
+    ).rejects.toThrow("not valid JSON")
+  })
+
+  it("总字符超限时也合并", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
     const result = await distillOnce({
       ctx,
       sessionID: "ses_test",
-      state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
-      pending: longBlock("b2", 1, 2),
-      budgetTokens: 5_000,
+      state: { v: 1, blocks: [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], attempts: 0 },
+      pending: undefined,
+      budgetTokens: 999_999,
+      summaryTotalChars: 10,
+      summaryBlockChars: 20_000,
       phase: "t2",
     })
-    expect(result.merged).toBe(false)
-    expect(result.error).toBe("distill summary failed")
-    expect(result.blocks).toHaveLength(1)
-    expect(result.pending?.id).toBe("b2")
+    expect(result.merged).toBe(true)
   })
+
+  it("模型选择不存在的候选时抛出原因", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    await expect(
+      distillOnce({
+        ctx,
+        sessionID: "ses_test",
+        state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        pending: longBlock("b2", 1, 2),
+        budgetTokens: 5_000,
+        phase: "t2",
+      }),
+    ).rejects.toThrow("valid candidate")
+  })
+
+  it("合并摘要校验失败时抛出原因", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary, goal: "" }) }),
+      () => Promise.resolve(),
+    )
+    await expect(
+      distillOnce({
+        ctx,
+        sessionID: "ses_test",
+        state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        pending: longBlock("b2", 1, 2),
+        budgetTokens: 5_000,
+        phase: "t2",
+      }),
+    ).rejects.toThrow("empty field: goal")
+  })
+
 })

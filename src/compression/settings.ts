@@ -1,5 +1,16 @@
 import type { Schema } from "effect"
 
+import {
+  DEFAULT_SUMMARY_BLOCK_CHARS,
+  DEFAULT_SUMMARY_TOTAL_CHARS,
+  MAX_SUMMARY_BLOCK_CHARS,
+  MAX_SUMMARY_TOTAL_CHARS,
+  MIN_SUMMARY_BLOCK_CHARS,
+  MIN_SUMMARY_TOTAL_CHARS,
+  SUMMARY_WINDOW_RESERVE,
+  isSummaryLanguage,
+  type SummaryLanguage,
+} from "../settings.ts"
 import type { StorageLike } from "./state.ts"
 
 /** 服务端从 TUI 收到的设置。 */
@@ -7,6 +18,9 @@ export interface ServerSettings {
   readonly contextLimit: "auto" | number
   readonly triggerPercent: number
   readonly summaryBudgetTokens: number
+  readonly summaryBlockChars: number
+  readonly summaryTotalChars: number
+  readonly summaryLanguage: SummaryLanguage
 }
 
 export const SETTINGS_KEY = "settings"
@@ -22,6 +36,9 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   contextLimit: "auto",
   triggerPercent: 80,
   summaryBudgetTokens: DEFAULT_SUMMARY_BUDGET,
+  summaryBlockChars: DEFAULT_SUMMARY_BLOCK_CHARS,
+  summaryTotalChars: DEFAULT_SUMMARY_TOTAL_CHARS,
+  summaryLanguage: "auto",
 }
 
 /**
@@ -35,6 +52,9 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   const limit = record["contextLimit"]
   const percent = record["triggerPercent"]
   const budget = record["summaryBudgetTokens"] ?? DEFAULT_SUMMARY_BUDGET
+  const blockChars = record["summaryBlockChars"] ?? DEFAULT_SUMMARY_BLOCK_CHARS
+  const totalChars = record["summaryTotalChars"] ?? DEFAULT_SUMMARY_TOTAL_CHARS
+  const language = record["summaryLanguage"] ?? "auto"
   if (
     limit !== "auto" &&
     (typeof limit !== "number" ||
@@ -60,7 +80,44 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   ) {
     return undefined
   }
-  return { contextLimit: limit, triggerPercent: Math.round(percent), summaryBudgetTokens: Math.round(budget) }
+  if (
+    typeof blockChars !== "number" ||
+    !Number.isFinite(blockChars) ||
+    blockChars < MIN_SUMMARY_BLOCK_CHARS ||
+    blockChars > MAX_SUMMARY_BLOCK_CHARS
+  ) {
+    return undefined
+  }
+  if (
+    typeof totalChars !== "number" ||
+    !Number.isFinite(totalChars) ||
+    totalChars < MIN_SUMMARY_TOTAL_CHARS ||
+    totalChars > MAX_SUMMARY_TOTAL_CHARS ||
+    totalChars < blockChars
+  ) {
+    return undefined
+  }
+  if (!isSummaryLanguage(language)) return undefined
+  // 数字窗口下，用户显式设置的摘要上限按 1 字符 ≈ 1 token 的最坏情况，不得超过窗口减预留；
+  // 窗口小到装不下最小摘要（或字段缺省回退默认值）时不校验——运行时钳制兜底，失败原因交给校验。
+  if (typeof limit === "number") {
+    const ceiling = limit - SUMMARY_WINDOW_RESERVE
+    if (ceiling >= MIN_SUMMARY_BLOCK_CHARS) {
+      const hasBlock = record["summaryBlockChars"] !== undefined
+      const hasTotal = record["summaryTotalChars"] !== undefined
+      if ((hasBlock && Math.round(blockChars) > ceiling) || (hasTotal && Math.round(totalChars) > ceiling)) {
+        return undefined
+      }
+    }
+  }
+  return {
+    contextLimit: limit,
+    triggerPercent: Math.round(percent),
+    summaryBudgetTokens: Math.round(budget),
+    summaryBlockChars: Math.round(blockChars),
+    summaryTotalChars: Math.round(totalChars),
+    summaryLanguage: language,
+  }
 }
 
 /** 输入：storage；输出：设置（缺失或损坏时用默认值）。 */

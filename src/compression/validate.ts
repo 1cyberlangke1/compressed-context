@@ -1,7 +1,16 @@
 import type { SummaryFields } from "./schema.ts"
 
 export const MIN_SUMMARY_CHARS = 200
+export const MIN_MERGE_SUMMARY_CHARS = 80
+export const MIN_ULTRA_SUMMARY_CHARS = 40
 export const MAX_SUMMARY_CHARS = 20_000
+
+/** 输入：层级；输出：该层允许的最短摘要字符数。 */
+export function minSummaryChars(tier: 1 | 2 | 3): number {
+  if (tier === 3) return MIN_ULTRA_SUMMARY_CHARS
+  if (tier === 2) return MIN_MERGE_SUMMARY_CHARS
+  return MIN_SUMMARY_CHARS
+}
 /** 可压缩原文的最小字符数，低于它不生成块。 */
 export const MIN_SOURCE_CHARS = 5_000
 
@@ -11,9 +20,24 @@ export interface ValidationResult {
   readonly message: string
 }
 
-/** 输入：结构化摘要；输出：估算字符数。 */
+/**
+ * 输入：结构化摘要。
+ * 输出：实际摘要内容字符数。
+ * 预期：只算字段正文，不算 JSON 的字段名、引号和括号，避免合法摘要被误判为过大。
+ */
 export function summaryChars(summary: SummaryFields): number {
-  return JSON.stringify(summary).length
+  return [
+    summary.title,
+    summary.goal,
+    ...summary.constraints,
+    ...summary.decisions,
+    ...summary.progress.completed,
+    ...summary.progress.active,
+    ...summary.progress.blocked,
+    ...summary.open_items,
+    ...summary.files,
+    ...summary.facts,
+  ].join("\n").length
 }
 
 /**
@@ -21,7 +45,12 @@ export function summaryChars(summary: SummaryFields): number {
  * 输出：校验结果。
  * 预期：goal 非空、总长度在范围内、摘要必须比原文小。
  */
-export function validateSummary(summary: SummaryFields, sourceChars: number): ValidationResult {
+export function validateSummary(
+  summary: SummaryFields,
+  sourceChars: number,
+  minChars: number = MIN_SUMMARY_CHARS,
+  maxChars: number = MAX_SUMMARY_CHARS,
+): ValidationResult {
   const fields: string[] = []
   if (summary.goal.trim().length === 0) fields.push("goal")
   if (summary.title.trim().length === 0 || summary.title.length > 80) fields.push("title")
@@ -36,18 +65,18 @@ export function validateSummary(summary: SummaryFields, sourceChars: number): Va
   }
 
   const chars = summaryChars(summary)
-  if (chars < MIN_SUMMARY_CHARS) {
+  if (chars < minChars) {
     return {
       ok: false,
       fields: ["summary"],
-      message: `summary too short (${chars.toString()} chars, min ${MIN_SUMMARY_CHARS.toString()})`,
+      message: `summary too short (${chars.toString()} chars, min ${minChars.toString()})`,
     }
   }
-  if (chars > MAX_SUMMARY_CHARS) {
+  if (chars > maxChars) {
     return {
       ok: false,
       fields: ["summary"],
-      message: `summary too long (${chars.toString()} chars, max ${MAX_SUMMARY_CHARS.toString()})`,
+      message: `summary too long (${chars.toString()} chars, max ${maxChars.toString()})`,
     }
   }
   if (sourceChars > 0 && chars >= sourceChars) {

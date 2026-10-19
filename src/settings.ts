@@ -9,6 +9,25 @@ export const LOCALE_SETTINGS = ["auto", "zh", "en"] as const
 
 export type LocaleSetting = (typeof LOCALE_SETTINGS)[number]
 
+/** 摘要语言；auto 跟随源对话。 */
+export const SUMMARY_LANGUAGES = ["auto", "zh", "en"] as const
+
+export type SummaryLanguage = (typeof SUMMARY_LANGUAGES)[number]
+
+export const MIN_SUMMARY_BLOCK_CHARS = 500
+export const MAX_SUMMARY_BLOCK_CHARS = 100_000
+export const DEFAULT_SUMMARY_BLOCK_CHARS = 20_000
+
+export const MIN_SUMMARY_TOTAL_CHARS = 5_000
+export const MAX_SUMMARY_TOTAL_CHARS = 1_000_000
+export const DEFAULT_SUMMARY_TOTAL_CHARS = 100_000
+
+/**
+ * 上下文窗口里预留给 system/tools/recent 的 token 数。
+ * 摘要上限按 1 字符 ≈ 1 token 的最坏情况折算，保证 CJK 摘要也不会撑爆窗口。
+ */
+export const SUMMARY_WINDOW_RESERVE = 10_000
+
 /** 上下文窗口上限：auto 复用模型原生值，数字表示自定义 token 数。 */
 export type ContextLimit = "auto" | number
 
@@ -34,6 +53,12 @@ export interface Settings {
   triggerPercent: number
   /** 摘要链 token 预算 */
   summaryBudgetTokens: number
+  /** 单条摘要字符上限 */
+  summaryBlockChars: number
+  /** 全部摘要字符上限 */
+  summaryTotalChars: number
+  /** 摘要语言；只影响提示词 */
+  summaryLanguage: SummaryLanguage
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -43,6 +68,9 @@ export const DEFAULT_SETTINGS: Settings = {
   contextLimit: "auto",
   triggerPercent: DEFAULT_TRIGGER_PERCENT,
   summaryBudgetTokens: DEFAULT_SUMMARY_BUDGET,
+  summaryBlockChars: DEFAULT_SUMMARY_BLOCK_CHARS,
+  summaryTotalChars: DEFAULT_SUMMARY_TOTAL_CHARS,
+  summaryLanguage: "auto",
 }
 
 /** 自定义上限允许的范围。 */
@@ -52,6 +80,20 @@ export const MAX_CONTEXT_LIMIT = 10_000_000
 /** 输入：任意值；输出：是否是合法语言设置。 */
 export function isLocaleSetting(value: unknown): value is LocaleSetting {
   return typeof value === "string" && (LOCALE_SETTINGS as readonly string[]).includes(value)
+}
+
+/** 输入：任意值；输出：是否是合法摘要语言。 */
+export function isSummaryLanguage(value: unknown): value is SummaryLanguage {
+  return typeof value === "string" && (SUMMARY_LANGUAGES as readonly string[]).includes(value)
+}
+
+/** 输入：任意值 + 范围；输出：合法的字符上限。 */
+function readCharLimit(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value >= min && value <= max) {
+    return Math.round(value)
+  }
+  if (typeof value === "string") return parseTokenCount(value, min, max) ?? fallback
+  return fallback
 }
 
 /**
@@ -124,6 +166,21 @@ function readSummaryBudget(value: unknown): number {
  */
 export function normalizeSettings(value: Readonly<Record<string, unknown>>): Settings {
   const percent = value["triggerPercent"]
+  const blockChars = readCharLimit(
+    value["summaryBlockChars"],
+    MIN_SUMMARY_BLOCK_CHARS,
+    MAX_SUMMARY_BLOCK_CHARS,
+    DEFAULT_SUMMARY_BLOCK_CHARS,
+  )
+  const totalChars = Math.max(
+    blockChars,
+    readCharLimit(
+      value["summaryTotalChars"],
+      MIN_SUMMARY_TOTAL_CHARS,
+      MAX_SUMMARY_TOTAL_CHARS,
+      DEFAULT_SUMMARY_TOTAL_CHARS,
+    ),
+  )
   return {
     enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_SETTINGS.enabled,
     expanded: typeof value["expanded"] === "boolean" ? value["expanded"] : DEFAULT_SETTINGS.expanded,
@@ -134,6 +191,9 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
         ? Math.round(percent)
         : DEFAULT_SETTINGS.triggerPercent,
     summaryBudgetTokens: readSummaryBudget(value["summaryBudgetTokens"]),
+    summaryBlockChars: blockChars,
+    summaryTotalChars: totalChars,
+    summaryLanguage: isSummaryLanguage(value["summaryLanguage"]) ? value["summaryLanguage"] : "auto",
   }
 }
 
@@ -162,6 +222,71 @@ export function effectiveSummaryBudget(settings: Settings): number {
     return Math.round(value)
   }
   return DEFAULT_SUMMARY_BUDGET
+}
+
+/** 输入：设置；输出：合法的单条摘要字符上限。 */
+export function effectiveSummaryBlockChars(settings: Settings): number {
+  const value: unknown = settings.summaryBlockChars
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_SUMMARY_BLOCK_CHARS &&
+    value <= MAX_SUMMARY_BLOCK_CHARS
+  ) {
+    return Math.round(value)
+  }
+  return DEFAULT_SUMMARY_BLOCK_CHARS
+}
+
+/** 输入：设置；输出：合法的摘要总字符上限，保证不小于单条上限。 */
+export function effectiveSummaryTotalChars(settings: Settings): number {
+  const block = effectiveSummaryBlockChars(settings)
+  const value: unknown = settings.summaryTotalChars
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_SUMMARY_TOTAL_CHARS &&
+    value <= MAX_SUMMARY_TOTAL_CHARS
+  ) {
+    return Math.max(block, Math.round(value))
+  }
+  return Math.max(block, DEFAULT_SUMMARY_TOTAL_CHARS)
+}
+
+/** 输入：设置；输出：合法的摘要语言。 */
+export function effectiveSummaryLanguage(settings: Settings): SummaryLanguage {
+  return isSummaryLanguage(settings.summaryLanguage) ? settings.summaryLanguage : "auto"
+}
+
+/**
+ * 输入：设置（结构同 Settings，允许缺字段）+ 已知窗口 token 数（auto 未解析时为 undefined）。
+ * 输出：钳制后的 blockChars / totalChars / budgetTokens。
+ * 预期：窗口未知时原样返回；窗口已知时任何一项都不得超过 窗口 − 预留。
+ */
+export function clampSummaryLimits(
+  settings: {
+    readonly summaryBlockChars?: unknown
+    readonly summaryTotalChars?: unknown
+    readonly summaryBudgetTokens?: unknown
+  },
+  windowTokens: number | undefined,
+): { blockChars: number; totalChars: number; budgetTokens: number } {
+  const blockChars = effectiveSummaryBlockChars(settings as Settings)
+  const totalChars = Math.max(blockChars, effectiveSummaryTotalChars(settings as Settings))
+  const budgetTokens = effectiveSummaryBudget(settings as Settings)
+  if (windowTokens === undefined || !Number.isFinite(windowTokens) || windowTokens <= 0) {
+    return { blockChars, totalChars, budgetTokens }
+  }
+  const ceiling = Math.max(0, Math.floor(windowTokens) - SUMMARY_WINDOW_RESERVE)
+  if (ceiling < 500) {
+    // 窗口小到装不下最小摘要时钳制只会把上限压成 0，让压缩必然失败；保持用户值，失败原因交给校验。
+    return { blockChars, totalChars, budgetTokens }
+  }
+  return {
+    blockChars: Math.min(blockChars, ceiling),
+    totalChars: Math.min(totalChars, ceiling),
+    budgetTokens: Math.min(budgetTokens, ceiling),
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode/plugin"
 
+import type { SummaryLanguage } from "../settings.ts"
 import { countText } from "../tokens.ts"
 import { activeBlocks, renderAll, renderBlock } from "./render.ts"
 import { nextBlockId, type Block, type CompactionPhase, type State, type Tier } from "./state.ts"
@@ -9,7 +10,7 @@ import {
   summarizeChoiceInstruction,
   type SummaryChoiceCandidate,
 } from "./summarize.ts"
-import { validateSummary } from "./validate.ts"
+import { minSummaryChars, validateSummary } from "./validate.ts"
 
 /** 一个合法的相邻合并候选。 */
 export interface MergeCandidate {
@@ -25,6 +26,9 @@ export interface DistillOnceInput {
   /** 上一层还没提交的块；T2/T3 钩子里可能来自 pending。 */
   readonly pending: Block | undefined
   readonly budgetTokens: number
+  readonly summaryBlockChars?: number
+  readonly summaryTotalChars?: number
+  readonly summaryLanguage?: SummaryLanguage
   readonly phase: Exclude<CompactionPhase, undefined>
 }
 
@@ -59,8 +63,12 @@ export function planT1Phase(
   summary: string,
   active: readonly Block[],
   budgetTokens: number,
+  totalChars: number = Number.POSITIVE_INFINITY,
 ): CompactionPhase | undefined {
-  return countText(summary) > budgetTokens && mergeCandidates(active).length > 0 ? "t2" : undefined
+  return (countText(summary) > budgetTokens || summary.length > totalChars) &&
+    mergeCandidates(active).length > 0
+    ? "t2"
+    : undefined
 }
 
 /** 输入：块；输出：候选列表里的简短描述。 */
@@ -82,7 +90,11 @@ function pairTranscript(candidate: MergeCandidate): string {
 export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceResult> {
   const active = activeBlocks(input.state.blocks, input.pending)
   const currentSummary = renderAll(input.state.blocks, input.pending)
-  if (active.length < 2 || countText(currentSummary) <= input.budgetTokens) {
+  const totalChars = input.summaryTotalChars ?? Number.POSITIVE_INFINITY
+  if (
+    active.length < 2 ||
+    (countText(currentSummary) <= input.budgetTokens && currentSummary.length <= totalChars)
+  ) {
     return { blocks: input.state.blocks, pending: input.pending, summary: currentSummary, merged: false }
   }
 
@@ -99,10 +111,20 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
   }))
 
   const generator = sessionGenerator(input.ctx.session, input.sessionID)
+  let failure = "distill summary failed"
+  const promptOptions = {
+    ...(input.summaryBlockChars === undefined ? {} : { maxChars: input.summaryBlockChars }),
+    ...(input.summaryTotalChars === undefined ? {} : { totalChars: input.summaryTotalChars }),
+    ...(input.summaryLanguage === undefined ? {} : { language: input.summaryLanguage }),
+  }
   const picked = await summarizeChoiceInstruction({
-    prompt: buildMergeInstruction(choices),
+    prompt: buildMergeInstruction(choices, promptOptions),
     candidates: choices,
     generate: generator,
+    ...(input.summaryBlockChars === undefined ? {} : { maxChars: input.summaryBlockChars }),
+    onFailure: (reason) => {
+      failure = `distill summary failed: ${reason}`
+    },
   })
   if (picked === undefined) {
     return {
@@ -110,7 +132,7 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
       pending: input.pending,
       summary: currentSummary,
       merged: false,
-      error: "distill summary failed",
+      error: failure,
     }
   }
 
@@ -125,7 +147,12 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     }
   }
 
-  const validation = validateSummary(picked.summary, pairTranscript(chosen).length)
+  const validation = validateSummary(
+    picked.summary,
+    pairTranscript(chosen).length,
+    minSummaryChars(chosen.tier),
+    input.summaryBlockChars,
+  )
   if (!validation.ok) {
     return {
       blocks: input.state.blocks,
@@ -153,7 +180,7 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
   const summary = renderAll(working, merged)
   const nextPhase: CompactionPhase | undefined =
     input.phase === "t2" &&
-    countText(summary) > input.budgetTokens &&
+    (countText(summary) > input.budgetTokens || summary.length > totalChars) &&
     mergeCandidates(activeBlocks(working, merged)).length > 0
       ? "t3"
       : undefined

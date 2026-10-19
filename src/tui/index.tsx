@@ -18,6 +18,9 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     contextLimit: settings.contextLimit,
     triggerPercent: settings.triggerPercent,
     summaryBudgetTokens: settings.summaryBudgetTokens,
+    summaryBlockChars: settings.summaryBlockChars,
+    summaryTotalChars: settings.summaryTotalChars,
+    summaryLanguage: settings.summaryLanguage,
   })
   if (
     settings.enabled === normalized.enabled &&

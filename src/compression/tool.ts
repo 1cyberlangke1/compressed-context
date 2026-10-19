@@ -2,7 +2,8 @@ import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
 import { SummaryFields } from "./schema.ts"
-import { eligibleMessages, type MessageLike } from "./select.ts"
+import { loadServerSettings } from "./settings.ts"
+import type { MessageLike } from "./select.ts"
 import { loadState, nextBlockId, nextOrder, saveState, withPending, type Block } from "./state.ts"
 import type { Disposable } from "./settings-rpc.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -22,7 +23,11 @@ const DESCRIPTION =
   "exact technical facts, then conclusions, then lessons. Write short factual entries, not prose."
 
 function failure(message: string) {
-  return { content: `ERROR: ${message}`, metadata: { error: true } }
+  return {
+    output: { block: "", status: "error" },
+    content: `ERROR: ${message}`,
+    metadata: { error: true },
+  }
 }
 
 /**
@@ -46,8 +51,8 @@ export async function registerCompressTool(
         const state = await loadState(ctx.storage, sessionID)
         if (state.pending || state.phase !== undefined) return failure("compression already in progress")
 
-        const messages = cache.get(sessionID) ?? []
-        const eligible = eligibleMessages(messages)
+        // context 钩子缓存的就是 eligible 消息，这里不能再筛一次。
+        const eligible = cache.get(sessionID) ?? []
         const transcript = buildTranscript(eligible)
         const sourceChars = transcript.length
         if (eligible.length === 0) return failure("nothing to compress")
@@ -57,7 +62,8 @@ export async function registerCompressTool(
           )
         }
 
-        const validation = validateSummary(input, sourceChars)
+        const settings = await loadServerSettings(ctx.storage)
+        const validation = validateSummary(input, sourceChars, undefined, settings.summaryBlockChars)
         if (!validation.ok) return failure(validation.message)
 
         const first = eligible.find((message) => message.id !== undefined)

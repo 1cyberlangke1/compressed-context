@@ -8,16 +8,26 @@ import {
   isContextLimit,
   localeArgument,
   MAX_CONTEXT_LIMIT,
+  MAX_SUMMARY_BLOCK_CHARS,
   MAX_SUMMARY_BUDGET,
+  MAX_SUMMARY_TOTAL_CHARS,
   MAX_TRIGGER_PERCENT,
   MIN_CONTEXT_LIMIT,
+  MIN_SUMMARY_BLOCK_CHARS,
   MIN_SUMMARY_BUDGET,
+  MIN_SUMMARY_TOTAL_CHARS,
   MIN_TRIGGER_PERCENT,
+  effectiveSummaryBlockChars,
   effectiveSummaryBudget,
+  effectiveSummaryLanguage,
+  effectiveSummaryTotalChars,
   parseTokenCount,
+  SUMMARY_WINDOW_RESERVE,
+  clampSummaryLimits,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
+  type SummaryLanguage,
 } from "../settings.ts"
 import type { UpdateSettings } from "./types.ts"
 
@@ -44,6 +54,13 @@ function localeLabel(settings: Settings, copy: Messages): string {
 }
 
 /** 输入：设置；输出：当前上下文上限标签；预期：auto 显示「模型原生」。 */
+function summaryLanguageLabel(settings: Settings, copy: Messages): string {
+  const language = effectiveSummaryLanguage(settings)
+  if (language === "zh") return copy.languages.zh
+  if (language === "en") return copy.languages.en
+  return copy.settings.auto
+}
+
 function limitLabel(settings: Settings, copy: Messages): string {
   const value: unknown = settings.contextLimit
   if (!isContextLimit(value) || value === "auto") return copy.settings.limitAuto
@@ -233,6 +250,9 @@ export function SettingsCommand(props: {
       contextLimit: props.settings.contextLimit,
       triggerPercent: props.settings.triggerPercent,
       summaryBudgetTokens: effectiveSummaryBudget(props.settings),
+      summaryBlockChars: effectiveSummaryBlockChars(props.settings),
+      summaryTotalChars: effectiveSummaryTotalChars(props.settings),
+      summaryLanguage: effectiveSummaryLanguage(props.settings),
     }
     try {
       // ContextRpc 是 PortableDefinition，具体方法名在类型上退化成索引签名，这里补回调用形状。
@@ -241,6 +261,9 @@ export function SettingsCommand(props: {
           contextLimit: "auto" | number
           triggerPercent: number
           summaryBudgetTokens: number
+          summaryBlockChars: number
+          summaryTotalChars: number
+          summaryLanguage: SummaryLanguage
         }): Promise<unknown>
       }
       void rpc.settingsSet(payload).catch(() => undefined)
@@ -295,6 +318,11 @@ export function SettingsCommand(props: {
         onConfirm={(value) => {
           void props.updateSettings((draft) => {
             draft.contextLimit = value
+            // 窗口变小时钳制摘要上限，否则服务端会拒绝整次保存，TUI 和服务端分叉。
+            const limits = clampSummaryLimits(draft, value)
+            draft.summaryBlockChars = limits.blockChars
+            draft.summaryTotalChars = limits.totalChars
+            draft.summaryBudgetTokens = limits.budgetTokens
           })
         }}
       />
@@ -321,6 +349,77 @@ export function SettingsCommand(props: {
         }}
       />
     ))
+  }
+
+  /** 输入：无；输出：数字窗口下的摘要上限，auto 返回 undefined。 */
+  const windowCeiling = (): number | undefined => {
+    const limit: unknown = props.settings.contextLimit
+    if (typeof limit !== "number" || !Number.isFinite(limit)) return undefined
+    return Math.max(0, limit - SUMMARY_WINDOW_RESERVE)
+  }
+
+  const openSummaryBlock = (): void => {
+    const value = effectiveSummaryBlockChars(props.settings)
+    const ceiling = windowCeiling()
+    props.context.ui.dialog.show(() => (
+      <TokenDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.summaryBlockChars}
+        hint={copy().settings.summaryBlockCharsHint}
+        invalid={copy().settings.summaryBlockCharsInvalid}
+        placeholder={copy().settings.summaryBlockCharsPlaceholder}
+        initial={formatTokens(value)}
+        min={MIN_SUMMARY_BLOCK_CHARS}
+        max={Math.min(MAX_SUMMARY_BLOCK_CHARS, ceiling ?? MAX_SUMMARY_BLOCK_CHARS)}
+        onConfirm={(next) => {
+          void props.updateSettings((draft) => {
+            draft.summaryBlockChars = next
+            if (draft.summaryTotalChars < next) draft.summaryTotalChars = next
+          })
+        }}
+      />
+    ))
+  }
+
+  const openSummaryTotal = (): void => {
+    const block = effectiveSummaryBlockChars(props.settings)
+    const value = effectiveSummaryTotalChars(props.settings)
+    const ceiling = windowCeiling()
+    props.context.ui.dialog.show(() => (
+      <TokenDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.summaryTotalChars}
+        hint={copy().settings.summaryTotalCharsHint}
+        invalid={copy().settings.summaryTotalCharsInvalid}
+        placeholder={copy().settings.summaryTotalCharsPlaceholder}
+        initial={formatTokens(value)}
+        min={Math.max(MIN_SUMMARY_TOTAL_CHARS, block)}
+        max={Math.min(MAX_SUMMARY_TOTAL_CHARS, ceiling ?? MAX_SUMMARY_TOTAL_CHARS)}
+        onConfirm={(next) => {
+          void props.updateSettings((draft) => {
+            draft.summaryTotalChars = next
+          })
+        }}
+      />
+    ))
+  }
+
+  const openSummaryLanguage = async (): Promise<void> => {
+    const picked = await props.context.ui.dialog.select<SummaryLanguage>({
+      title: copy().settings.summaryLanguage,
+      current: effectiveSummaryLanguage(props.settings),
+      options: [
+        { title: copy().settings.auto, value: "auto" },
+        { title: copy().languages.zh, value: "zh" },
+        { title: copy().languages.en, value: "en" },
+      ],
+    })
+    if (picked === undefined) return
+    await props.updateSettings((draft) => {
+      draft.summaryLanguage = picked
+    })
   }
 
   const openLimit = async (): Promise<boolean> => {
@@ -364,6 +463,21 @@ export function SettingsCommand(props: {
           value: "budget",
           footer: formatTokens(effectiveSummaryBudget(props.settings)),
         },
+        {
+          title: copy().settings.summaryBlockChars,
+          value: "blockChars",
+          footer: formatTokens(effectiveSummaryBlockChars(props.settings)),
+        },
+        {
+          title: copy().settings.summaryTotalChars,
+          value: "totalChars",
+          footer: formatTokens(effectiveSummaryTotalChars(props.settings)),
+        },
+        {
+          title: copy().settings.summaryLanguage,
+          value: "summaryLanguage",
+          footer: summaryLanguageLabel(props.settings, copy()),
+        },
         { title: copy().settings.language, value: "language", footer: localeLabel(props.settings, copy()) },
         { title: copy().settings.close, value: "close" },
       ],
@@ -387,6 +501,19 @@ export function SettingsCommand(props: {
     }
     if (picked === "budget") {
       openBudget()
+      return
+    }
+    if (picked === "blockChars") {
+      openSummaryBlock()
+      return
+    }
+    if (picked === "totalChars") {
+      openSummaryTotal()
+      return
+    }
+    if (picked === "summaryLanguage") {
+      await openSummaryLanguage()
+      void openSettings()
       return
     }
     if (picked === "language") {

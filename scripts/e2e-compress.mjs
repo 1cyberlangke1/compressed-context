@@ -60,19 +60,165 @@ function chatStream(content) {
 }
 
 /** 输入：OpenAI 请求；输出：假 provider 的文本。 */
+let mode = "normal"
+let t1Attempts = 0
+let t2Attempts = 0
+let toolPromptCount = 0
+const prompts = []
+
+/** 输入：无；输出：小摘要。 */
+function smallSummary() {
+  return JSON.stringify({
+    title: "E2E small",
+    goal: "verify fallback",
+    constraints: ["no production interference"],
+    decisions: ["fallback summary"],
+    progress: { completed: [], active: [], blocked: [] },
+    open_items: [],
+    files: [],
+    facts: ["small fact"],
+  })
+}
+
+/** 输入：工具调用；输出：OpenAI 兼容的 tool_calls SSE。 */
+function toolStream(tool) {
+  const chunk = (delta, finish) =>
+    `data: ${JSON.stringify({
+      id: "chatcmpl-tool",
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: "fake",
+      choices: [{ index: 0, delta, finish_reason: finish }],
+    })}\n\n`
+  return `${chunk(
+    {
+      tool_calls: [
+        {
+          index: 0,
+          id: `call_tool_${toolPromptCount.toString()}`,
+          function: { name: tool.name, arguments: "" },
+        },
+      ],
+    },
+    null,
+  )}${chunk(
+    {
+      tool_calls: [{ index: 0, function: { arguments: tool.arguments } }],
+    },
+    null,
+  )}${chunk({}, "tool_calls")}data: [DONE]\n\n`
+}
+
+/** 输入：工具调用；输出：OpenAI 兼容的 tool_calls 响应。 */
+function toolResponse(tool) {
+  return {
+    id: "chatcmpl-tool",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "fake",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            { id: "call_tool_1", type: "function", function: { name: tool.name, arguments: tool.arguments } },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  }
+}
+
+/** 输入：OpenAI 请求；输出：compress 工具调用或 undefined。 */
+function fakeToolCall(body) {
+  if (mode !== "tool-compress") return undefined
+  const messages = Array.isArray(body?.messages) ? body.messages : []
+  const lastUserMessage = [...messages].reverse().find((message) => message?.role === "user")
+  const lastUser =
+    typeof lastUserMessage?.content === "string"
+      ? lastUserMessage.content
+      : Array.isArray(lastUserMessage?.content)
+        ? lastUserMessage.content.map((part) => part?.text ?? "").join("\n")
+        : ""
+  if (
+    !lastUser.includes("use compress tool") ||
+    lastUser.includes("You are writing a checkpoint") ||
+    lastUser.includes("checkpoint at the top of the conversation")
+  ) {
+    return undefined
+  }
+  const hasToolResult = messages.some(
+    (message) =>
+      message?.role === "tool" ||
+      (Array.isArray(message?.content) && message.content.some((part) => part?.type === "tool-result")),
+  )
+  if (hasToolResult) return undefined
+  toolPromptCount += 1
+  console.log("fakeToolCall", { toolPromptCount, lastUser: lastUser.slice(0, 80) })
+  console.log("fakeToolCall returning compress")
+  return {
+    name: "compress",
+    arguments: JSON.stringify({
+      title: "Tool T1",
+      goal: "verify compress tool",
+      constraints: ["no production interference"],
+      decisions: ["tool provides the summary"],
+      progress: { completed: ["tool"], active: [], blocked: [] },
+      open_items: [],
+      files: [],
+      facts: ["x".repeat(300)],
+    }),
+  }
+}
+
 function fakeText(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : []
-  const text = messages
-    .map((message) =>
-      typeof message?.content === "string"
-        ? message.content
-        : Array.isArray(message?.content)
-          ? message.content.map((part) => part?.text ?? "").join("\n")
-          : "",
-    )
-    .join("\n")
+  const lastUserMessage = [...messages].reverse().find((message) => message?.role === "user")
+  const lastUser =
+    typeof lastUserMessage?.content === "string"
+      ? lastUserMessage.content
+      : Array.isArray(lastUserMessage?.content)
+        ? lastUserMessage.content.map((part) => part?.text ?? "").join("\n")
+        : ""
+  prompts.push(lastUser)
 
-  if (text.includes("You are writing a checkpoint for the older part")) {
+  const totalChars = messages.reduce((sum, message) => {
+    const content = message?.content
+    if (typeof content === "string") return sum + content.length
+    if (Array.isArray(content)) {
+      return sum + content.reduce((inner, part) => inner + (typeof part?.text === "string" ? part.text.length : 0), 0)
+    }
+    return sum
+  }, 0)
+  const factChars = Math.max(5_000, Math.min(8_000, totalChars - 2_000))
+
+  if (mode === "short") return "ok"
+  if (mode === "retry-t1" && lastUser.includes("You are writing a checkpoint for the older part")) {
+    t1Attempts += 1
+    if (t1Attempts === 1) return "not json"
+  }
+  if (mode === "invalid-t1" && lastUser.includes("You are writing a checkpoint for the older part")) {
+    return "not json"
+  }
+  if (mode === "bad-shape-t1" && lastUser.includes("You are writing a checkpoint for the older part")) {
+    return JSON.stringify({ title: "bad", goal: "" })
+  }
+  if (mode === "retry-t2" && lastUser.includes("checkpoint at the top of the conversation")) {
+    t2Attempts += 1
+    if (t2Attempts === 1) return "not json"
+  }
+  if (mode === "invalid-t2" && lastUser.includes("Candidates")) {
+    return "not json"
+  }
+  if (mode === "invalid-t2" && lastUser.includes("Sources:")) {
+    return smallSummary()
+  }
+
+  if (lastUser.includes("You are writing a checkpoint for the older part")) {
     console.log("fake: T1 instruction")
     return JSON.stringify({
       title: "E2E T1",
@@ -82,10 +228,10 @@ function fakeText(body) {
       progress: { completed: ["session"], active: [], blocked: [] },
       open_items: [],
       files: [],
-      facts: ["中".repeat(10_000)],
+      facts: ["中".repeat(factChars)],
     })
   }
-  if (text.includes("checkpoint at the top of the conversation contains summary blocks")) {
+  if (lastUser.includes("checkpoint at the top of the conversation contains summary blocks")) {
     console.log("fake: T2 instruction")
     return JSON.stringify({
       candidate: 1,
@@ -114,6 +260,21 @@ const fake = Bun.serve({
       return new Response("not found", { status: 404 })
     }
     const body = await request.json()
+    if (mode === "tool-compress") {
+      const names = Array.isArray(body.tools)
+        ? body.tools.map((item) => item?.function?.name ?? item?.name)
+        : body.tools
+      console.log("tool request tools", JSON.stringify(names))
+    }
+    const tool = fakeToolCall(body)
+    if (tool !== undefined) {
+      if (body.stream === true) {
+        return new Response(toolStream(tool), {
+          headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        })
+      }
+      return Response.json(toolResponse(tool))
+    }
     const content = fakeText(body)
     if (body.stream === true) {
       return new Response(chatStream(content), {
@@ -132,7 +293,13 @@ const config = {
       name: "Fake E2E",
       npm: "@ai-sdk/openai-compatible",
       options: { baseURL: `http://127.0.0.1:${fake.port}/v1`, apiKey: "test" },
-      models: { fake: { name: "Fake", limit: { context: 4_000, output: 2_000 } } },
+      models: {
+        fake: {
+          name: "Fake",
+          limit: { context: 4_000, output: 2_000 },
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+        },
+      },
     },
   },
 }
@@ -208,6 +375,57 @@ try {
   db.close()
   console.log("seeded plugin settings")
 
+  /** 输入：budget；输出：无；预期：只改临时 DB 的插件 settings。 */
+  const setSettings = (budget, contextLimit = 4_000, triggerPercent = 60, extra = {}) => {
+    const conn = new Database(join(root, "opencode.db"))
+    const at = Date.now()
+    conn
+      .query("insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)")
+      .run(
+        settingsKey,
+        JSON.stringify({ contextLimit, triggerPercent, summaryBudgetTokens: budget, ...extra }),
+        at,
+        at,
+      )
+    conn.close()
+  }
+
+  /** 输入：标题 + 可选父 session；输出：新 sessionID。 */
+  const newSession = async (title, parentID) => {
+    const created = await api("POST", "/api/session", {
+      title,
+      ...(parentID === undefined ? {} : { parentID }),
+      model: { providerID: "fake", id: "fake" },
+    })
+    const id = created.id ?? created.sessionID
+    assert.ok(id, "session id missing")
+    return id
+  }
+
+  /** 输入：sessionID；输出：无；预期：等 session idle。 */
+  const waitSession = async (sessionID) => {
+    await api("POST", `/api/experimental/session/${sessionID}/wait`)
+  }
+
+  /** 输入：sessionID + 文本；输出：无；预期：发一条 prompt 并等 idle。 */
+  const promptSession = async (sessionID, text) => {
+    await api("POST", `/api/session/${sessionID}/prompt`, { text })
+    await waitSession(sessionID)
+  }
+
+  /** 输入：sessionID；输出：插件 state。 */
+  const stateFor = (sessionID) => {
+    const conn = new Database(join(root, "opencode.db"))
+    const key = `plugin:${pluginHex}:compression:state:${sessionID}`
+    const row = conn.query("select value from kv where key = ?").get(key)
+    conn.close()
+    return typeof row?.value === "string" ? JSON.parse(row.value) : undefined
+  }
+
+  /** 输入：sessionID；输出：messages 数组。 */
+  const messagesFor = async (sessionID) =>
+    api("GET", `/api/session/${sessionID}/message?limit=200`)
+
   const session = await api("POST", "/api/session", {
     title: "e2e",
     model: { providerID: "fake", id: "fake" },
@@ -282,6 +500,226 @@ try {
   assert.ok(raw.includes("[Compressed conversation section #b3]"), "T2 checkpoint missing")
   assert.ok(!String(latest?.summary ?? "").includes("[Compressed conversation section #b1]"), "latest checkpoint still shows T1")
   console.log("T1 and T2 checkpoints found")
+
+  assert.ok(
+    !prompts.some((prompt) => prompt.includes("You MUST use this format")),
+    "native summary prompt must not run",
+  )
+  assert.ok(
+    compactions.some((item) => String(item.summary ?? "").includes("verify isolated T1 compaction")),
+    "T1 summary content must be visible",
+  )
+  assert.ok(
+    compactions.some((item) => String(item.summary ?? "").includes("verify isolated T2 merge")),
+    "T2 summary content must be visible",
+  )
+  console.log("case passed: hook summary replaces native and is visible")
+
+  // case: 有消息时手动 compact，检查插件钩子是否报错/是否又跑原生摘要
+  mode = "normal"
+  setSettings(50_000, 1_000_000, 95)
+  const manual = await newSession("e2e-manual-compact")
+  await promptSession(manual, longText)
+  await promptSession(manual, "continue")
+  await api("POST", `/api/session/${manual}/compact`, {})
+  await waitSession(manual)
+  const manualMessages = await messagesFor(manual)
+  const manualCompaction = [...manualMessages].reverse().find((item) => item.type === "compaction")
+  console.log(
+    "manual compaction:",
+    JSON.stringify(manualCompaction?.error ?? manualCompaction?.status ?? "missing"),
+  )
+  console.log("manual state:", JSON.stringify(stateFor(manual)))
+  console.log(
+    "manual prompts:",
+    JSON.stringify(
+      prompts.slice(-5).map((prompt) => prompt.slice(0, 100).replace(/\s+/g, " ")),
+    ),
+  )
+
+  // case: 手动 compact 空历史 → failed，state 不产生块
+  mode = "short"
+  setSettings(50_000)
+  const empty = await newSession("e2e-empty")
+  await api("POST", `/api/session/${empty}/compact`, {})
+  await promptSession(empty, "continue")
+  const emptyMessages = await messagesFor(empty)
+  const emptyCompaction = emptyMessages.find((item) => item.type === "compaction")
+  assert.equal(emptyCompaction?.status, "failed", "empty compact should fail")
+  assert.equal(stateFor(empty)?.blocks?.length ?? 0, 0, "empty compact must not create a block")
+  console.log("case passed: empty compact fails cleanly")
+
+  // case: T1 摘要非法 → compaction failed，state 不产生块
+  mode = "invalid-t1"
+  setSettings(50_000)
+  const invalid = await newSession("e2e-invalid-t1")
+  await promptSession(invalid, longText)
+  await promptSession(invalid, "continue")
+  const invalidMessages = await messagesFor(invalid)
+  assert.equal(
+    invalidMessages.find((item) => item.type === "compaction")?.status,
+    "failed",
+    "invalid T1 should fail",
+  )
+  assert.equal(stateFor(invalid)?.blocks?.length ?? 0, 0, "invalid T1 must not create a block")
+  const invalidState = stateFor(invalid)
+  assert.equal(invalidState?.pending, undefined, "failed T1 must not leave pending")
+  assert.equal(invalidState?.phase, undefined, "failed T1 must not leave phase")
+  assert.match(String(invalidState?.lastError ?? ""), /not valid JSON/)
+  console.log("case passed: invalid T1 fails cleanly")
+
+  // case: T1 结构非法（goal 为空）→ failed，state 不残留
+  mode = "bad-shape-t1"
+  setSettings(50_000)
+  const badShape = await newSession("e2e-bad-shape-t1")
+  await promptSession(badShape, longText)
+  await promptSession(badShape, "continue")
+  const badShapeMessages = await messagesFor(badShape)
+  assert.equal(
+    badShapeMessages.find((item) => item.type === "compaction")?.status,
+    "failed",
+    "bad shape T1 should fail",
+  )
+  const badShapeState = stateFor(badShape)
+  assert.equal(badShapeState?.blocks?.length ?? 0, 0)
+  assert.equal(badShapeState?.pending, undefined)
+  assert.equal(badShapeState?.phase, undefined)
+  assert.match(String(badShapeState?.lastError ?? ""), /empty field: goal/)
+  console.log("case passed: bad-shape T1 fails without residue")
+
+  // case: 第一次 T1 摘要失败，OpenCode 重试后成功
+  mode = "retry-t1"
+  t1Attempts = 0
+  setSettings(50_000)
+  const retry = await newSession("e2e-retry-t1")
+  await promptSession(retry, longText)
+  await promptSession(retry, "continue")
+  let retryState = stateFor(retry)
+  for (let index = 0; index < 40 && (retryState?.blocks?.length ?? 0) === 0; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    retryState = stateFor(retry)
+  }
+  assert.equal(retryState?.blocks?.length, 1, "T1 retry should create a block")
+  console.log("case passed: T1 retry succeeds")
+
+  // case: T2 第一次摘要非法，OpenCode 重试后成功
+  mode = "retry-t2"
+  t2Attempts = 0
+  setSettings(5_000)
+  const t2Retry = await newSession("e2e-retry-t2")
+  await promptSession(t2Retry, longText)
+  await promptSession(t2Retry, "continue")
+  await promptSession(t2Retry, "continue again")
+  await promptSession(t2Retry, "continue once more")
+  await promptSession(t2Retry, "trigger t2")
+  let t2RetryState = stateFor(t2Retry)
+  for (let index = 0; index < 40 && !(t2RetryState?.blocks ?? []).some((item) => item.tier === 2); index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    t2RetryState = stateFor(t2Retry)
+  }
+  assert.ok(
+    (t2RetryState?.blocks ?? []).some((item) => item.tier === 2),
+    "T2 retry should create a tier-2 block",
+  )
+  console.log("case passed: T2 retry succeeds")
+
+  // case: compress 工具在真实 OpenCode 里执行并生成 T1
+  mode = "tool-compress"
+  toolPromptCount = 0
+  setSettings(50_000, 1_000_000, 95)
+  const toolSession = await newSession("e2e-tool-compress")
+  await promptSession(toolSession, longText)
+  await promptSession(toolSession, "use compress tool")
+  await promptSession(toolSession, "continue")
+  let toolState = stateFor(toolSession)
+  for (let index = 0; index < 40 && (toolState?.blocks?.length ?? 0) === 0; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    toolState = stateFor(toolSession)
+  }
+  const toolMessages = await messagesFor(toolSession)
+  const toolParts = toolMessages.flatMap((message) =>
+    (message.parts ?? message.content ?? [])
+      .filter((part) => part.type === "tool" || part.type === "tool-call" || part.type === "tool-result")
+      .map((part) => ({
+        type: part.type,
+        tool: part.tool,
+        status: part.state?.status,
+        error: part.state?.error,
+        output: part.state?.output,
+        content: part.state?.content,
+      })),
+  )
+  console.log("tool parts:", JSON.stringify(toolParts))
+  const lastAssistant = [...toolMessages].reverse().find((message) => message.type === "assistant")
+  console.log("tool assistant keys:", JSON.stringify(Object.keys(lastAssistant ?? {})))
+  console.log(
+    "tool assistant content:",
+    JSON.stringify(lastAssistant?.content ?? lastAssistant?.parts).slice(0, 600),
+  )
+  assert.ok(
+    (toolState?.blocks ?? []).some((item) => item.summary.title === "Tool T1"),
+    "compress tool should create a Tool T1 block",
+  )
+  console.log("case passed: compress tool creates T1")
+
+  // case: 超大摘要上限被运行时钳制，压缩仍成功
+  mode = "normal"
+  setSettings(50_000, 4_000, 60, { summaryBlockChars: 90_000, summaryTotalChars: 900_000 })
+  const clamp = await newSession("e2e-clamp")
+  await promptSession(clamp, longText)
+  await promptSession(clamp, "continue")
+  const clampMessages = await messagesFor(clamp)
+  const clampCompactions = clampMessages.filter((item) => item.type === "compaction" && item.status === "completed")
+  assert.ok(clampCompactions.length > 0, "clamped session should still compress")
+  const clampState = stateFor(clamp)
+  assert.ok((clampState?.blocks?.length ?? 0) > 0, "clamped session should have a block")
+  console.log("case passed: oversized limits clamped, compression still works")
+
+  // case: 父子/不同 session 状态隔离
+  mode = "normal"
+  setSettings(50_000)
+  const sessionA = await newSession("e2e-iso-a")
+  const sessionB = await newSession("e2e-iso-b")
+  for (const id of [sessionA, sessionB]) {
+    await promptSession(id, longText)
+    await promptSession(id, "continue")
+  }
+  const stateA = stateFor(sessionA)
+  const stateB = stateFor(sessionB)
+  assert.equal(stateA?.blocks?.length, 1, "session A should have one block")
+  assert.equal(stateB?.blocks?.length, 1, "session B should have one block")
+  assert.equal(stateA?.blocks?.[0]?.tier, 1)
+  assert.equal(stateB?.blocks?.[0]?.tier, 1)
+  assert.notEqual(stateA?.blocks?.[0]?.fromId, stateB?.blocks?.[0]?.fromId)
+  console.log("case passed: auto T1 triggered by context hook, no manual compact")
+
+  const child = await newSession("e2e-iso-child", sessionA)
+  await promptSession(child, longText)
+  await promptSession(child, "continue")
+  const stateChild = stateFor(child)
+  const stateAAfterChild = stateFor(sessionA)
+  assert.equal(stateChild?.blocks?.length, 1, "child should have its own block")
+  assert.equal(stateAAfterChild?.blocks?.length, 1, "parent must not gain child blocks")
+  assert.notEqual(stateChild?.blocks?.[0]?.fromId, stateAAfterChild?.blocks?.[0]?.fromId)
+  assert.equal(stateChild?.blocks?.[0]?.sourceBlockIds, undefined)
+  console.log("case passed: parent/child compression history isolated")
+
+  // case: 缓存指令只追加在尾部，不重发 transcript
+  mode = "normal"
+  assert.ok(
+    prompts.some((prompt) => prompt.includes("You are writing a checkpoint") && !prompt.includes("Sources:")),
+    "T1 instruction should not include Sources transcript",
+  )
+  assert.ok(
+    prompts.some(
+      (prompt) =>
+        prompt.includes("checkpoint at the top of the conversation") &&
+        prompt.includes("Candidates") &&
+        !prompt.includes("Sources:"),
+    ),
+    "T2 instruction should not include Sources transcript",
+  )
+  console.log("case passed: cache-friendly instructions")
 } finally {
   server.kill()
   await server.exited
@@ -289,10 +727,19 @@ try {
   if (stderr.trim()) {
     const interesting = stderr
       .split(/\r?\n/)
-      .filter((line) => /compaction|inbox|drain|session\.idle/i.test(line))
+      .filter((line) => /compaction|inbox|drain|session\.idle|E2E T1 failed|compress tool cache/i.test(line))
       .slice(-120)
     if (interesting.length > 0) console.error("server compaction logs:\n" + interesting.join("\n"))
   }
   fake.stop()
   await rm(root, { recursive: true, force: true })
+  if (prompts.length > 0) {
+    console.error(
+      "prompts tail:\n" +
+        prompts
+          .slice(-8)
+          .map((prompt, index) => `${index}: ${prompt.slice(0, 120).replace(/\s+/g, " ")}`)
+          .join("\n"),
+    )
+  }
 }

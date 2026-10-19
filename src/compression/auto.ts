@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { estimateCategories, totalCategories } from "../tokens.ts"
-import { eligibleMessages, type MessageLike } from "./select.ts"
+import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
 import { loadState, saveState } from "./state.ts"
 import type { ModelRefLike } from "./summarize.ts"
@@ -15,6 +15,39 @@ const LIMIT_TTL = 60_000
 
 const limitCache = new Map<string, { at: number; limit: number }>()
 
+/**
+ * 正在执行 compaction 钩子的 session。
+ * 压缩钩子内部会调用 session.generate 生成摘要；那个请求同样会经过 context 钩子，
+ * 如果不拦住，就会在压缩过程中再次入队压缩，形成递归并让本次摘要失败。
+ */
+const compactionInFlight = new Set<string>()
+
+/** 输入：sessionID + 是否正在压缩；输出：无；预期：只更新进程内标记。 */
+export function markCompactionInFlight(sessionID: string, active: boolean): void {
+  if (active) compactionInFlight.add(sessionID)
+  else compactionInFlight.delete(sessionID)
+}
+
+/** 输入：sessionID；输出：是否正在压缩。 */
+export function isCompactionInFlight(sessionID: string): boolean {
+  return compactionInFlight.has(sessionID)
+}
+
+/**
+ * 输入：当前请求消息。
+ * 输出：最后一条 user 是否是插件自己的压缩指令。
+ * 预期：压缩摘要请求不能再触发自动压缩。
+ */
+function isCompressionInstruction(messages: readonly MessageLike[]): boolean {
+  const lastUser = [...messages].reverse().find((message) => message.role === "user")
+  if (lastUser === undefined) return false
+  const text = messageText(lastUser).trimStart()
+  return (
+    text.startsWith("You are writing a checkpoint") ||
+    text.startsWith("The checkpoint at the top of the conversation")
+  )
+}
+
 export interface AutoInput {
   readonly ctx: Plugin.Context
   readonly sessionID: string
@@ -25,7 +58,7 @@ export interface AutoInput {
 }
 
 /** 输入：设置 + 模型；输出：实际使用的窗口大小。 */
-async function resolveLimit(ctx: Plugin.Context, model: ModelRefLike, setting: "auto" | number): Promise<number | undefined> {
+export async function resolveLimit(ctx: Plugin.Context, model: ModelRefLike, setting: "auto" | number): Promise<number | undefined> {
   if (setting !== "auto") return setting
   const key = `${model.providerID}/${model.id}`
   const cached = limitCache.get(key)
@@ -62,6 +95,9 @@ function estimateTotal(input: AutoInput): number {
  */
 export async function maybeAutoCompress(input: AutoInput): Promise<void> {
   try {
+    if (isCompactionInFlight(input.sessionID)) return
+    if (isCompressionInstruction(input.messages)) return
+
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (state.pending || state.phase !== undefined) return
     if (state.attempts >= MAX_ATTEMPTS) return

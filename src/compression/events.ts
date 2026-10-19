@@ -36,6 +36,46 @@ async function reconcile(ctx: Plugin.Context, sessionID: string, state: State): 
 
 export type CompactionEventType = "ended" | "failed"
 
+/** 压缩失败最多重试次数；超过后才丢弃 pending/phase。 */
+export const MAX_COMPACTION_ATTEMPTS = 3
+
+/**
+ * 输入：错误文本。
+ * 输出：是否是重试也不会变的永久错误。
+ * 预期：空历史、内容不足、缺 id、摘要校验失败不重试。
+ */
+export function isPermanentFailure(error: string): boolean {
+  return /nothing to compress|not enough content|messages are missing ids|empty field|summary too (short|long)|not smaller than the source/.test(
+    error,
+  )
+}
+
+/**
+ * 输入：失败时的状态 + 错误。
+ * 输出：下一次状态 + 是否继续重试。
+ * 预期：未到上限时保留 pending/phase 并累加 attempts；到上限才丢弃。
+ */
+export function retryState(state: State, error: string): { readonly state: State; readonly retry: boolean } {
+  const attempts = state.attempts + 1
+  if (attempts >= MAX_COMPACTION_ATTEMPTS) {
+    return {
+      state: { ...dropPending(state, `${error} (after ${attempts.toString()} attempts)`), attempts },
+      retry: false,
+    }
+  }
+  return {
+    state: {
+      v: 1,
+      blocks: state.blocks,
+      attempts,
+      ...(state.pending === undefined ? {} : { pending: state.pending }),
+      ...(state.phase === undefined ? {} : { phase: state.phase }),
+      lastError: error,
+    },
+    retry: true,
+  }
+}
+
 /**
  * 输入：服务端上下文 + 事件类型 + sessionID。
  * 输出：无。
@@ -47,16 +87,31 @@ export async function handleCompactionEvent(
   sessionID: string,
 ): Promise<void> {
   const state = await loadState(ctx.storage, sessionID)
-  if (!state.pending) return
   if (type === "ended") {
+    if (!state.pending) {
+      await saveState(ctx.storage, sessionID, { ...state, attempts: 0 })
+      return
+    }
     // 事件可能晚到：只有最新 checkpoint 确实包含这个 pending 才转正，
     // 否则它属于下一层 compaction，留给下一次 ended。
     if (await hasBlockInLatestCompaction(ctx, sessionID, state.pending.id)) {
       await saveState(ctx.storage, sessionID, commitPending(state))
     }
-  } else {
-    await saveState(ctx.storage, sessionID, dropPending(state, "compaction failed"))
+    return
   }
+
+  const detail = state.lastError ?? "compaction failed"
+  if (isPermanentFailure(detail)) {
+    await saveState(ctx.storage, sessionID, dropPending(state, detail))
+    return
+  }
+  const next = retryState(state, detail)
+  await saveState(ctx.storage, sessionID, next.state)
+  if (!next.retry) return
+  // 失败后保留 pending/phase，稍等 inbox 行清掉再重新入队。
+  setTimeout(() => {
+    void ctx.session.compact({ sessionID, delivery: "steer" }).catch(() => undefined)
+  }, 100)
 }
 
 /**

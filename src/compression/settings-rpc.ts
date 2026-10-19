@@ -21,6 +21,9 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
         contextLimit: settings.contextLimit,
         triggerPercent: settings.triggerPercent,
         summaryBudgetTokens: settings.summaryBudgetTokens,
+        summaryBlockChars: settings.summaryBlockChars,
+        summaryTotalChars: settings.summaryTotalChars,
+        summaryLanguage: settings.summaryLanguage,
       }
     },
     settingsSet: async (input) => {
