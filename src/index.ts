@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 
 import { maybeAutoCompress } from "./compression/auto.ts"
-import { distillOnce, mergeCandidates } from "./compression/distill.ts"
+import { distillOnce, planT1Phase } from "./compression/distill.ts"
 import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
 import { activeBlocks, renderAll } from "./compression/render.ts"
 import { eligibleMessages, type MessageLike } from "./compression/select.ts"
@@ -25,7 +25,7 @@ import { registerCompressTool } from "./compression/tool.ts"
 import { buildTranscript } from "./compression/transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./compression/validate.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./stats.ts"
-import { countText, estimateCategories } from "./tokens.ts"
+import { estimateCategories } from "./tokens.ts"
 
 export default Plugin.define({
   id: "compressed-context",
@@ -167,10 +167,7 @@ export default Plugin.define({
         // T1 之后再检查预算；没超就不排 T2。
         const active = activeBlocks(state.blocks, pending)
         const summary = renderAll(state.blocks, pending)
-        const nextPhase: CompactionPhase | undefined =
-          countText(summary) > settings.summaryBudgetTokens && mergeCandidates(active).length > 0
-            ? "t2"
-            : undefined
+        const nextPhase = planT1Phase(summary, active, settings.summaryBudgetTokens)
         await save(state.blocks, pending, nextPhase, undefined)
         event.result = { summary }
         if (nextPhase !== undefined) {

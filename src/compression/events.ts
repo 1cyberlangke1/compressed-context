@@ -12,7 +12,11 @@ import {
 } from "./state.ts"
 
 /** 输入：服务端上下文 + sessionID + 块 id；输出：最新 compaction 是否包含该块。 */
-async function hasBlockInLatestCompaction(ctx: Plugin.Context, sessionID: string, blockId: string): Promise<boolean> {
+export async function hasBlockInLatestCompaction(
+  ctx: Plugin.Context,
+  sessionID: string,
+  blockId: string,
+): Promise<boolean> {
   try {
     const messages = await ctx.session.context({ sessionID })
     const latest = messages.find((message) => message.type === "compaction" && message.status === "completed")
@@ -30,6 +34,31 @@ async function reconcile(ctx: Plugin.Context, sessionID: string, state: State): 
   return found ? commitPending(state) : dropPending(state, "pending compaction not found after restart")
 }
 
+export type CompactionEventType = "ended" | "failed"
+
+/**
+ * 输入：服务端上下文 + 事件类型 + sessionID。
+ * 输出：无。
+ * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败丢弃 pending 和 phase。
+ */
+export async function handleCompactionEvent(
+  ctx: Plugin.Context,
+  type: CompactionEventType,
+  sessionID: string,
+): Promise<void> {
+  const state = await loadState(ctx.storage, sessionID)
+  if (!state.pending) return
+  if (type === "ended") {
+    // 事件可能晚到：只有最新 checkpoint 确实包含这个 pending 才转正，
+    // 否则它属于下一层 compaction，留给下一次 ended。
+    if (await hasBlockInLatestCompaction(ctx, sessionID, state.pending.id)) {
+      await saveState(ctx.storage, sessionID, commitPending(state))
+    }
+  } else {
+    await saveState(ctx.storage, sessionID, dropPending(state, "compaction failed"))
+  }
+}
+
 /**
  * 输入：服务端上下文。
  * 输出：订阅 compaction.ended / compaction.failed，并返回取消函数。
@@ -41,18 +70,8 @@ export function startCompactionEvents(ctx: Plugin.Context): () => void {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         if (event.type !== "session.compaction.ended" && event.type !== "session.compaction.failed") continue
-        const sessionID = event.data.sessionID
-        const state = await loadState(ctx.storage, sessionID)
-        if (!state.pending) continue
-        if (event.type === "session.compaction.ended") {
-          // 事件可能晚到：只有最新 checkpoint 确实包含这个 pending 才转正，
-          // 否则它属于下一层 compaction，留给下一次 ended。
-          if (await hasBlockInLatestCompaction(ctx, sessionID, state.pending.id)) {
-            await saveState(ctx.storage, sessionID, commitPending(state))
-          }
-        } else {
-          await saveState(ctx.storage, sessionID, dropPending(state, "compaction failed"))
-        }
+        const type: CompactionEventType = event.type === "session.compaction.ended" ? "ended" : "failed"
+        await handleCompactionEvent(ctx, type, event.data.sessionID)
       }
     } catch {
       // aborted or disconnected; reconciliation on next startup covers it

@@ -54,6 +54,15 @@ export function mergeCandidates(blocks: readonly Block[]): readonly MergeCandida
   return candidates
 }
 
+/** 输入：T1 后的摘要链；输出：是否要自动排 T2。 */
+export function planT1Phase(
+  summary: string,
+  active: readonly Block[],
+  budgetTokens: number,
+): CompactionPhase | undefined {
+  return countText(summary) > budgetTokens && mergeCandidates(active).length > 0 ? "t2" : undefined
+}
+
 /** 输入：块；输出：候选列表里的简短描述。 */
 function describe(block: Block): string {
   const goal = block.summary.goal.replace(/\s+/g, " ").slice(0, 160)

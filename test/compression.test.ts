@@ -3,19 +3,22 @@ import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
 
 import { maybeAutoCompress } from "../src/compression/auto.ts"
-import { distillOnce, mergeCandidates } from "../src/compression/distill.ts"
+import { distillOnce, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
+import { handleCompactionEvent } from "../src/compression/events.ts"
 import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, textChars, type MessageLike } from "../src/compression/select.ts"
-import { commitPending, dropPending, loadState, parseState, stateKey, withPending, withPhase, type Block, type StorageLike } from "../src/compression/state.ts"
+import { commitPending, dropPending, loadState, parseState, saveState, stateKey, withPending, withPhase, type Block, type StorageLike } from "../src/compression/state.ts"
 import {
+  buildMergeInstruction,
   buildT1Instruction,
   sessionGenerator,
   summarize,
   summarizeInstruction,
   summarizeWithChoice,
 } from "../src/compression/summarize.ts"
+import { registerCompressTool } from "../src/compression/tool.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
 import { validateSummary } from "../src/compression/validate.ts"
 
@@ -465,6 +468,180 @@ describe("active 链", () => {
   })
 })
 
+describe("T1 phase 决策", () => {
+  it("预算内或没有合法候选不排 T2", () => {
+    expect(planT1Phase("short", [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], 5_000)).toBeUndefined()
+    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1)], 5_000)).toBeUndefined()
+  })
+
+  it("超预算且有合法候选排 T2", () => {
+    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], 5_000)).toBe(
+      "t2",
+    )
+  })
+})
+
+describe("会话隔离", () => {
+  it("不同 session 的 blocks 和 phase 不串", async () => {
+    const storage = memoryStorage()
+    await saveState(storage, "ses_a", {
+      v: 1,
+      blocks: [tierBlock("b1", 1, 1)],
+      attempts: 0,
+      phase: "t2",
+    })
+    await saveState(storage, "ses_b", {
+      v: 1,
+      blocks: [tierBlock("b1", 2, 1)],
+      attempts: 0,
+    })
+    const a = await loadState(storage, "ses_a")
+    const b = await loadState(storage, "ses_b")
+    expect(a.blocks[0]?.tier).toBe(1)
+    expect(a.phase).toBe("t2")
+    expect(b.blocks[0]?.tier).toBe(2)
+    expect(b.phase).toBeUndefined()
+  })
+})
+
+describe("compaction 事件", () => {
+  /** 输入：storage + 最新 summary；输出：带 session.context 的假 ctx。 */
+  const eventCtx = (storage: StorageLike, latestSummary: string): Plugin.Context =>
+    ({
+      storage,
+      session: {
+        context: () =>
+          Promise.resolve([{ type: "compaction", status: "completed", summary: latestSummary }]),
+      },
+    }) as unknown as Plugin.Context
+
+  it("最新 checkpoint 包含 pending 才转正", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+    })
+    await handleCompactionEvent(eventCtx(storage, blockMarker("b1")), "ended", "ses_event")
+    const state = await loadState(storage, "ses_event")
+    expect(state.blocks).toHaveLength(1)
+    expect(state.pending).toBeUndefined()
+  })
+
+  it("晚到事件不提交不属于它的 pending", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+    })
+    await handleCompactionEvent(eventCtx(storage, "another checkpoint"), "ended", "ses_event")
+    const state = await loadState(storage, "ses_event")
+    expect(state.blocks).toHaveLength(0)
+    expect(state.pending?.id).toBe("b1")
+  })
+
+  it("失败事件丢弃 pending 和 phase", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: withPhase(
+        withPending({ v: 1, blocks: [], attempts: 0 }, block),
+        "t2",
+      ),
+    })
+    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event")
+    const state = await loadState(storage, "ses_event")
+    expect(state.pending).toBeUndefined()
+    expect(state.phase).toBeUndefined()
+  })
+})
+
+describe("缓存尾追加", () => {
+  it("T2 指令只追加在会话前缀尾部", () => {
+    const prefix = "system\n[checkpoint b1 b2]\nrecent"
+    const instruction = buildMergeInstruction([
+      { index: 1, description: "b1+b2 → T2", sourceChars: 1_000, tier: 2 },
+    ])
+    const request = `${prefix}\n${instruction}`
+    expect(request.startsWith(prefix)).toBe(true)
+    expect(instruction).not.toContain("Sources:")
+    expect(instruction).toContain("Candidates")
+    expect(instruction).toContain("checkpoint")
+  })
+})
+
+describe("compress 工具只做 T1", () => {
+  interface ToolDefinition {
+    execute: (
+      input: SummaryFields,
+      ctx: { sessionID: string },
+    ) => Promise<{ content: string; output?: { block: string; status: string } }>
+  }
+
+  /** 输入：storage；输出：捕获工具定义。 */
+  const toolCtx = (storage: StorageLike): { ctx: Plugin.Context; tool: () => ToolDefinition } => {
+    let definition: ToolDefinition | undefined
+    const ctx = {
+      storage,
+      tool: {
+        transform: (fn: (tools: { add: (tool: ToolDefinition) => void }) => void) => {
+          fn({ add: (tool) => { definition = tool } })
+          return Promise.resolve({ dispose: () => Promise.resolve() })
+        },
+      },
+      session: {
+        compact: () => Promise.resolve(),
+      },
+    } as unknown as Plugin.Context
+    return {
+      ctx,
+      tool: () => {
+        if (definition === undefined) throw new Error("tool not registered")
+        return definition
+      },
+    }
+  }
+
+  const toolMessages = (): MessageLike[] => [
+    message("user", "hi", "m1"),
+    {
+      id: "m2",
+      role: "assistant",
+      content: [
+        { type: "text", text: "short" },
+        ...Array.from({ length: 3 }, () => ({
+          type: "tool-result",
+          name: "shell",
+          result: "x".repeat(6_000),
+        })),
+      ],
+    },
+    message("user", "continue", "m3"),
+  ]
+
+  it("成功时只挂 T1 pending", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage)
+    await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    const state = await loadState(storage, "ses_test")
+    expect(result.output?.block).toBe("b1")
+    expect(state.pending?.tier).toBe(1)
+    expect(state.pending?.sourceBlockIds).toBeUndefined()
+    expect(state.phase).toBeUndefined()
+  })
+
+  it("pending 或 phase 非空时拒绝，不改状态", async () => {
+    const pendingStorage = memoryStorage({
+      [stateKey("ses_test")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+    })
+    const pending = toolCtx(pendingStorage)
+    await registerCompressTool(pending.ctx, new Map([["ses_test", toolMessages()]]))
+    const pendingResult = await pending.tool().execute(summary, { sessionID: "ses_test" })
+    expect(pendingResult.content).toContain("compression already in progress")
+
+    const phaseStorage = memoryStorage({
+      [stateKey("ses_test")]: withPhase({ v: 1, blocks: [], attempts: 0 }, "t2"),
+    })
+    const phase = toolCtx(phaseStorage)
+    await registerCompressTool(phase.ctx, new Map([["ses_test", toolMessages()]]))
+    const phaseResult = await phase.tool().execute(summary, { sessionID: "ses_test" })
+    expect(phaseResult.content).toContain("compression already in progress")
+  })
+})
 describe("摘要单层合并", () => {
   it("预算内不合并", async () => {
     let calls = 0
