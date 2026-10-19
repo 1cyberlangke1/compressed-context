@@ -939,6 +939,28 @@ describe("compaction 事件", () => {
     expect(isPermanentFailure("network down")).toBe(false)
   })
 
+  it("事件 error 优先于 state.lastError（钩子没跑过的失败也能拿到真实原因）", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+    })
+    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "nothing to compress")
+    const state = await loadState(storage, "ses_event")
+    // 永久错误直接丢弃，不重试
+    expect(state.pending).toBeUndefined()
+    expect(state.lastError).toContain("nothing to compress")
+  })
+
+  it("钩子没跑过的空压缩失败 + 已排 phase：保留 phase 不计失败", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: { v: 1, blocks: [block], attempts: 0, phase: "t2" },
+    })
+    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "Nothing to compact yet")
+    const state = await loadState(storage, "ses_event")
+    expect(state.phase).toBe("t2")
+    expect(state.attempts).toBe(0)
+    expect(state.blocks).toHaveLength(1)
+  })
+
   it("读取最新 checkpoint 失败时保留 pending", async () => {
     const storage = memoryStorage({
       [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),

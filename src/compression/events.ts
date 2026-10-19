@@ -77,14 +77,17 @@ export function retryState(state: State, error: string): { readonly state: State
 }
 
 /**
- * 输入：服务端上下文 + 事件类型 + sessionID。
+ * 输入：服务端上下文 + 事件类型 + sessionID + 事件自带错误（仅 failed 有）。
  * 输出：无。
  * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败丢弃 pending 和 phase。
+ *       事件 error 优先于 state.lastError——钩子没跑过的失败（如 OpenCode 在钩子前判定
+ *       「无可压缩内容」）state 里没有任何错误记录，只能从事件拿真实原因。
  */
 export async function handleCompactionEvent(
   ctx: Plugin.Context,
   type: CompactionEventType,
   sessionID: string,
+  eventError?: string,
 ): Promise<void> {
   const state = await loadState(ctx.storage, sessionID)
   if (type === "ended") {
@@ -100,7 +103,15 @@ export async function handleCompactionEvent(
     return
   }
 
-  const detail = state.lastError ?? "compaction failed"
+  const detail = eventError ?? state.lastError ?? "compaction failed"
+  // 钩子从未运行的失败（state 里没有任何本层错误记录）且已排下一层 phase：
+  // 典型是 enqueueNext 入队的空压缩——历史只剩 checkpoint，OpenCode 在钩子前就
+  // 判定无可压缩内容。T2/T3 合并不需要新消息，这不是本层失败，保留 phase 等
+  // 下一次带真实消息的压缩，不计 attempts。
+  if (eventError !== undefined && state.lastError === undefined && state.phase !== undefined) {
+    await saveState(ctx.storage, sessionID, { ...state, attempts: 0 })
+    return
+  }
   if (isPermanentFailure(detail)) {
     await saveState(ctx.storage, sessionID, dropPending(state, detail))
     return
@@ -140,7 +151,12 @@ export function startCompactionEvents(
         }
         const type: CompactionEventType = event.type === "session.compaction.ended" ? "ended" : "failed"
         const sessionID = event.data.sessionID
-        await handleCompactionEvent(ctx, type, sessionID)
+        // failed 事件自带真实错误（钩子没跑时 state.lastError 是空的，只能从事件拿）
+        const failure =
+          event.type === "session.compaction.failed"
+            ? ((event.data as { error?: { message?: string } }).error?.message ?? "compaction failed")
+            : undefined
+        await handleCompactionEvent(ctx, type, sessionID, failure)
         if (type === "ended") onCommitted?.(sessionID)
       }
     } catch {
