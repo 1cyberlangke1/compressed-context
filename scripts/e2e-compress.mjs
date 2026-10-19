@@ -196,6 +196,14 @@ function fakeText(body) {
         ? lastUserMessage.content.map((part) => part?.text ?? "").join("\n")
         : ""
   prompts.push(lastUser)
+  if (mode === "t3-chain") {
+    console.log(
+      "t3-chain prompt:",
+      JSON.stringify(lastUser.slice(0, 220)),
+      "| role count:",
+      messages.length,
+    )
+  }
 
   const totalChars = messages.reduce((sum, message) => {
     const content = message?.content
@@ -218,8 +226,7 @@ function fakeText(body) {
   if (mode === "bad-shape-t1" && lastUser.includes("You are writing a checkpoint for the older part")) {
     return JSON.stringify({ title: "bad", goal: "" })
   }
-  if (mode === "retry-t2" && lastUser.includes("checkpoint at the top of the conversation")) {
-    t2Attempts += 1
+  if (mode === "retry-t2" && lastUser.includes("checkpoint at the top of the conversation")) {    t2Attempts += 1
     if (t2Attempts === 1) return "not json"
   }
   if (mode === "invalid-t2" && lastUser.includes("Candidates")) {
@@ -244,6 +251,8 @@ function fakeText(body) {
   }
   if (lastUser.includes("checkpoint at the top of the conversation contains summary blocks")) {
     console.log("fake: T2 instruction")
+    // t3-chain 模式：合并摘要保持巨大（6000 CJK ≈ 6000 token），逼出 T2→T3 连续合并
+    const bigFact = mode === "t3-chain" ? "中".repeat(6_000) : "t2 fact"
     return JSON.stringify({
       candidate: 1,
       title: "E2E T2",
@@ -253,7 +262,7 @@ function fakeText(body) {
       progress: { completed: ["T1"], active: [], blocked: [] },
       open_items: [],
       files: [],
-      facts: ["t2 fact"],
+      facts: [bigFact],
     })
   }
   return assistantText
@@ -757,6 +766,45 @@ try {
   assert.notEqual(stateChild?.blocks?.[0]?.fromId, stateAAfterChild?.blocks?.[0]?.fromId)
   assert.equal(stateChild?.blocks?.[0]?.sourceBlockIds, undefined)
   console.log("case passed: parent/child compression history isolated")
+
+  // case: T2 phase 自动调度（预算驱动的多轮蒸馏入口）
+  // 验证到 E2E 能确定性覆盖的部分：降预算后 T1 完成挂上 phase=t2 且不残留错误。
+  // T2→T3 链式合并本身依赖 enqueueNext 与 OpenCode drain 的时序，单测已覆盖
+  // nextPhase=t3 及 tier 单调性（test/compression.test.ts），E2E 不做时序竞态断言。
+  mode = "t3-chain"
+  setSettings(50_000)
+  const t3Session = await newSession("e2e-t3-chain")
+  await promptSession(t3Session, longText)
+  await promptSession(t3Session, "continue")
+  await api("POST", `/api/session/${t3Session}/compact`, {})
+  await waitSession(t3Session)
+  await promptSession(t3Session, longText)
+  await promptSession(t3Session, "continue")
+  await api("POST", `/api/session/${t3Session}/compact`, {})
+  await waitSession(t3Session)
+  await promptSession(t3Session, longText)
+  await promptSession(t3Session, "continue")
+  await api("POST", `/api/session/${t3Session}/compact`, {})
+  await waitSession(t3Session)
+  let t3State = stateFor(t3Session)
+  assert.equal(t3State?.blocks?.length, 3, "t3 case needs three T1 blocks first")
+  assert.equal((t3State?.blocks ?? []).every((item) => item.tier === 1), true)
+  assert.equal(t3State?.phase, undefined, "high budget must not schedule T2")
+  // 降预算：下一次 T1 完成后 planT1Phase 挂 phase=t2
+  // 预算用合法下限 5_000（低于它整包设置被拒绝回退默认 50k，phase 永远挂不上）；
+  // 窗口用 1M 防 auto-compress 干扰（摘要 token 超过小窗口触发线会反复排队空压缩踩烂 phase）
+  setSettings(5_000, 1_000_000, 95)
+  await promptSession(t3Session, longText)
+  await promptSession(t3Session, "continue")
+  await api("POST", `/api/session/${t3Session}/compact`, {})
+  await waitSession(t3Session)
+  t3State = stateFor(t3Session)
+  assert.equal(t3State?.blocks?.length, 4, "4th compact should create b4")
+  assert.equal(t3State?.phase, "t2", "low budget must schedule T2 after T1")
+  assert.equal(t3State?.pending, undefined, "T1 pending should be committed after compaction ends")
+  assert.equal(t3State?.attempts, 0, "no failed attempts may linger")
+  assert.equal(t3State?.lastError, undefined, "no compression error may linger")
+  console.log("case passed: low budget schedules T2 phase after T1")
 
   // case: 缓存指令只追加在尾部，不重发 transcript
   mode = "normal"
