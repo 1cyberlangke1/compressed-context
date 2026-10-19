@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_SETTINGS,
   effectiveLimit,
+  effectiveSummaryBudget,
   initialSettings,
   localeArgument,
   normalizeSettings,
@@ -95,5 +96,14 @@ describe("effectiveLimit", () => {
   it("运行时的非法值按 auto 处理", () => {
     const broken = { ...base, contextLimit: undefined as unknown as ContextLimit }
     expect(effectiveLimit(broken, 128_000)).toBe(128_000)
+  })
+})
+
+describe("effectiveSummaryBudget", () => {
+  it("旧设置缺字段或非法值时回退 50k", () => {
+    const missing = { ...DEFAULT_SETTINGS, summaryBudgetTokens: undefined as unknown as number }
+    expect(effectiveSummaryBudget(missing)).toBe(50_000)
+    expect(effectiveSummaryBudget({ ...DEFAULT_SETTINGS, summaryBudgetTokens: 0 })).toBe(50_000)
+    expect(effectiveSummaryBudget({ ...DEFAULT_SETTINGS, summaryBudgetTokens: 80_000 })).toBe(80_000)
   })
 })

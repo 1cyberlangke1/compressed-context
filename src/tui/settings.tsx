@@ -13,6 +13,7 @@ import {
   MIN_CONTEXT_LIMIT,
   MIN_SUMMARY_BUDGET,
   MIN_TRIGGER_PERCENT,
+  effectiveSummaryBudget,
   parseTokenCount,
   type ContextLimit,
   type LocaleSetting,
@@ -231,7 +232,7 @@ export function SettingsCommand(props: {
     const payload = {
       contextLimit: props.settings.contextLimit,
       triggerPercent: props.settings.triggerPercent,
-      summaryBudgetTokens: props.settings.summaryBudgetTokens,
+      summaryBudgetTokens: effectiveSummaryBudget(props.settings),
     }
     try {
       // ContextRpc 是 PortableDefinition，具体方法名在类型上退化成索引签名，这里补回调用形状。
@@ -301,6 +302,7 @@ export function SettingsCommand(props: {
   }
 
   const openBudget = (): void => {
+    const budget = effectiveSummaryBudget(props.settings)
     props.context.ui.dialog.show(() => (
       <TokenDialog
         context={props.context}
@@ -309,7 +311,7 @@ export function SettingsCommand(props: {
         hint={copy().settings.summaryBudgetHint}
         invalid={copy().settings.summaryBudgetInvalid}
         placeholder={copy().settings.summaryBudgetPlaceholder}
-        initial={props.settings.summaryBudgetTokens.toString()}
+        initial={formatTokens(budget)}
         min={MIN_SUMMARY_BUDGET}
         max={MAX_SUMMARY_BUDGET}
         onConfirm={(value) => {
@@ -360,7 +362,7 @@ export function SettingsCommand(props: {
         {
           title: copy().settings.summaryBudget,
           value: "budget",
-          footer: formatTokens(props.settings.summaryBudgetTokens),
+          footer: formatTokens(effectiveSummaryBudget(props.settings)),
         },
         { title: copy().settings.language, value: "language", footer: localeLabel(props.settings, copy()) },
         { title: copy().settings.close, value: "close" },

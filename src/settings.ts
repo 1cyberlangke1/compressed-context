@@ -147,6 +147,24 @@ export function initialSettings(options: Readonly<Record<string, unknown>>): Set
 }
 
 /**
+ * 输入：设置对象（可能是热重载前的旧对象，字段缺失）。
+ * 输出：合法的摘要预算；缺失或非法时回退默认值。
+ * 预期：运行时兜底，避免旧 settings 直接 .toString() 崩溃。
+ */
+export function effectiveSummaryBudget(settings: Settings): number {
+  const value: unknown = settings.summaryBudgetTokens
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_SUMMARY_BUDGET &&
+    value <= MAX_SUMMARY_BUDGET
+  ) {
+    return Math.round(value)
+  }
+  return DEFAULT_SUMMARY_BUDGET
+}
+
+/**
  * 输入：语言设置。
  * 输出：传给 resolveMessages 的 locale。
  * 预期：auto 返回 undefined（交给系统检测），其余原样返回。
