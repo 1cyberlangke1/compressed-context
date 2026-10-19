@@ -3,7 +3,7 @@ import type { Plugin } from "@opencode/plugin"
 import { estimateCategories, totalCategories } from "../tokens.ts"
 import { eligibleMessages, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
-import { loadState, nextOrder, saveState, withPending, type Block } from "./state.ts"
+import { loadState, nextBlockId, nextOrder, saveState, withPending, type Block } from "./state.ts"
 import { summarize, type GenerateLike, type ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
@@ -110,7 +110,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     }
 
     const block: Block = {
-      id: `b${(state.blocks.length + 1).toString()}`,
+      id: nextBlockId(state.blocks),
       tier: 1,
       summary,
       fromId: first.id,

@@ -31,14 +31,11 @@ async function reconcile(ctx: Plugin.Context, sessionID: string, state: State): 
 }
 
 /**
- * 输入：服务端上下文 + 可选的成功回调。
+ * 输入：服务端上下文。
  * 输出：订阅 compaction.ended / compaction.failed，并返回取消函数。
- * 预期：成功时 pending 转正并回调；失败时丢弃 pending。
+ * 预期：成功时 pending 转正；失败时丢弃 pending。
  */
-export function startCompactionEvents(
-  ctx: Plugin.Context,
-  onCommitted?: (sessionID: string) => void,
-): () => void {
+export function startCompactionEvents(ctx: Plugin.Context): () => void {
   const controller = new AbortController()
   void (async () => {
     try {
@@ -49,7 +46,6 @@ export function startCompactionEvents(
         if (!state.pending) continue
         if (event.type === "session.compaction.ended") {
           await saveState(ctx.storage, sessionID, commitPending(state))
-          onCommitted?.(sessionID)
         } else {
           await saveState(ctx.storage, sessionID, dropPending(state, "compaction failed"))
         }

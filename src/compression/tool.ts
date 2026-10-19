@@ -3,7 +3,7 @@ import { Schema } from "effect"
 
 import { SummaryFields } from "./schema.ts"
 import { eligibleMessages, type MessageLike } from "./select.ts"
-import { loadState, nextOrder, saveState, withPending, type Block } from "./state.ts"
+import { loadState, nextBlockId, nextOrder, saveState, withPending, type Block } from "./state.ts"
 import type { Disposable } from "./settings-rpc.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
@@ -67,7 +67,7 @@ export async function registerCompressTool(
         }
 
         const block: Block = {
-          id: `b${(state.blocks.length + 1).toString()}`,
+          id: nextBlockId(state.blocks),
           tier: 1,
           summary: input,
           fromId: first.id,

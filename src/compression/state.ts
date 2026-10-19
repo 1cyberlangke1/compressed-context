@@ -35,8 +35,6 @@ export interface State {
   readonly blocks: readonly Block[]
   readonly pending?: Block
   readonly autoInFlight?: boolean
-  /** 连续摘要合并轮数；T1 提交后归零。 */
-  readonly distillDepth?: number
   readonly attempts: number
   readonly lastError?: string
 }
@@ -60,6 +58,17 @@ export function stateKey(sessionID: string): string {
 /** 输入：块列表；输出：下一个可用的 order。 */
 export function nextOrder(blocks: readonly Block[]): number {
   return blocks.reduce((max, block) => Math.max(max, block.order), 0) + 1
+}
+
+/** 输入：已落盘块 + 可选 pending；输出：下一个可用的 bN id。 */
+export function nextBlockId(blocks: readonly Block[], pending?: Block): string {
+  let max = 0
+  const all = pending === undefined ? blocks : [...blocks, pending]
+  for (const block of all) {
+    const numeric = Number(block.id.startsWith("b") ? block.id.slice(1) : "")
+    if (Number.isInteger(numeric) && numeric > max) max = numeric
+  }
+  return `b${(max + 1).toString()}`
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
@@ -130,14 +139,12 @@ export function parseState(value: unknown): State {
   const pending = isBlock(record["pending"]) ? normalizeBlock(record["pending"], blocks.length) : undefined
   const attempts = typeof record["attempts"] === "number" ? record["attempts"] : 0
   const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
-  const distillDepth = typeof record["distillDepth"] === "number" ? record["distillDepth"] : undefined
   return {
     v: 1,
     blocks,
     attempts,
     ...(pending === undefined ? {} : { pending }),
     ...(lastError === undefined ? {} : { lastError }),
-    ...(distillDepth === undefined ? {} : { distillDepth }),
   }
 }
 
@@ -151,26 +158,23 @@ export async function saveState(storage: StorageLike, sessionID: string, state: 
   await storage.set(stateKey(sessionID), state as unknown as Schema.Json)
 }
 
-/** 输入：状态；输出：pending 转正后的新状态；预期：合并块增加蒸馏轮数，T1 归零。 */
+/** 输入：状态；输出：pending 转正后的新状态。 */
 export function commitPending(state: State): State {
   if (!state.pending) return state
-  const merged = (state.pending.sourceBlockIds?.length ?? 0) > 0
   return {
     v: 1,
     blocks: [...state.blocks, state.pending],
     attempts: 0,
-    distillDepth: merged ? (state.distillDepth ?? 0) + 1 : 0,
   }
 }
 
-/** 输入：状态 + 错误 + 是否计入失败次数；输出：丢弃 pending 后的新状态。 */
-export function dropPending(state: State, error: string, countAttempt = true): State {
+/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态。 */
+export function dropPending(state: State, error: string): State {
   return {
     v: 1,
     blocks: state.blocks,
-    attempts: countAttempt ? state.attempts + 1 : state.attempts,
+    attempts: state.attempts + 1,
     lastError: error,
-    distillDepth: state.distillDepth ?? 0,
   }
 }
 

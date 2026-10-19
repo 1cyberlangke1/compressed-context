@@ -2,13 +2,16 @@ import type { Plugin } from "@opencode/plugin"
 
 import { countText } from "../tokens.ts"
 import { activeBlocks, renderAll, renderBlock } from "./render.ts"
-import { loadServerSettings } from "./settings.ts"
-import { dropPending, loadState, saveState, withPending, type Block, type Tier } from "./state.ts"
-import { summarize, type GenerateLike, type ModelRefLike } from "./summarize.ts"
+import type { SummaryFields } from "./schema.ts"
+import { nextBlockId, type Block, type State, type Tier } from "./state.ts"
+import {
+  summarize,
+  summarizeWithChoice,
+  type GenerateLike,
+  type ModelRefLike,
+  type SummaryChoiceCandidate,
+} from "./summarize.ts"
 import { validateSummary } from "./validate.ts"
-
-/** 同一次事件级联里最多连续合并的轮数；新的请求入口会重置。 */
-export const MAX_DISTILL_ROUNDS = 3
 
 /** 一个合法的相邻合并候选。 */
 export interface MergeCandidate {
@@ -17,15 +20,22 @@ export interface MergeCandidate {
   readonly tier: Tier
 }
 
-export interface DistillInput {
+export interface DistillChainInput {
   readonly ctx: Plugin.Context
-  readonly sessionID: string
   readonly model: ModelRefLike | undefined
-  /** 新的请求入口重置本轮上限；事件级联不重置。 */
-  readonly resetDepth?: boolean
+  readonly state: State
+  /** 刚生成的 T1 或已挂起的块；合并时会被消费。 */
+  readonly pending: Block
+  readonly budgetTokens: number
 }
 
-const inFlight = new Set<string>()
+export interface DistillChainResult {
+  readonly blocks: readonly Block[]
+  readonly pending: Block
+  readonly summary: string
+  readonly merges: number
+  readonly error?: string
+}
 
 /** 输入：active 链；输出：所有保持 tier 单调不增的相邻合并候选。 */
 export function mergeCandidates(blocks: readonly Block[]): readonly MergeCandidate[] {
@@ -52,114 +62,104 @@ function taskFor(blocks: readonly Block[]): string {
   return `title: ${newest.summary.title}\ngoal: ${newest.summary.goal}\nopen items: ${open}`
 }
 
-function choicePrompt(candidates: readonly MergeCandidate[], task: string): string {
-  const describe = (block: Block): string => {
-    const goal = block.summary.goal.replace(/\s+/g, " ").slice(0, 160)
-    return `${block.id} T${block.tier.toString()} "${block.summary.title}" — ${goal}`
-  }
-  const lines = candidates.map(
-    (candidate, index) => `${(index + 1).toString()}. ${describe(candidate.left)} + ${describe(candidate.right)} → T${candidate.tier.toString()}`,
-  )
-  return [
-    "A checkpoint summary chain has exceeded its token budget.",
-    "The algorithm has already decided that one adjacent pair must be merged and has listed every legal pair below.",
-    "Choose the ONE pair whose content is least needed for the current task. Do not choose any other pair.",
-    "",
-    "Current task:",
-    task,
-    "",
-    "Candidates (oldest first):",
-    ...lines,
-    "",
-    'Reply with ONLY JSON: {"candidate": 1}',
-  ].join("\n")
+/** 输入：块；输出：候选列表里的简短描述。 */
+function describe(block: Block): string {
+  const goal = block.summary.goal.replace(/\s+/g, " ").slice(0, 160)
+  return `${block.id} T${block.tier.toString()} "${block.summary.title}" — ${goal}`
 }
 
-function parseChoice(text: string): number | undefined {
-  const cleaned = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-  try {
-    const value: unknown = JSON.parse(cleaned)
-    if (typeof value !== "object" || value === null) return undefined
-    const candidate = (value as Record<string, unknown>)["candidate"]
-    return typeof candidate === "number" && Number.isInteger(candidate) ? candidate : undefined
-  } catch {
-    return undefined
-  }
+/** 输入：候选；输出：这两块的完整 transcript。 */
+function pairTranscript(candidate: MergeCandidate): string {
+  return `${renderBlock(candidate.left)}\n\n${renderBlock(candidate.right)}`
 }
 
-/** 输入：候选 + 当前任务；输出：模型选择的候选；失败返回 undefined。 */
-async function chooseCandidate(
-  input: DistillInput,
-  candidates: readonly MergeCandidate[],
-  task: string,
-): Promise<MergeCandidate | undefined> {
-  const generate = input.ctx.generate as unknown as GenerateLike
-  const prompt = choicePrompt(candidates, task)
-  try {
-    const response = await generate.text(input.model === undefined ? { prompt } : { prompt, model: input.model })
-    const picked = parseChoice(response.text)
-    if (picked === undefined || picked < 1 || picked > candidates.length) return undefined
-    return candidates[picked - 1]
-  } catch {
-    return undefined
-  }
+/** 输入：候选 + ctx/model；输出：普通单候选合并摘要。 */
+async function summarizePair(
+  ctx: Plugin.Context,
+  model: ModelRefLike | undefined,
+  candidate: MergeCandidate,
+): Promise<SummaryFields | undefined> {
+  const transcript = pairTranscript(candidate)
+  return summarize({
+    transcript,
+    sourceChars: transcript.length,
+    generate: ctx.generate as unknown as GenerateLike,
+    ...(model === undefined ? {} : { model }),
+    tier: candidate.tier,
+  })
 }
 
 /**
- * 输入：服务端上下文 + sessionID + 模型。
- * 输出：true 表示“摘要链已超预算或正在处理”，调用方应跳过新的 T1。
- * 预期：纯算法决定是否合并以及候选；只有多个合法候选时才让模型选一个。
+ * 输入：当前状态 + 刚完成的 pending 块 + 预算。
+ * 输出：合并后的 blocks / 最终 pending / summary。
+ * 预期：在 compaction 钩子内部同步执行；先检查预算，没超就原样返回，
+ *       超了才按单调规则继续 T2/T3，全部做完才让调用方返回。
  */
-export async function maybeDistill(input: DistillInput): Promise<boolean> {
-  if (inFlight.has(input.sessionID)) return true
-  inFlight.add(input.sessionID)
-  try {
-    let state = await loadState(input.ctx.storage, input.sessionID)
-    if (state.pending) return true
-    if (input.resetDepth === true && (state.distillDepth ?? 0) > 0) {
-      state = { ...state, distillDepth: 0 }
-      await saveState(input.ctx.storage, input.sessionID, state)
-    }
+export async function distillChain(input: DistillChainInput): Promise<DistillChainResult> {
+  let working = [...input.state.blocks]
+  let pending = input.pending
+  let merges = 0
+  let error: string | undefined
 
-    const settings = await loadServerSettings(input.ctx.storage)
-    const active = activeBlocks(state.blocks)
-    const overBudget = countText(renderAll(state.blocks)) > settings.summaryBudgetTokens
-    if (!overBudget) return false
-    if ((state.distillDepth ?? 0) >= MAX_DISTILL_ROUNDS) return true
-    if (active.length < 2) return true
-
+  while (countText(renderAll(working, pending)) > input.budgetTokens) {
+    const active = activeBlocks(working, pending)
     const candidates = mergeCandidates(active)
-    if (candidates.length === 0) return true
-    const chosen =
-      candidates.length === 1
-        ? candidates[0]
-        : ((await chooseCandidate(input, candidates, taskFor(active))) ?? candidates[0])
-    if (chosen === undefined) return true
+    if (candidates.length === 0) break
 
-    const transcript = `${renderBlock(chosen.left)}\n\n${renderBlock(chosen.right)}`
-    const summary = await summarize({
-      transcript,
-      sourceChars: transcript.length,
-      generate: input.ctx.generate as unknown as GenerateLike,
-      ...(input.model === undefined ? {} : { model: input.model }),
-      tier: chosen.tier,
-    })
+    const first = candidates[0]
+    if (first === undefined) break
+    const transcripts = candidates.map(pairTranscript)
+    let chosen: MergeCandidate
+    let summary: SummaryFields | undefined
+
+    if (candidates.length === 1) {
+      chosen = first
+      summary = await summarizePair(input.ctx, input.model, chosen)
+    } else {
+      const choices: SummaryChoiceCandidate[] = candidates.map((candidate, index) => ({
+        index: index + 1,
+        description: `${describe(candidate.left)} + ${describe(candidate.right)} → T${candidate.tier.toString()}`,
+        sourceChars: transcripts[index]?.length ?? 0,
+        tier: candidate.tier,
+      }))
+      const picked = await summarizeWithChoice({
+        context: active.map(renderBlock).join("\n\n"),
+        task: taskFor(active),
+        candidates: choices,
+        generate: input.ctx.generate as unknown as GenerateLike,
+        ...(input.model === undefined ? {} : { model: input.model }),
+      })
+      if (picked !== undefined) {
+        const index = picked.candidate.index - 1
+        const candidate = candidates[index]
+        if (candidate === undefined) {
+          error = "model picked an unknown candidate"
+          break
+        }
+        chosen = candidate
+        summary = picked.summary
+      } else {
+        // 模型连“选择 + 摘要”都写坏时，回退最前面候选，再走普通摘要一次。
+        chosen = first
+        summary = await summarizePair(input.ctx, input.model, chosen)
+      }
+    }
+
     if (summary === undefined) {
-      await saveState(input.ctx.storage, input.sessionID, { ...state, lastError: "distill summary failed" })
-      return true
+      error = "distill summary failed"
+      break
     }
 
-    const validation = validateSummary(summary, transcript.length)
+    const validation = validateSummary(summary, pairTranscript(chosen).length)
     if (!validation.ok) {
-      await saveState(input.ctx.storage, input.sessionID, { ...state, lastError: validation.message })
-      return true
+      error = validation.message
+      break
     }
 
-    const block: Block = {
-      id: `b${(state.blocks.length + 1).toString()}`,
+    // 旧 pending 先转成已落盘块，新合并块保持 pending，交给 compaction 事件转正。
+    working = [...working, pending]
+    const merged: Block = {
+      id: nextBlockId(working),
       tier: chosen.tier,
       summary,
       fromId: chosen.left.fromId,
@@ -170,24 +170,15 @@ export async function maybeDistill(input: DistillInput): Promise<boolean> {
       order: chosen.left.order,
       sourceBlockIds: [chosen.left.id, chosen.right.id],
     }
+    pending = merged
+    merges += 1
+  }
 
-    await saveState(input.ctx.storage, input.sessionID, withPending(state, block))
-    try {
-      await input.ctx.session.compact({ sessionID: input.sessionID })
-    } catch (error) {
-      const current = await loadState(input.ctx.storage, input.sessionID)
-      await saveState(input.ctx.storage, input.sessionID, dropPending(current, String(error), false))
-    }
-    return true
-  } catch (error) {
-    try {
-      const current = await loadState(input.ctx.storage, input.sessionID)
-      await saveState(input.ctx.storage, input.sessionID, { ...current, lastError: String(error) })
-    } catch {
-      // best effort
-    }
-    return true
-  } finally {
-    inFlight.delete(input.sessionID)
+  return {
+    blocks: working,
+    pending,
+    summary: renderAll(working, pending),
+    merges,
+    ...(error === undefined ? {} : { error }),
   }
 }

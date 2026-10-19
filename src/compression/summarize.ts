@@ -86,6 +86,51 @@ function buildPrompt(transcript: string, tier: Tier): string {
   ].join("\n")
 }
 
+/** 多候选合并时，模型要额外返回的候选信息。 */
+export interface SummaryChoiceCandidate {
+  /** 1 开始的选择编号。 */
+  readonly index: number
+  /** 候选描述，例如 `b1 T2 "title" — goal + b2 ... → T3`。 */
+  readonly description: string
+  /** 这对块的完整 transcript 字符数，用于校验摘要确实更小。 */
+  readonly sourceChars: number
+  readonly tier: Tier
+}
+
+const CHOICE_RULES = `Guidance for choosing and merging:
+- Exactly one adjacent pair may be merged. Pick one candidate from the list below and merge ONLY that pair; every other block is context for the decision, not part of the merge.
+- Add a top-level "candidate": N field to the JSON object, where N is the chosen candidate number. The rest of the object must follow the exact shape above.
+- Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items and blocked work, and exact facts that still matter.
+- Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
+- Do not invent facts. Write in the source conversation's primary language.`
+
+function buildChoicePrompt(
+  context: string,
+  task: string,
+  candidates: readonly SummaryChoiceCandidate[],
+): string {
+  const lines = candidates.map((candidate) => `${candidate.index.toString()}. ${candidate.description}`)
+  return [
+    "You are merging existing checkpoint blocks into one denser checkpoint.",
+    "The checkpoint chain is over its token budget. The algorithm has listed every legal adjacent merge below.",
+    "",
+    "Return ONLY a JSON object with the normal summary shape PLUS a top-level `candidate` number:",
+    SHAPE,
+    "",
+    CHOICE_RULES,
+    "",
+    "Current task:",
+    task,
+    "",
+    "Candidates (oldest first):",
+    ...lines,
+    "",
+    "Sources (the whole active chain; use it to judge the task, but merge only the chosen pair):",
+    context,
+  ].join("\n")
+}
+
 function parseJson(text: string): unknown {
   const cleaned = text
     .trim()
@@ -142,6 +187,56 @@ export async function summarize(input: {
       continue
     }
     prompt = `${base}\n\nYour previous reply was not valid JSON matching the shape. Return the corrected JSON only.`
+  }
+  return undefined
+}
+
+/** 输入：解析后的 JSON；输出：去掉 candidate 后的摘要值 + 原始 candidate。 */
+function splitCandidate(value: unknown): { readonly candidate: unknown; readonly summary: unknown } | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const summary: Record<string, unknown> = { ...(value as Record<string, unknown>) }
+  const candidate = summary["candidate"]
+  delete summary["candidate"]
+  return { candidate, summary }
+}
+
+/**
+ * 输入：整条 active 链、当前任务、合法候选、generate、模型。
+ * 输出：模型选择的候选 + 同一次回复里的摘要；失败返回 undefined。
+ * 预期：一次调用同时完成“选哪对”和“写合并摘要”，多一个 candidate 字段。
+ */
+export async function summarizeWithChoice(input: {
+  readonly context: string
+  readonly task: string
+  readonly candidates: readonly SummaryChoiceCandidate[]
+  readonly generate: GenerateLike
+  readonly model?: ModelRefLike
+}): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
+  const base = buildChoicePrompt(input.context, input.task, input.candidates)
+  let prompt = base
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let text: string
+    try {
+      const response = await input.generate.text(input.model ? { prompt, model: input.model } : { prompt })
+      text = response.text
+    } catch {
+      return undefined
+    }
+
+    const split = splitCandidate(parseJsonSafe(text))
+    if (split !== undefined && typeof split.candidate === "number" && Number.isInteger(split.candidate)) {
+      const candidate = input.candidates[split.candidate - 1]
+      if (candidate !== undefined) {
+        const decoded = decode(split.summary)
+        if (decoded) {
+          const result = validateSummary(decoded, candidate.sourceChars)
+          if (result.ok) return { summary: decoded, candidate }
+          prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
+          continue
+        }
+      }
+    }
+    prompt = `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only.`
   }
   return undefined
 }
