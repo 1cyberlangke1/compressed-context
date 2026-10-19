@@ -45,7 +45,11 @@ export function startCompactionEvents(ctx: Plugin.Context): () => void {
         const state = await loadState(ctx.storage, sessionID)
         if (!state.pending) continue
         if (event.type === "session.compaction.ended") {
-          await saveState(ctx.storage, sessionID, commitPending(state))
+          // 事件可能晚到：只有最新 checkpoint 确实包含这个 pending 才转正，
+          // 否则它属于下一层 compaction，留给下一次 ended。
+          if (await hasBlockInLatestCompaction(ctx, sessionID, state.pending.id)) {
+            await saveState(ctx.storage, sessionID, commitPending(state))
+          }
         } else {
           await saveState(ctx.storage, sessionID, dropPending(state, "compaction failed"))
         }

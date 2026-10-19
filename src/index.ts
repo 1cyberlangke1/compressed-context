@@ -1,18 +1,31 @@
 import { Plugin } from "@opencode/plugin"
 
 import { maybeAutoCompress } from "./compression/auto.ts"
-import { distillChain } from "./compression/distill.ts"
+import { distillOnce, mergeCandidates } from "./compression/distill.ts"
 import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
+import { activeBlocks, renderAll } from "./compression/render.ts"
 import { eligibleMessages, type MessageLike } from "./compression/select.ts"
 import { loadServerSettings } from "./compression/settings.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
-import { loadState, nextBlockId, nextOrder, saveState, type Block } from "./compression/state.ts"
-import { summarize, type GenerateLike } from "./compression/summarize.ts"
+import {
+  loadState,
+  nextBlockId,
+  nextOrder,
+  saveState,
+  type Block,
+  type CompactionPhase,
+  type State,
+} from "./compression/state.ts"
+import {
+  buildT1Instruction,
+  sessionGenerator,
+  summarizeInstruction,
+} from "./compression/summarize.ts"
 import { registerCompressTool } from "./compression/tool.ts"
 import { buildTranscript } from "./compression/transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./compression/validate.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./stats.ts"
-import { estimateCategories } from "./tokens.ts"
+import { countText, estimateCategories } from "./tokens.ts"
 
 export default Plugin.define({
   id: "compressed-context",
@@ -72,21 +85,63 @@ export default Plugin.define({
     disposables.push(
       await ctx.session.hook("compaction", async (event) => {
         const state = await loadState(ctx.storage, event.sessionID)
-        let pending: Block
-        if (state.pending) {
-          pending = state.pending
-        } else {
+        const settings = await loadServerSettings(ctx.storage)
+
+        /** 保存这一层的结果；pending 可选，phase 由下一层决定。 */
+        const save = async (
+          blocks: readonly Block[],
+          pending: Block | undefined,
+          phase: CompactionPhase | undefined,
+          error: string | undefined,
+        ): Promise<void> => {
+          const base: State = {
+            v: 1,
+            blocks,
+            attempts: state.attempts,
+            ...(state.autoInFlight === undefined ? {} : { autoInFlight: state.autoInFlight }),
+            ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+            ...(phase === undefined ? {} : { phase }),
+          }
+          const next: State = pending === undefined ? base : { ...base, pending }
+          await saveState(
+            ctx.storage,
+            event.sessionID,
+            error === undefined ? next : { ...next, lastError: error },
+          )
+        }
+
+        // 第二阶段：T2/T3。只合并一对，然后决定是否排下一层。
+        if (state.phase !== undefined) {
+          const result = await distillOnce({
+            ctx,
+            sessionID: event.sessionID,
+            state,
+            pending: state.pending,
+            budgetTokens: settings.summaryBudgetTokens,
+            phase: state.phase,
+          })
+          await save(result.blocks, result.pending, result.nextPhase, result.error)
+          event.result = { summary: result.summary }
+          if (result.nextPhase !== undefined) {
+            await ctx.session.compact({ sessionID: event.sessionID })
+          }
+          return
+        }
+
+        // 第一阶段：T1。已有 pending（compress 工具）就直接用；
+        // 否则用 session 前缀 + 尾部指令生成，保持前缀缓存。
+        let pending = state.pending
+        if (pending === undefined) {
           const eligible = eligibleMessages(event.messages)
           const transcript = buildTranscript(eligible)
           const sourceChars = transcript.length
           if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) {
             throw new Error("nothing to compress")
           }
-          const summary = await summarize({
-            transcript,
+          const summary = await summarizeInstruction({
+            prompt: buildT1Instruction(),
             sourceChars,
-            generate: ctx.generate as unknown as GenerateLike,
-            model: event.model,
+            generate: sessionGenerator(ctx.session, event.sessionID),
           })
           if (summary === undefined) throw new Error("compression failed")
           const validation = validateSummary(summary, sourceChars)
@@ -109,24 +164,18 @@ export default Plugin.define({
           }
         }
 
-        // 全部同步做完：T1 后先看摘要预算，没超就直接返回；
-        // 超了就在同一个钩子里继续 T2/T3，压完才让模型继续。
-        const settings = await loadServerSettings(ctx.storage)
-        const result = await distillChain({
-          ctx,
-          model: event.model,
-          state,
-          pending,
-          budgetTokens: settings.summaryBudgetTokens,
-        })
-        await saveState(ctx.storage, event.sessionID, {
-          v: 1,
-          blocks: result.blocks,
-          pending: result.pending,
-          attempts: state.attempts,
-          ...(result.error === undefined ? {} : { lastError: result.error }),
-        })
-        event.result = { summary: result.summary }
+        // T1 之后再检查预算；没超就不排 T2。
+        const active = activeBlocks(state.blocks, pending)
+        const summary = renderAll(state.blocks, pending)
+        const nextPhase: CompactionPhase | undefined =
+          countText(summary) > settings.summaryBudgetTokens && mergeCandidates(active).length > 0
+            ? "t2"
+            : undefined
+        await save(state.blocks, pending, nextPhase, undefined)
+        event.result = { summary }
+        if (nextPhase !== undefined) {
+          await ctx.session.compact({ sessionID: event.sessionID })
+        }
       }),
     )
 

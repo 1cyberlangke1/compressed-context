@@ -5,6 +5,9 @@ import type { SummaryFields } from "./schema.ts"
 /** 压缩层级：1 = 原文摘要，2/3 = 摘要再蒸馏。 */
 export type Tier = 1 | 2 | 3
 
+/** 下一次 compaction 的目的；缺省表示 T1。 */
+export type CompactionPhase = "t2" | "t3"
+
 /** 一个已落盘或待落盘的压缩块。 */
 export interface Block {
   readonly id: string
@@ -35,6 +38,8 @@ export interface State {
   readonly blocks: readonly Block[]
   readonly pending?: Block
   readonly autoInFlight?: boolean
+  /** 下一次 compaction 是二级压缩；T1 时缺省。 */
+  readonly phase?: CompactionPhase
   readonly attempts: number
   readonly lastError?: string
 }
@@ -139,12 +144,15 @@ export function parseState(value: unknown): State {
   const pending = isBlock(record["pending"]) ? normalizeBlock(record["pending"], blocks.length) : undefined
   const attempts = typeof record["attempts"] === "number" ? record["attempts"] : 0
   const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
+  const rawPhase = record["phase"]
+  const phase: CompactionPhase | undefined = rawPhase === "t2" || rawPhase === "t3" ? rawPhase : undefined
   return {
     v: 1,
     blocks,
     attempts,
     ...(pending === undefined ? {} : { pending }),
     ...(lastError === undefined ? {} : { lastError }),
+    ...(phase === undefined ? {} : { phase }),
   }
 }
 
@@ -158,23 +166,37 @@ export async function saveState(storage: StorageLike, sessionID: string, state: 
   await storage.set(stateKey(sessionID), state as unknown as Schema.Json)
 }
 
-/** 输入：状态；输出：pending 转正后的新状态。 */
+/** 输入：状态；输出：pending 转正后的新状态；预期：保留下一层 phase。 */
 export function commitPending(state: State): State {
   if (!state.pending) return state
   return {
     v: 1,
     blocks: [...state.blocks, state.pending],
     attempts: 0,
+    ...(state.phase === undefined ? {} : { phase: state.phase }),
   }
 }
 
-/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态。 */
+/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清掉 phase。 */
 export function dropPending(state: State, error: string): State {
   return {
     v: 1,
     blocks: state.blocks,
     attempts: state.attempts + 1,
     lastError: error,
+  }
+}
+
+/** 输入：状态 + 下一层 phase；输出：替换 phase 后的状态。 */
+export function withPhase(state: State, phase: CompactionPhase | undefined): State {
+  return {
+    v: state.v,
+    blocks: state.blocks,
+    attempts: state.attempts,
+    ...(state.pending === undefined ? {} : { pending: state.pending }),
+    ...(state.autoInFlight === undefined ? {} : { autoInFlight: state.autoInFlight }),
+    ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+    ...(phase === undefined ? {} : { phase }),
   }
 }
 

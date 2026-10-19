@@ -44,7 +44,7 @@ export async function registerCompressTool(
       execute: async (input, toolCtx) => {
         const sessionID = toolCtx.sessionID
         const state = await loadState(ctx.storage, sessionID)
-        if (state.pending) return failure("compression already in progress")
+        if (state.pending || state.phase !== undefined) return failure("compression already in progress")
 
         const messages = cache.get(sessionID) ?? []
         const eligible = eligibleMessages(messages)

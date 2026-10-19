@@ -17,6 +17,21 @@ export interface GenerateLike {
   text(input: { prompt: string; model?: ModelRefLike }): Promise<{ text: string }>
 }
 
+/** ctx.session.generate 的最小结构：历史由 session 前缀提供，只追加 prompt。 */
+export interface SessionGenerateLike {
+  generate(input: { sessionID: string; prompt: string }): Promise<{ text: string }>
+}
+
+/** 输入：session 生成入口 + sessionID；输出：只追加指令、复用会话前缀的 GenerateLike。 */
+export function sessionGenerator(session: SessionGenerateLike, sessionID: string): GenerateLike {
+  return {
+    text: async ({ prompt }) => {
+      const response = await session.generate({ sessionID, prompt })
+      return { text: response.text }
+    },
+  }
+}
+
 const SHAPE = `{
   "title": "short label for this block",
   "goal": "the objective and any pivots it went through",
@@ -83,6 +98,39 @@ function buildPrompt(transcript: string, tier: Tier): string {
     "",
     "Sources:",
     transcript,
+  ].join("\n")
+}
+
+/** T1 的会话内指令：历史已经在 session 前缀里，只追加这段。 */
+export function buildT1Instruction(): string {
+  return [
+    "You are writing a checkpoint for the older part of the conversation above.",
+    "Summarize only the messages before the final user message; ignore the final user message and anything after it.",
+    "The checkpoint replaces those older messages; make it self-contained.",
+    "",
+    "Return ONLY a JSON object with this exact shape (no markdown fences, no commentary):",
+    SHAPE,
+    "",
+    rulesFor(1),
+    "- Write in the source conversation's primary language.",
+  ].join("\n")
+}
+
+/** T2/T3 的会话内指令：checkpoint 已经在 session 前缀里，只追加候选和规则。 */
+export function buildMergeInstruction(candidates: readonly SummaryChoiceCandidate[]): string {
+  const lines = candidates.map((candidate) => `${candidate.index.toString()}. ${candidate.description}`)
+  return [
+    "The checkpoint at the top of the conversation contains summary blocks.",
+    "Merge ONLY the chosen pair from the candidate list below; ignore every message after the checkpoint.",
+    "The messages after the checkpoint describe the current task; use them only to judge what is least needed, never include them in the merged summary.",
+    "",
+    "Return ONLY a JSON object with the normal summary shape PLUS a top-level `candidate` number:",
+    SHAPE,
+    "",
+    CHOICE_RULES,
+    "",
+    "Candidates (oldest first):",
+    ...lines,
   ].join("\n")
 }
 
@@ -155,6 +203,34 @@ function decode(value: unknown): Summary | undefined {
   }
 }
 
+async function runSummaryPrompt(
+  base: string,
+  sourceChars: number,
+  generate: GenerateLike,
+  model: ModelRefLike | undefined,
+): Promise<Summary | undefined> {
+  let prompt = base
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let text: string
+    try {
+      const response = await generate.text(model ? { prompt, model } : { prompt })
+      text = response.text
+    } catch {
+      return undefined
+    }
+
+    const decoded = decode(parseJsonSafe(text))
+    if (decoded) {
+      const result = validateSummary(decoded, sourceChars)
+      if (result.ok) return decoded
+      prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
+      continue
+    }
+    prompt = `${base}\n\nYour previous reply was not valid JSON matching the shape. Return the corrected JSON only.`
+  }
+  return undefined
+}
+
 /**
  * 输入：transcript、原文长度、generate、模型、目标层级。
  * 输出：校验通过的摘要；失败返回 undefined。
@@ -168,27 +244,17 @@ export async function summarize(input: {
   readonly tier?: Tier
 }): Promise<Summary | undefined> {
   const tier = input.tier ?? 1
-  const base = buildPrompt(input.transcript, tier)
-  let prompt = base
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let text: string
-    try {
-      const response = await input.generate.text(input.model ? { prompt, model: input.model } : { prompt })
-      text = response.text
-    } catch {
-      return undefined
-    }
+  return runSummaryPrompt(buildPrompt(input.transcript, tier), input.sourceChars, input.generate, input.model)
+}
 
-    const decoded = decode(parseJsonSafe(text))
-    if (decoded) {
-      const result = validateSummary(decoded, input.sourceChars)
-      if (result.ok) return decoded
-      prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
-      continue
-    }
-    prompt = `${base}\n\nYour previous reply was not valid JSON matching the shape. Return the corrected JSON only.`
-  }
-  return undefined
+/** 输入：已经拼好的会话内指令；输出：摘要；失败返回 undefined。 */
+export async function summarizeInstruction(input: {
+  readonly prompt: string
+  readonly sourceChars: number
+  readonly generate: GenerateLike
+  readonly model?: ModelRefLike
+}): Promise<Summary | undefined> {
+  return runSummaryPrompt(input.prompt, input.sourceChars, input.generate, input.model)
 }
 
 /** 输入：解析后的 JSON；输出：去掉 candidate 后的摘要值 + 原始 candidate。 */
@@ -198,6 +264,40 @@ function splitCandidate(value: unknown): { readonly candidate: unknown; readonly
   const candidate = summary["candidate"]
   delete summary["candidate"]
   return { candidate, summary }
+}
+
+async function runChoicePrompt(
+  base: string,
+  candidates: readonly SummaryChoiceCandidate[],
+  generate: GenerateLike,
+  model: ModelRefLike | undefined,
+): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
+  let prompt = base
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let text: string
+    try {
+      const response = await generate.text(model ? { prompt, model } : { prompt })
+      text = response.text
+    } catch {
+      return undefined
+    }
+
+    const split = splitCandidate(parseJsonSafe(text))
+    if (split !== undefined && typeof split.candidate === "number" && Number.isInteger(split.candidate)) {
+      const candidate = candidates[split.candidate - 1]
+      if (candidate !== undefined) {
+        const decoded = decode(split.summary)
+        if (decoded) {
+          const result = validateSummary(decoded, candidate.sourceChars)
+          if (result.ok) return { summary: decoded, candidate }
+          prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
+          continue
+        }
+      }
+    }
+    prompt = `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only.`
+  }
+  return undefined
 }
 
 /**
@@ -212,31 +312,20 @@ export async function summarizeWithChoice(input: {
   readonly generate: GenerateLike
   readonly model?: ModelRefLike
 }): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
-  const base = buildChoicePrompt(input.context, input.task, input.candidates)
-  let prompt = base
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let text: string
-    try {
-      const response = await input.generate.text(input.model ? { prompt, model: input.model } : { prompt })
-      text = response.text
-    } catch {
-      return undefined
-    }
+  return runChoicePrompt(
+    buildChoicePrompt(input.context, input.task, input.candidates),
+    input.candidates,
+    input.generate,
+    input.model,
+  )
+}
 
-    const split = splitCandidate(parseJsonSafe(text))
-    if (split !== undefined && typeof split.candidate === "number" && Number.isInteger(split.candidate)) {
-      const candidate = input.candidates[split.candidate - 1]
-      if (candidate !== undefined) {
-        const decoded = decode(split.summary)
-        if (decoded) {
-          const result = validateSummary(decoded, candidate.sourceChars)
-          if (result.ok) return { summary: decoded, candidate }
-          prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
-          continue
-        }
-      }
-    }
-    prompt = `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only.`
-  }
-  return undefined
+/** 输入：已经拼好的合并指令 + 候选；输出：选择 + 摘要；失败返回 undefined。 */
+export async function summarizeChoiceInstruction(input: {
+  readonly prompt: string
+  readonly candidates: readonly SummaryChoiceCandidate[]
+  readonly generate: GenerateLike
+  readonly model?: ModelRefLike
+}): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
+  return runChoicePrompt(input.prompt, input.candidates, input.generate, input.model)
 }

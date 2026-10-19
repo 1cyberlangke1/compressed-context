@@ -2,13 +2,11 @@ import type { Plugin } from "@opencode/plugin"
 
 import { countText } from "../tokens.ts"
 import { activeBlocks, renderAll, renderBlock } from "./render.ts"
-import type { SummaryFields } from "./schema.ts"
-import { nextBlockId, type Block, type State, type Tier } from "./state.ts"
+import { nextBlockId, type Block, type CompactionPhase, type State, type Tier } from "./state.ts"
 import {
-  summarize,
-  summarizeWithChoice,
-  type GenerateLike,
-  type ModelRefLike,
+  buildMergeInstruction,
+  sessionGenerator,
+  summarizeChoiceInstruction,
   type SummaryChoiceCandidate,
 } from "./summarize.ts"
 import { validateSummary } from "./validate.ts"
@@ -20,20 +18,22 @@ export interface MergeCandidate {
   readonly tier: Tier
 }
 
-export interface DistillChainInput {
+export interface DistillOnceInput {
   readonly ctx: Plugin.Context
-  readonly model: ModelRefLike | undefined
+  readonly sessionID: string
   readonly state: State
-  /** 刚生成的 T1 或已挂起的块；合并时会被消费。 */
-  readonly pending: Block
+  /** 上一层还没提交的块；T2/T3 钩子里可能来自 pending。 */
+  readonly pending: Block | undefined
   readonly budgetTokens: number
+  readonly phase: Exclude<CompactionPhase, undefined>
 }
 
-export interface DistillChainResult {
+export interface DistillOnceResult {
   readonly blocks: readonly Block[]
-  readonly pending: Block
+  readonly pending: Block | undefined
   readonly summary: string
-  readonly merges: number
+  readonly merged: boolean
+  readonly nextPhase?: CompactionPhase
   readonly error?: string
 }
 
@@ -54,131 +54,106 @@ export function mergeCandidates(blocks: readonly Block[]): readonly MergeCandida
   return candidates
 }
 
-/** 输入：active 链；输出：给模型判断“当前任务需要什么”的简短上下文。 */
-function taskFor(blocks: readonly Block[]): string {
-  const newest = blocks[blocks.length - 1]
-  if (newest === undefined) return "(unknown)"
-  const open = newest.summary.open_items.length > 0 ? newest.summary.open_items.join("; ") : "(none)"
-  return `title: ${newest.summary.title}\ngoal: ${newest.summary.goal}\nopen items: ${open}`
-}
-
 /** 输入：块；输出：候选列表里的简短描述。 */
 function describe(block: Block): string {
   const goal = block.summary.goal.replace(/\s+/g, " ").slice(0, 160)
   return `${block.id} T${block.tier.toString()} "${block.summary.title}" — ${goal}`
 }
 
-/** 输入：候选；输出：这两块的完整 transcript。 */
+/** 输入：候选；输出：这两块的完整 transcript（只用于本地校验，不发给模型）。 */
 function pairTranscript(candidate: MergeCandidate): string {
   return `${renderBlock(candidate.left)}\n\n${renderBlock(candidate.right)}`
 }
 
-/** 输入：候选 + ctx/model；输出：普通单候选合并摘要。 */
-async function summarizePair(
-  ctx: Plugin.Context,
-  model: ModelRefLike | undefined,
-  candidate: MergeCandidate,
-): Promise<SummaryFields | undefined> {
-  const transcript = pairTranscript(candidate)
-  return summarize({
-    transcript,
-    sourceChars: transcript.length,
-    generate: ctx.generate as unknown as GenerateLike,
-    ...(model === undefined ? {} : { model }),
-    tier: candidate.tier,
-  })
-}
-
 /**
- * 输入：当前状态 + 刚完成的 pending 块 + 预算。
- * 输出：合并后的 blocks / 最终 pending / summary。
- * 预期：在 compaction 钩子内部同步执行；先检查预算，没超就原样返回，
- *       超了才按单调规则继续 T2/T3，全部做完才让调用方返回。
+ * 输入：当前状态 + 上一层 pending + 预算 + 本次是 T2 还是 T3。
+ * 输出：只合并一对后的 blocks / pending / summary。
+ * 预期：每层只合一次；模型在会话前缀后只看到追加的候选指令。
  */
-export async function distillChain(input: DistillChainInput): Promise<DistillChainResult> {
-  let working = [...input.state.blocks]
-  let pending = input.pending
-  let merges = 0
-  let error: string | undefined
-
-  while (countText(renderAll(working, pending)) > input.budgetTokens) {
-    const active = activeBlocks(working, pending)
-    const candidates = mergeCandidates(active)
-    if (candidates.length === 0) break
-
-    const first = candidates[0]
-    if (first === undefined) break
-    const transcripts = candidates.map(pairTranscript)
-    let chosen: MergeCandidate
-    let summary: SummaryFields | undefined
-
-    if (candidates.length === 1) {
-      chosen = first
-      summary = await summarizePair(input.ctx, input.model, chosen)
-    } else {
-      const choices: SummaryChoiceCandidate[] = candidates.map((candidate, index) => ({
-        index: index + 1,
-        description: `${describe(candidate.left)} + ${describe(candidate.right)} → T${candidate.tier.toString()}`,
-        sourceChars: transcripts[index]?.length ?? 0,
-        tier: candidate.tier,
-      }))
-      const picked = await summarizeWithChoice({
-        context: active.map(renderBlock).join("\n\n"),
-        task: taskFor(active),
-        candidates: choices,
-        generate: input.ctx.generate as unknown as GenerateLike,
-        ...(input.model === undefined ? {} : { model: input.model }),
-      })
-      if (picked !== undefined) {
-        const index = picked.candidate.index - 1
-        const candidate = candidates[index]
-        if (candidate === undefined) {
-          error = "model picked an unknown candidate"
-          break
-        }
-        chosen = candidate
-        summary = picked.summary
-      } else {
-        // 模型连“选择 + 摘要”都写坏时，回退最前面候选，再走普通摘要一次。
-        chosen = first
-        summary = await summarizePair(input.ctx, input.model, chosen)
-      }
-    }
-
-    if (summary === undefined) {
-      error = "distill summary failed"
-      break
-    }
-
-    const validation = validateSummary(summary, pairTranscript(chosen).length)
-    if (!validation.ok) {
-      error = validation.message
-      break
-    }
-
-    // 旧 pending 先转成已落盘块，新合并块保持 pending，交给 compaction 事件转正。
-    working = [...working, pending]
-    const merged: Block = {
-      id: nextBlockId(working),
-      tier: chosen.tier,
-      summary,
-      fromId: chosen.left.fromId,
-      toId: chosen.right.toId,
-      tokensBefore: chosen.left.tokensAfter + chosen.right.tokensAfter,
-      tokensAfter: Math.ceil(JSON.stringify(summary).length / 4),
-      at: Date.now(),
-      order: chosen.left.order,
-      sourceBlockIds: [chosen.left.id, chosen.right.id],
-    }
-    pending = merged
-    merges += 1
+export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceResult> {
+  const active = activeBlocks(input.state.blocks, input.pending)
+  const currentSummary = renderAll(input.state.blocks, input.pending)
+  if (active.length < 2 || countText(currentSummary) <= input.budgetTokens) {
+    return { blocks: input.state.blocks, pending: input.pending, summary: currentSummary, merged: false }
   }
+
+  const candidates = mergeCandidates(active)
+  if (candidates.length === 0) {
+    return { blocks: input.state.blocks, pending: input.pending, summary: currentSummary, merged: false }
+  }
+
+  const choices: SummaryChoiceCandidate[] = candidates.map((candidate, index) => ({
+    index: index + 1,
+    description: `${describe(candidate.left)} + ${describe(candidate.right)} → T${candidate.tier.toString()}`,
+    sourceChars: pairTranscript(candidate).length,
+    tier: candidate.tier,
+  }))
+
+  const generator = sessionGenerator(input.ctx.session, input.sessionID)
+  const picked = await summarizeChoiceInstruction({
+    prompt: buildMergeInstruction(choices),
+    candidates: choices,
+    generate: generator,
+  })
+  if (picked === undefined) {
+    return {
+      blocks: input.state.blocks,
+      pending: input.pending,
+      summary: currentSummary,
+      merged: false,
+      error: "distill summary failed",
+    }
+  }
+
+  const chosen = candidates[picked.candidate.index - 1]
+  if (chosen === undefined) {
+    return {
+      blocks: input.state.blocks,
+      pending: input.pending,
+      summary: currentSummary,
+      merged: false,
+      error: "model picked an unknown candidate",
+    }
+  }
+
+  const validation = validateSummary(picked.summary, pairTranscript(chosen).length)
+  if (!validation.ok) {
+    return {
+      blocks: input.state.blocks,
+      pending: input.pending,
+      summary: currentSummary,
+      merged: false,
+      error: validation.message,
+    }
+  }
+
+  // 上一层 pending 先转成已落盘块，新合并块保持 pending，交给 compaction 事件转正。
+  const working = input.pending === undefined ? [...input.state.blocks] : [...input.state.blocks, input.pending]
+  const merged: Block = {
+    id: nextBlockId(working),
+    tier: chosen.tier,
+    summary: picked.summary,
+    fromId: chosen.left.fromId,
+    toId: chosen.right.toId,
+    tokensBefore: chosen.left.tokensAfter + chosen.right.tokensAfter,
+    tokensAfter: Math.ceil(JSON.stringify(picked.summary).length / 4),
+    at: Date.now(),
+    order: chosen.left.order,
+    sourceBlockIds: [chosen.left.id, chosen.right.id],
+  }
+  const summary = renderAll(working, merged)
+  const nextPhase: CompactionPhase | undefined =
+    input.phase === "t2" &&
+    countText(summary) > input.budgetTokens &&
+    mergeCandidates(activeBlocks(working, merged)).length > 0
+      ? "t3"
+      : undefined
 
   return {
     blocks: working,
-    pending,
-    summary: renderAll(working, pending),
-    merges,
-    ...(error === undefined ? {} : { error }),
+    pending: merged,
+    summary,
+    merged: true,
+    ...(nextPhase === undefined ? {} : { nextPhase }),
   }
 }

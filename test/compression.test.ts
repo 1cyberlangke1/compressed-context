@@ -3,13 +3,19 @@ import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
 
 import { maybeAutoCompress } from "../src/compression/auto.ts"
-import { distillChain, mergeCandidates } from "../src/compression/distill.ts"
+import { distillOnce, mergeCandidates } from "../src/compression/distill.ts"
 import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, textChars, type MessageLike } from "../src/compression/select.ts"
-import { commitPending, dropPending, loadState, parseState, stateKey, withPending, type Block, type StorageLike } from "../src/compression/state.ts"
-import { summarize, summarizeWithChoice } from "../src/compression/summarize.ts"
+import { commitPending, dropPending, loadState, parseState, stateKey, withPending, withPhase, type Block, type StorageLike } from "../src/compression/state.ts"
+import {
+  buildT1Instruction,
+  sessionGenerator,
+  summarize,
+  summarizeInstruction,
+  summarizeWithChoice,
+} from "../src/compression/summarize.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
 import { validateSummary } from "../src/compression/validate.ts"
 
@@ -72,7 +78,7 @@ function memoryStorage(initial: Record<string, unknown> = {}): StorageLike {
   }
 }
 
-/** 输入：storage / 摘要回复 / compact 回调；输出：够 maybeAutoCompress 用的假 ctx。 */
+/** 输入：storage / 摘要回复 / compact 回调；输出：够自动压缩和 distill 用的假 ctx。 */
 function fakeCtx(
   storage: StorageLike,
   text: (input: { prompt: string }) => Promise<{ text: string }>,
@@ -82,7 +88,10 @@ function fakeCtx(
     storage,
     model: { list: () => Promise.resolve({ data: [] }) },
     generate: { text },
-    session: { compact },
+    session: {
+      compact,
+      generate: (input: { sessionID: string; prompt: string }) => text({ prompt: input.prompt }),
+    },
   } as unknown as Plugin.Context
 }
 
@@ -135,6 +144,14 @@ describe("状态", () => {
       },
     }
     expect(parseState({ v: 1, blocks: [legacy], attempts: 0 }).blocks[0]?.summary.title).toBe("implement compression")
+  })
+
+  it("phase 在提交时保留、失败时清掉", () => {
+    const pending = withPending({ v: 1, blocks: [], attempts: 0, phase: "t2" }, block)
+    expect(commitPending(pending).phase).toBe("t2")
+    expect(dropPending(pending, "boom").phase).toBeUndefined()
+    expect(withPhase(pending, undefined).phase).toBeUndefined()
+    expect(parseState({ v: 1, blocks: [], attempts: 0, phase: "t3" }).phase).toBe("t3")
   })
 })
 
@@ -252,6 +269,26 @@ describe("侧调用摘要", () => {
     expect(result?.candidate.index).toBe(1)
     expect(result?.summary.goal).toBe(summary.goal)
   })
+
+  it("session 生成只追加指令，不重发 transcript", async () => {
+    const calls: { sessionID: string; prompt: string }[] = []
+    const generate = sessionGenerator(
+      {
+        generate: (input) => {
+          calls.push(input)
+          return Promise.resolve({ text: JSON.stringify(summary) })
+        },
+      },
+      "ses_test",
+    )
+    const prompt = buildT1Instruction()
+    const result = await summarizeInstruction({ prompt, sourceChars: 10_000, generate })
+    expect(result?.goal).toBe(summary.goal)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.sessionID).toBe("ses_test")
+    expect(calls[0]?.prompt).toBe(prompt)
+    expect(calls[0]?.prompt).not.toContain("Sources:")
+  })
 })
 
 describe("自动压缩", () => {
@@ -294,7 +331,7 @@ describe("自动压缩", () => {
     })
     const state = await loadState(storage, "ses_test")
     expect(compacts).toBe(1)
-    expect(state.pending?.summary.goal).toBe(summary.goal)
+    expect(state.pending).toBeUndefined()
   })
 
   it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {
@@ -331,7 +368,7 @@ describe("自动压缩", () => {
     expect(state.pending).toBeUndefined()
   })
 
-  it("摘要失败时保留已有块并记一次失败", async () => {
+  it("已有块时只入队 compaction，不改 pending", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 1_000, triggerPercent: 60 },
       [stateKey("ses_test")]: { v: 1, blocks: [block], attempts: 0 },
@@ -339,7 +376,7 @@ describe("自动压缩", () => {
     let compacts = 0
     const ctx = fakeCtx(
       storage,
-      () => Promise.resolve({ text: "not json" }),
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
       () => {
         compacts += 1
         return Promise.resolve()
@@ -354,10 +391,10 @@ describe("自动压缩", () => {
       model: { providerID: "test", id: "test" },
     })
     const state = await loadState(storage, "ses_test")
-    expect(compacts).toBe(0)
+    expect(compacts).toBe(1)
     expect(state.blocks).toHaveLength(1)
-    expect(state.attempts).toBe(1)
-    expect(state.lastError).toBe("auto summary failed")
+    expect(state.pending).toBeUndefined()
+    expect(state.attempts).toBe(0)
   })
 })
 
@@ -428,52 +465,54 @@ describe("active 链", () => {
   })
 })
 
-describe("摘要阻塞合并", () => {
+describe("摘要单层合并", () => {
   it("预算内不合并", async () => {
     let calls = 0
     const ctx = fakeCtx(
       memoryStorage(),
       () => {
         calls += 1
-        return Promise.resolve({ text: JSON.stringify(summary) })
+        return Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) })
       },
       () => Promise.resolve(),
     )
-    const result = await distillChain({
+    const result = await distillOnce({
       ctx,
-      model: undefined,
+      sessionID: "ses_test",
       state: { v: 1, blocks: [block], attempts: 0 },
       pending: { ...block, id: "b2", order: 2 },
       budgetTokens: 50_000,
+      phase: "t2",
     })
-    expect(result.merges).toBe(0)
-    expect(result.pending.id).toBe("b2")
+    expect(result.merged).toBe(false)
+    expect(result.pending?.id).toBe("b2")
     expect(calls).toBe(0)
   })
 
-  it("超预算时同步合并唯一候选", async () => {
+  it("超预算时只合并一对", async () => {
     let calls = 0
     const ctx = fakeCtx(
       memoryStorage(),
       () => {
         calls += 1
-        return Promise.resolve({ text: JSON.stringify(summary) })
+        return Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) })
       },
       () => Promise.resolve(),
     )
-    const result = await distillChain({
+    const result = await distillOnce({
       ctx,
-      model: { providerID: "test", id: "test" },
+      sessionID: "ses_test",
       state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
       pending: longBlock("b2", 1, 2),
       budgetTokens: 5_000,
+      phase: "t2",
     })
     expect(calls).toBe(1)
-    expect(result.merges).toBe(1)
-    expect(result.pending.tier).toBe(2)
-    expect(result.pending.sourceBlockIds).toEqual(["b1", "b2"])
-    expect(result.pending.order).toBe(1)
-    expect(activeBlocks(result.blocks, result.pending).map((item) => item.id)).toEqual([result.pending.id])
+    expect(result.merged).toBe(true)
+    expect(result.pending?.tier).toBe(2)
+    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2"])
+    expect(result.pending?.order).toBe(1)
+    expect(activeBlocks(result.blocks, result.pending).map((item) => item.id)).toEqual([result.pending?.id])
   })
 
   it("多候选时模型一次返回 candidate 和摘要", async () => {
@@ -486,30 +525,50 @@ describe("摘要阻塞合并", () => {
       },
       () => Promise.resolve(),
     )
-    const result = await distillChain({
+    const result = await distillOnce({
       ctx,
-      model: { providerID: "test", id: "test" },
+      sessionID: "ses_test",
       state: {
         v: 1,
-        blocks: [
-          longBlock("b1", 2, 1),
-          tierBlock("b2", 2, 2),
-          tierBlock("b3", 1, 3),
-        ],
+        blocks: [longBlock("b1", 2, 1), tierBlock("b2", 2, 2), tierBlock("b3", 1, 3)],
         attempts: 0,
       },
       pending: tierBlock("b4", 1, 4),
       budgetTokens: 5_000,
+      phase: "t2",
     })
     expect(calls).toBe(1)
-    expect(result.merges).toBe(1)
-    expect(result.pending.sourceBlockIds).toEqual(["b1", "b2"])
-    expect(result.pending.tier).toBe(3)
+    expect(result.merged).toBe(true)
+    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2"])
+    expect(result.pending?.tier).toBe(3)
+    expect(result.nextPhase).toBeUndefined()
     expect(activeBlocks(result.blocks, result.pending).map((item) => item.id)).toEqual([
-      result.pending.id,
+      result.pending?.id,
       "b3",
       "b4",
     ])
+  })
+
+  it("T2 后还超预算时返回 nextPhase=t3", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    const result = await distillOnce({
+      ctx,
+      sessionID: "ses_test",
+      state: {
+        v: 1,
+        blocks: [longBlock("b1", 2, 1), tierBlock("b2", 2, 2), longBlock("b3", 1, 3)],
+        attempts: 0,
+      },
+      pending: tierBlock("b4", 1, 4),
+      budgetTokens: 5_000,
+      phase: "t2",
+    })
+    expect(result.merged).toBe(true)
+    expect(result.nextPhase).toBe("t3")
   })
 
   it("合并摘要失败时保留源块", async () => {
@@ -518,16 +577,17 @@ describe("摘要阻塞合并", () => {
       () => Promise.resolve({ text: "not json" }),
       () => Promise.resolve(),
     )
-    const result = await distillChain({
+    const result = await distillOnce({
       ctx,
-      model: undefined,
+      sessionID: "ses_test",
       state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
       pending: longBlock("b2", 1, 2),
       budgetTokens: 5_000,
+      phase: "t2",
     })
-    expect(result.merges).toBe(0)
+    expect(result.merged).toBe(false)
     expect(result.error).toBe("distill summary failed")
     expect(result.blocks).toHaveLength(1)
-    expect(result.pending.id).toBe("b2")
+    expect(result.pending?.id).toBe("b2")
   })
 })

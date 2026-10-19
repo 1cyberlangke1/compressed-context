@@ -3,10 +3,10 @@ import type { Plugin } from "@opencode/plugin"
 import { estimateCategories, totalCategories } from "../tokens.ts"
 import { eligibleMessages, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
-import { loadState, nextBlockId, nextOrder, saveState, withPending, type Block } from "./state.ts"
-import { summarize, type GenerateLike, type ModelRefLike } from "./summarize.ts"
+import { loadState, saveState } from "./state.ts"
+import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
-import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
+import { MIN_SOURCE_CHARS } from "./validate.ts"
 
 /** 连续失败达到这个次数后暂停本会话的自动压缩。 */
 const MAX_ATTEMPTS = 3
@@ -58,12 +58,12 @@ function estimateTotal(input: AutoInput): number {
 /**
  * 输入：服务端上下文 + 当前请求。
  * 输出：无。
- * 预期：占用超过 triggerPercent 时生成 pending 块并触发 compaction；不抛错。
+ * 预期：占用超过 triggerPercent 时只入队 compaction；真正摘要在 compaction 钩子里做。
  */
 export async function maybeAutoCompress(input: AutoInput): Promise<void> {
   try {
     const state = await loadState(input.ctx.storage, input.sessionID)
-    if (state.pending || state.autoInFlight) return
+    if (state.pending || state.phase !== undefined) return
     if (state.attempts >= MAX_ATTEMPTS) return
 
     const settings = await loadServerSettings(input.ctx.storage)
@@ -72,62 +72,15 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (estimateTotal(input) < limit * (settings.triggerPercent / 100)) return
 
     const eligible = eligibleMessages(input.messages)
-    const transcript = buildTranscript(eligible)
-    const sourceChars = transcript.length
+    const sourceChars = buildTranscript(eligible).length
     if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
 
-    const first = eligible.find((message) => message.id !== undefined)
-    const last = [...eligible].reverse().find((message) => message.id !== undefined)
-    if (first?.id === undefined || last?.id === undefined) return
-
-    await saveState(input.ctx.storage, input.sessionID, { ...state, autoInFlight: true })
-
-    const summary = await summarize({
-      transcript,
-      sourceChars,
-      generate: input.ctx.generate as unknown as GenerateLike,
-      model: input.model,
-    })
-    if (summary === undefined) {
-      await saveState(input.ctx.storage, input.sessionID, {
-        ...state,
-        autoInFlight: false,
-        attempts: state.attempts + 1,
-        lastError: "auto summary failed",
-      })
-      return
-    }
-
-    const validation = validateSummary(summary, sourceChars)
-    if (!validation.ok) {
-      await saveState(input.ctx.storage, input.sessionID, {
-        ...state,
-        autoInFlight: false,
-        attempts: state.attempts + 1,
-        lastError: validation.message,
-      })
-      return
-    }
-
-    const block: Block = {
-      id: nextBlockId(state.blocks),
-      tier: 1,
-      summary,
-      fromId: first.id,
-      toId: last.id,
-      tokensBefore: Math.ceil(sourceChars / 4),
-      tokensAfter: Math.ceil(JSON.stringify(summary).length / 4),
-      at: Date.now(),
-      order: nextOrder(state.blocks),
-    }
-    await saveState(input.ctx.storage, input.sessionID, withPending({ ...state, autoInFlight: true }, block))
     await input.ctx.session.compact({ sessionID: input.sessionID })
   } catch (error) {
     try {
       const current = await loadState(input.ctx.storage, input.sessionID)
       await saveState(input.ctx.storage, input.sessionID, {
         ...current,
-        autoInFlight: false,
         attempts: current.attempts + 1,
         lastError: String(error),
       })
