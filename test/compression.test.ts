@@ -8,7 +8,7 @@ import { handleCompactionEvent } from "../src/compression/events.ts"
 import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
-import { eligibleMessages, isCheckpoint, textChars, type MessageLike } from "../src/compression/select.ts"
+import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
 import { commitPending, dropPending, loadState, parseState, saveState, stateKey, withPending, withPhase, type Block, type StorageLike } from "../src/compression/state.ts"
 import {
   buildMergeInstruction,
@@ -115,6 +115,16 @@ describe("选区", () => {
 
   it("没有 user 消息时为空", () => {
     expect(eligibleMessages([message("assistant", "hi")])).toEqual([])
+  })
+
+  it("compaction 的 older 消息排除 checkpoint 后全部可压", () => {
+    const checkpoint = message("user", "<conversation-checkpoint>old</conversation-checkpoint>", "m0")
+    const older = [
+      checkpoint,
+      message("user", "first", "m1"),
+      message("assistant", "reply", "m2"),
+    ]
+    expect(olderMessages(older).map((item) => item.id)).toEqual(["m1", "m2"])
   })
 })
 

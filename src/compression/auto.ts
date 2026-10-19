@@ -69,8 +69,8 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const settings = await loadServerSettings(input.ctx.storage)
     const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit)
     if (limit === undefined || limit <= 0) return
-    if (estimateTotal(input) < limit * (settings.triggerPercent / 100)) return
-
+    const total = estimateTotal(input)
+    if (total < limit * (settings.triggerPercent / 100)) return
     const eligible = eligibleMessages(input.messages)
     const sourceChars = buildTranscript(eligible).length
     if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return

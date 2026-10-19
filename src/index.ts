@@ -4,7 +4,7 @@ import { maybeAutoCompress } from "./compression/auto.ts"
 import { distillOnce, planT1Phase } from "./compression/distill.ts"
 import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
 import { activeBlocks, renderAll } from "./compression/render.ts"
-import { eligibleMessages, type MessageLike } from "./compression/select.ts"
+import { eligibleMessages, olderMessages, type MessageLike } from "./compression/select.ts"
 import { loadServerSettings } from "./compression/settings.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
 import {
@@ -48,9 +48,23 @@ export default Plugin.define({
       })
     }
 
+    /** 输入：sessionID；输出：无；预期：compaction 结束后稍等投影删除 inbox 行，再入队下一层。 */
+    const enqueueNext = async (sessionID: string): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      const state = await loadState(ctx.storage, sessionID)
+      if (state.pending || state.phase === undefined) return
+      try {
+        await ctx.session.compact({ sessionID, delivery: "steer" })
+      } catch {
+        // 入队失败不影响当前层的 checkpoint；下一轮 phase 还在，可重试。
+      }
+    }
+
     disposables.push(await registerCompressTool(ctx, cache))
     disposables.push(await registerSettingsRpc(ctx))
-    const stopEvents = startCompactionEvents(ctx)
+    const stopEvents = startCompactionEvents(ctx, (sessionID) => {
+      void enqueueNext(sessionID)
+    })
     void reconcileAll(ctx)
 
     disposables.push(
@@ -122,9 +136,6 @@ export default Plugin.define({
           })
           await save(result.blocks, result.pending, result.nextPhase, result.error)
           event.result = { summary: result.summary }
-          if (result.nextPhase !== undefined) {
-            await ctx.session.compact({ sessionID: event.sessionID })
-          }
           return
         }
 
@@ -132,7 +143,7 @@ export default Plugin.define({
         // 否则用 session 前缀 + 尾部指令生成，保持前缀缓存。
         let pending = state.pending
         if (pending === undefined) {
-          const eligible = eligibleMessages(event.messages)
+          const eligible = olderMessages(event.messages)
           const transcript = buildTranscript(eligible)
           const sourceChars = transcript.length
           if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) {
@@ -170,9 +181,6 @@ export default Plugin.define({
         const nextPhase = planT1Phase(summary, active, settings.summaryBudgetTokens)
         await save(state.blocks, pending, nextPhase, undefined)
         event.result = { summary }
-        if (nextPhase !== undefined) {
-          await ctx.session.compact({ sessionID: event.sessionID })
-        }
       }),
     )
 

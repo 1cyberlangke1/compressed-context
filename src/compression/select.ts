@@ -41,6 +41,15 @@ export function eligibleMessages(messages: readonly MessageLike[]): readonly Mes
   return messages.slice(0, lastUser).filter((message) => !isCheckpoint(message))
 }
 
+/**
+ * 输入：compaction 钩子的 older 消息。
+ * 输出：可压缩消息（排除 checkpoint）。
+ * 预期：older 里没有“当前 user”可排除，不能复用 eligibleMessages。
+ */
+export function olderMessages(messages: readonly MessageLike[]): readonly MessageLike[] {
+  return messages.filter((message) => !isCheckpoint(message))
+}
+
 /** 输入：消息列表；输出：所有 text part 的总字符数。 */
 export function textChars(messages: readonly MessageLike[]): number {
   let total = 0

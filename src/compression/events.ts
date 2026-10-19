@@ -60,18 +60,33 @@ export async function handleCompactionEvent(
 }
 
 /**
- * 输入：服务端上下文。
+ * 输入：服务端上下文 + 可选的成功回调。
  * 输出：订阅 compaction.ended / compaction.failed，并返回取消函数。
- * 预期：成功时 pending 转正；失败时丢弃 pending。
+ * 预期：成功时 pending 转正并回调；失败时丢弃 pending。
  */
-export function startCompactionEvents(ctx: Plugin.Context): () => void {
+export function startCompactionEvents(
+  ctx: Plugin.Context,
+  onCommitted?: (sessionID: string) => void,
+): () => void {
   const controller = new AbortController()
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        if (event.type !== "session.compaction.ended" && event.type !== "session.compaction.failed") continue
+        if (
+          event.type !== "session.compaction.ended" &&
+          event.type !== "session.compaction.failed" &&
+          event.type !== "session.idle"
+        ) {
+          continue
+        }
+        if (event.type === "session.idle") {
+          onCommitted?.(event.data.sessionID)
+          continue
+        }
         const type: CompactionEventType = event.type === "session.compaction.ended" ? "ended" : "failed"
-        await handleCompactionEvent(ctx, type, event.data.sessionID)
+        const sessionID = event.data.sessionID
+        await handleCompactionEvent(ctx, type, sessionID)
+        if (type === "ended") onCommitted?.(sessionID)
       }
     } catch {
       // aborted or disconnected; reconciliation on next startup covers it
