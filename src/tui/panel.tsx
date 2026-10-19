@@ -7,19 +7,72 @@ import { effectiveLimit, localeArgument, type Settings } from "../settings.ts"
 import { parseStats, scaleCategories, STATS_KEY, type ContextStats } from "../stats.ts"
 import type { UpdateSettings } from "./types.ts"
 
-/** 分类占比低于这个值显示绿色。 */
-const GREEN_MAX_PCT = 15
-/** 分类占比低于这个值显示黄色，再高显示红色。 */
-const YELLOW_MAX_PCT = 30
+/** 颜色三元组，分量 0-255。 */
+type Rgb = readonly [number, number, number]
+
+/** 输入：0-255 分量；输出：两位十六进制。 */
+function channel(value: number): string {
+  return Math.round(value).toString(16).padStart(2, "0")
+}
+
+/** 输入：颜色值；输出：RGB；不是 hex 返回 undefined。 */
+function parseHex(value: string): Rgb | undefined {
+  const match = /^#([\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i.exec(value.trim())
+  const raw = match?.[1]
+  if (raw === undefined) return undefined
+  if (raw.length === 3 || raw.length === 4) {
+    return [
+      parseInt(raw.charAt(0).repeat(2), 16),
+      parseInt(raw.charAt(1).repeat(2), 16),
+      parseInt(raw.charAt(2).repeat(2), 16),
+    ]
+  }
+  return [
+    parseInt(raw.slice(0, 2), 16),
+    parseInt(raw.slice(2, 4), 16),
+    parseInt(raw.slice(4, 6), 16),
+  ]
+}
+
+/** 输入：两个颜色 + 0-1 比例；输出：线性插值后的颜色。 */
+function mix(from: Rgb, to: Rgb, ratio: number): Rgb {
+  return [
+    from[0] + (to[0] - from[0]) * ratio,
+    from[1] + (to[1] - from[1]) * ratio,
+    from[2] + (to[2] - from[2]) * ratio,
+  ]
+}
+
+/** 输入：RGB；输出：hex 字符串。 */
+function toHex(rgb: Rgb): string {
+  return `#${channel(rgb[0])}${channel(rgb[1])}${channel(rgb[2])}`
+}
+
+/** 输入：颜色值（hex 字符串或 OpenTUI RGBA）；输出：RGB。 */
+function toRgb(value: unknown): Rgb | undefined {
+  if (typeof value === "string") return parseHex(value)
+  if (typeof value === "object" && value !== null) {
+    const color = value as { readonly r?: unknown; readonly g?: unknown; readonly b?: unknown }
+    if (typeof color.r === "number" && typeof color.g === "number" && typeof color.b === "number") {
+      // OpenTUI 的 RGBA.r/g/b 是 0-1 归一化值，这里转成 0-255。
+      return [color.r * 255, color.g * 255, color.b * 255]
+    }
+  }
+  return undefined
+}
 
 /**
  * 输入：该分类占上下文总量的百分比 + 主题。
- * 输出：绿 → 黄 → 红；占比越小越绿，越大越红。
+ * 输出：0%-50%-100% 依次绿-黄-红的连续插值。
+ * 预期：每个百分比都有独立颜色；主题色不可解析时回退到内置色。
  */
-function occupancyColor(pct: number, theme: Context["theme"]) {
-  if (pct <= GREEN_MAX_PCT) return theme.text.feedback.success.base
-  if (pct <= YELLOW_MAX_PCT) return theme.text.feedback.warning.base
-  return theme.text.feedback.error.base
+function occupancyColor(pct: number, theme: Context["theme"]): string {
+  const green = toRgb(theme.text.feedback.success.base) ?? [34, 197, 94]
+  const yellow = toRgb(theme.text.feedback.warning.base) ?? [234, 179, 8]
+  const red = toRgb(theme.text.feedback.error.base) ?? [239, 68, 68]
+  const ratio = Math.min(1, Math.max(0, pct / 100))
+  if (ratio <= 0.5) return toHex(mix(green, yellow, ratio * 2))
+  return toHex(mix(yellow, red, (ratio - 0.5) * 2))
 }
 
 /**
