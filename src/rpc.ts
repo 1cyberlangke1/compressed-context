@@ -1,8 +1,8 @@
 import { Rpc } from "@opencode/plugin/rpc"
 
-const EmptyJson = {
+const SettingsGetInputJson = {
   type: "object",
-  properties: {},
+  properties: { sessionID: { type: "string" } },
   additionalProperties: false,
 } as const
 
@@ -53,7 +53,7 @@ const OkJson = {
 export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
   id: "compressed-context",
   methods: {
-    settingsGet: { input: EmptyJson, output: SettingsOutputJson },
+    settingsGet: { input: SettingsGetInputJson, output: SettingsOutputJson },
     settingsSet: { input: SettingsInputJson, output: OkJson },
   },
   events: {},

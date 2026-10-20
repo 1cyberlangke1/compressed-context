@@ -3,7 +3,7 @@ import type { Plugin } from "@opencode/plugin"
 import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../settings.ts"
 import { estimateCategories, totalCategories } from "../tokens.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
-import { RESOLVED_WINDOW_KEY, loadServerSettings } from "./settings.ts"
+import { RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
 import { loadState, saveState } from "./state.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -58,35 +58,49 @@ export interface AutoInput {
   readonly model: ModelRefLike
 }
 
-/** 输入：插件上下文 + 模型 key + 窗口；输出：无；预期：写进 storage 供 TUI 读取，失败不影响压缩。 */
-async function rememberWindow(ctx: Plugin.Context, key: string, limit: number): Promise<void> {
+/** 输入：插件上下文 + 模型标识 + 窗口；输出：无；预期：写进 storage 供 TUI 读取，失败不影响压缩。 */
+async function rememberWindow(
+  ctx: Plugin.Context,
+  providerID: string,
+  modelID: string,
+  limit: number,
+): Promise<void> {
   try {
-    await ctx.storage.set(`window:${key}`, limit)
+    await ctx.storage.set(windowKey(providerID, modelID), limit)
     await ctx.storage.set(RESOLVED_WINDOW_KEY, limit)
   } catch {
     // best effort：写不进去只影响 TUI 显示，不影响压缩
   }
 }
 
-/** 输入：设置 + 模型；输出：实际使用的窗口大小。 */
-export async function resolveLimit(ctx: Plugin.Context, model: ModelRefLike, setting: "auto" | number): Promise<number | undefined> {
-  if (setting !== "auto") return setting
+/**
+ * 输入：设置 + 模型；输出：实际使用的窗口大小。
+ * 预期：数字设置是上限，先解析模型原生窗口再取 min；auto 直接用原生值。
+ */
+export async function resolveLimit(
+  ctx: Plugin.Context,
+  model: ModelRefLike,
+  setting: "auto" | number,
+): Promise<number | undefined> {
   const key = `${model.providerID}/${model.id}`
   const cached = limitCache.get(key)
-  if (cached !== undefined && Date.now() - cached.at < LIMIT_TTL) return cached.limit
-  try {
-    const result = await ctx.model.list()
-    const info = result.data.find((item) => item.providerID === model.providerID && item.id === model.id)
-    const limit = info?.limit.context
-    if (typeof limit === "number" && limit > 0) {
-      limitCache.set(key, { at: Date.now(), limit })
-      await rememberWindow(ctx, key, limit)
-      return limit
+  let native = cached !== undefined && Date.now() - cached.at < LIMIT_TTL ? cached.limit : undefined
+  if (native === undefined) {
+    try {
+      const result = await ctx.model.list()
+      const info = result.data.find((item) => item.providerID === model.providerID && item.id === model.id)
+      const limit = info?.limit.context
+      if (typeof limit === "number" && limit > 0) {
+        native = limit
+        limitCache.set(key, { at: Date.now(), limit })
+        await rememberWindow(ctx, model.providerID, model.id, limit)
+      }
+    } catch {
+      // 原生窗口未知：数字设置按原值使用，auto 则关闭自动压缩
     }
-  } catch {
-    // unknown limit; auto compression stays off
   }
-  return undefined
+  if (setting !== "auto") return native === undefined ? setting : Math.min(setting, native)
+  return native
 }
 
 /** 输入：system / tools / messages；输出：估算总 token。 */

@@ -73,7 +73,7 @@ export interface Settings {
   expanded: boolean
   /** 界面语言；auto 跟随系统 */
   locale: LocaleSetting
-  /** 上下文窗口上限 */
+  /** 上下文窗口上限；数字是上限，实际取「设置值」和「模型原生窗口」中较小的那个 */
   contextLimit: ContextLimit
   /** 强制压缩阈值（占用百分比） */
   triggerPercent: number
@@ -362,10 +362,12 @@ export function localeArgument(locale: LocaleSetting): string | undefined {
 /**
  * 输入：设置 + 模型原生上下文长度。
  * 输出：实际使用的上下文上限；未知时返回 undefined。
- * 预期：自定义值优先；auto 时回退模型原生值。
+ * 预期：数字设置是上限，不能超过模型原生窗口；auto 直接用原生值。
  */
 export function effectiveLimit(settings: Settings, native: number): number | undefined {
   const value: unknown = settings.contextLimit
-  if (isContextLimit(value) && value !== "auto") return value
+  if (isContextLimit(value) && value !== "auto") {
+    return native > 0 ? Math.min(value, native) : value
+  }
   return native > 0 ? native : undefined
 }

@@ -43,6 +43,11 @@ export interface ServerSettings {
 export const SETTINGS_KEY = "settings"
 /** 插件最近一次从模型解析到的原生窗口；TUI 用它把绝对值换算成百分比。 */
 export const RESOLVED_WINDOW_KEY = "window:last"
+
+/** 输入：模型标识；输出：该模型原生窗口在 storage 里的 key。 */
+export function windowKey(providerID: string, modelID: string): string {
+  return `window:${providerID}/${modelID}`
+}
 export const MIN_TRIGGER_PERCENT = 60
 export const MAX_TRIGGER_PERCENT = 95
 export const MAX_CONTEXT_LIMIT = 10_000_000

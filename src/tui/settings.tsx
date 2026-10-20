@@ -60,11 +60,14 @@ function summaryLanguageLabel(settings: Settings, copy: Messages): string {
   return copy.settings.auto
 }
 
-/** 输入：设置 + 已知窗口；输出：上下文上限标签；auto 时带上解析到的原生窗口。 */
+/** 输入：设置 + 已知窗口；输出：上下文上限标签；数字设置是上限，被模型原生窗口压低时显示箭头。 */
 function limitLabel(settings: Settings, copy: Messages, window: number | undefined): string {
   const value: unknown = settings.contextLimit
   if (!isContextLimit(value) || value === "auto") {
     return window === undefined ? copy.settings.limitAuto : `${copy.settings.limitAuto} (${formatTokens(window)})`
+  }
+  if (window !== undefined && window < value) {
+    return `${formatTokens(value)} → ${formatTokens(window)}`
   }
   return formatTokens(value)
 }
@@ -334,26 +337,38 @@ export function SettingsCommand(props: {
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
   const [resolvedWindow, setResolvedWindow] = createSignal<number | undefined>(undefined)
 
-  /** 输入：无；输出：当前生效的窗口；预期：数字设置优先，否则用插件解析到的原生窗口。 */
+  /** 输入：无；输出：当前生效的窗口；预期：数字设置是上限，取 min(设置, 原生窗口)。 */
   const currentWindow = (): number | undefined => {
     const limit: unknown = props.settings.contextLimit
-    if (typeof limit === "number" && Number.isFinite(limit)) return limit
-    return resolvedWindow()
+    const native = resolvedWindow()
+    if (typeof limit === "number" && Number.isFinite(limit)) {
+      return native === undefined ? limit : Math.min(limit, native)
+    }
+    return native
   }
 
-  // 读取服务端解析到的原生窗口，auto 时也能把绝对值换算成百分比。
-  onMount(() => {
-    void (async () => {
-      try {
-        const rpc = props.context.client.rpc(ContextRpc) as unknown as {
-          settingsGet(input: Record<string, never>): Promise<{ resolvedWindow?: number }>
-        }
-        const got = await rpc.settingsGet({})
-        if (typeof got.resolvedWindow === "number" && got.resolvedWindow > 0) setResolvedWindow(got.resolvedWindow)
-      } catch {
-        // server plugin not loaded
+  /** 输入：sessionID；输出：无；预期：按会话模型拉取原生窗口，失败保留旧值。 */
+  const fetchWindow = async (sessionID: string | undefined): Promise<void> => {
+    try {
+      const rpc = props.context.client.rpc(ContextRpc) as unknown as {
+        settingsGet(input: { sessionID?: string }): Promise<{ resolvedWindow?: number }>
       }
-    })()
+      const got = await rpc.settingsGet(sessionID === undefined ? {} : { sessionID })
+      if (typeof got.resolvedWindow === "number" && got.resolvedWindow > 0) setResolvedWindow(got.resolvedWindow)
+    } catch {
+      // server plugin not loaded
+    }
+  }
+
+  /** 输入：无；输出：当前路由的 sessionID；预期：不在会话页时返回 undefined。 */
+  const routeSessionID = (): string | undefined => {
+    const route = props.context.ui.router.current()
+    return route.type === "session" ? route.sessionID : undefined
+  }
+
+  // 读取当前会话模型的原生窗口，auto 时也能把绝对值换算成百分比。
+  onMount(() => {
+    void fetchWindow(routeSessionID())
   })
 
   // 设置变化时推给服务端；服务端插件未加载时静默忽略。
@@ -590,6 +605,8 @@ export function SettingsCommand(props: {
   }
 
   const openSettings = async (): Promise<void> => {
+    // 每次打开菜单都按当前会话模型刷新窗口，避免显示成别的模型。
+    await fetchWindow(routeSessionID())
     const window = currentWindow()
     const picked = await props.context.ui.dialog.select<string>({
       title: copy().settings.title,

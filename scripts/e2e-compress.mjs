@@ -318,7 +318,7 @@ const config = {
       models: {
         fake: {
           name: "Fake",
-          limit: { context: 50_000, output: 2_000 },
+          limit: { context: 1_000_000, output: 2_000 },
           capabilities: { tools: true, input: ["text"], output: ["text"] },
         },
       },

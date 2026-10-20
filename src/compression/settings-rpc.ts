@@ -6,6 +6,7 @@ import {
   loadServerSettings,
   parseServerSettings,
   saveServerSettings,
+  windowKey,
 } from "./settings.ts"
 
 /** 注册句柄的最小结构。 */
@@ -20,10 +21,28 @@ export interface Disposable {
  */
 export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposable> {
   return ctx.rpc.register(ContextRpc, {
-    settingsGet: async () => {
+    settingsGet: async (input) => {
       const settings = await loadServerSettings(ctx.storage)
-      const resolved = await ctx.storage.get(RESOLVED_WINDOW_KEY)
-      const resolvedWindow = typeof resolved === "number" && resolved > 0 ? resolved : undefined
+      const requested = (input as { readonly sessionID?: unknown }).sessionID
+      const sessionID = typeof requested === "string" && requested.length > 0 ? requested : undefined
+      // 优先返回当前会话模型自己的窗口；拿不到再退回最近一次解析值。
+      let resolvedWindow: number | undefined
+      if (sessionID !== undefined) {
+        try {
+          const session = await ctx.session.get({ sessionID })
+          const model = session.model
+          if (model !== undefined) {
+            const stored = await ctx.storage.get(windowKey(model.providerID, model.id))
+            if (typeof stored === "number" && stored > 0) resolvedWindow = stored
+          }
+        } catch {
+          // 会话不存在或模型未知：回退到最近一次解析值
+        }
+      }
+      if (resolvedWindow === undefined) {
+        const stored = await ctx.storage.get(RESOLVED_WINDOW_KEY)
+        if (typeof stored === "number" && stored > 0) resolvedWindow = stored
+      }
       return {
         contextLimit: settings.contextLimit,
         triggerPercent: settings.triggerPercent,

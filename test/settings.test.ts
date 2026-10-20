@@ -238,6 +238,8 @@ describe("effectiveLimit", () => {
 
   it("自定义优先，auto 回退模型原生值", () => {
     expect(effectiveLimit({ ...base, contextLimit: 200_000 }, 1_000_000)).toBe(200_000)
+    // 数字设置是上限：模型原生窗口更小时取原生值。
+    expect(effectiveLimit({ ...base, contextLimit: 200_000 }, 32_000)).toBe(32_000)
     expect(effectiveLimit(base, 128_000)).toBe(128_000)
     expect(effectiveLimit(base, 0)).toBeUndefined()
   })
