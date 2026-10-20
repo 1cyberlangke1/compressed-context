@@ -50,24 +50,10 @@ export default Plugin.define({
       })
     }
 
-    /** 输入：sessionID；输出：无；预期：compaction 结束后稍等投影删除 inbox 行，再入队下一层。 */
-    const enqueueNext = async (sessionID: string): Promise<void> => {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      const state = await loadState(ctx.storage, sessionID)
-      if (state.pending || state.phase === undefined) return
-      try {
-        await ctx.session.compact({ sessionID, delivery: "steer" })
-      } catch {
-        // 入队失败不影响当前层的 checkpoint；下一轮 phase 还在，可重试。
-      }
-    }
-
     disposables.push(await registerCompressTool(ctx, cache))
     disposables.push(await registerDecompressTool(ctx))
     disposables.push(await registerSettingsRpc(ctx))
-    const stopEvents = startCompactionEvents(ctx, (sessionID) => {
-      void enqueueNext(sessionID)
-    })
+    const stopEvents = startCompactionEvents(ctx)
     void reconcileAll(ctx)
 
     disposables.push(
@@ -132,8 +118,10 @@ export default Plugin.define({
           )
         }
 
-        // 第二阶段：T2/T3。只合并一对，然后决定是否排下一层。
-        if (state.phase !== undefined) {
+        // 第二阶段：T2/T3。只在 older 里没有真实消息时合并——此时新对话由 OpenCode
+        // 原样保留在 checkpoint 的 recent 里，合并只处理块，不会丢内容。
+        // 有真实消息时走下面的 T1：先总结新内容，phase 留到下一次压缩再合并。
+        if (state.phase !== undefined && olderMessages(event.messages).length === 0) {
           const result = await distillOnce({
             ctx,
             sessionID: event.sessionID,

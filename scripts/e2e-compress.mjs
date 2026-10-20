@@ -446,6 +446,30 @@ try {
   const messagesFor = async (sessionID) =>
     api("GET", `/api/session/${sessionID}/message?limit=200`)
 
+  /**
+   * 输入：sessionID + 判定函数 + 标签。
+   * 输出：满足判定时的插件 state。
+   * 预期：每 100ms 重读一次 state，最多等 30s；超时抛出带最后状态的错误，不静默通过。
+   */
+  const waitForState = async (sessionID, predicate, label) => {
+    const deadline = Date.now() + 30_000
+    for (;;) {
+      const state = stateFor(sessionID)
+      if (predicate(state)) return state
+      if (Date.now() > deadline) {
+        const snapshot = {
+          phase: state?.phase,
+          blocks: state?.blocks?.map((block) => `${block.id}:T${block.tier}`),
+          pending: state?.pending?.id,
+          attempts: state?.attempts,
+          lastError: state?.lastError,
+        }
+        throw new Error(`timed out waiting for ${label}: ${JSON.stringify(snapshot)}`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+
   const session = await api("POST", "/api/session", {
     title: "e2e",
     model: { providerID: "fake", id: "fake" },
@@ -767,10 +791,11 @@ try {
   assert.equal(stateChild?.blocks?.[0]?.sourceBlockIds, undefined)
   console.log("case passed: parent/child compression history isolated")
 
-  // case: T2 phase 自动调度（预算驱动的多轮蒸馏入口）
-  // 验证到 E2E 能确定性覆盖的部分：降预算后 T1 完成挂上 phase=t2 且不残留错误。
-  // T2→T3 链式合并本身依赖 enqueueNext 与 OpenCode drain 的时序，单测已覆盖
-  // nextPhase=t3 及 tier 单调性（test/compression.test.ts），E2E 不做时序竞态断言。
+  // case: T2→T3 链（预算驱动的多轮蒸馏）
+  // 前三轮高预算只产 T1；降预算后第 4 个 T1 挂 phase=t2。
+  // 下一次模型请求由 context 钩子入队 compaction，钩子在 older 只有 checkpoint 时合并一对：
+  // T2 合并后仍超预算挂 phase=t3，再下一次请求触发 T3，T3 封顶（不再排 T4）。
+  // 每层只合一对，active 链 tier 单调不增。
   mode = "t3-chain"
   setSettings(50_000)
   const t3Session = await newSession("e2e-t3-chain")
@@ -805,6 +830,41 @@ try {
   assert.equal(t3State?.attempts, 0, "no failed attempts may linger")
   assert.equal(t3State?.lastError, undefined, "no compression error may linger")
   console.log("case passed: low budget schedules T2 phase after T1")
+
+  // 下一次模型请求触发 T2：context 钩子看到 phase 就入队 compaction，
+  // 该步结束后 OpenCode 投递它，钩子在 older 只有 checkpoint 时合并一对。
+  await promptSession(t3Session, "continue")
+  t3State = await waitForState(
+    t3Session,
+    (state) => state?.phase === "t3" && (state?.blocks ?? []).some((block) => block.tier === 2),
+    "T2 merge after next model request",
+  )
+  const t2Blocks = t3State.blocks.filter((block) => block.tier === 2)
+  assert.equal(t3State.pending, undefined, "T2 pending must be committed before T3")
+  assert.equal(t3State.blocks.length, 5, "T2 merges exactly one pair")
+  assert.equal(t2Blocks.length, 1, "T2 produces exactly one merged block")
+  assert.equal(t2Blocks[0]?.sourceBlockIds?.length, 2, "T2 block merges two T1 sources")
+  console.log("case passed: T2 merge runs on the next model request")
+
+  // 再下一次模型请求触发 T3；T3 封顶，phase 必须消失。
+  await promptSession(t3Session, "continue")
+  t3State = await waitForState(
+    t3Session,
+    (state) => state?.phase === undefined && (state?.blocks ?? []).some((block) => block.tier === 3),
+    "T3 merge after next model request",
+  )
+  const t3Blocks = t3State.blocks.filter((block) => block.tier === 3)
+  assert.equal(t3State.pending, undefined, "T3 pending must be committed")
+  assert.equal(t3State.blocks.length, 6, "T3 merges exactly one pair")
+  assert.equal(t3Blocks.length, 1, "T3 produces exactly one merged block")
+  assert.equal(t3Blocks[0]?.sourceBlockIds?.length, 2, "T3 block merges the T2 block with a T1 block")
+  const consumed = new Set(t3State.blocks.flatMap((block) => block.sourceBlockIds ?? []))
+  const activeTiers = t3State.blocks
+    .filter((block) => !consumed.has(block.id))
+    .sort((left, right) => left.order - right.order)
+    .map((block) => block.tier)
+  assert.deepEqual(activeTiers, [3, 1], "active chain must stay tier-monotonic after T3")
+  console.log("case passed: T3 merge runs on the next model request and stops the chain")
 
   // case: 缓存指令只追加在尾部，不重发 transcript
   mode = "normal"

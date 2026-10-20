@@ -717,34 +717,55 @@ describe("自动压缩", () => {
     expect(compacts).toBe(0)
   })
 
-  it("pending 或 phase 非空时不再入队", async () => {
-    for (const initial of [
-      withPending({ v: 1, blocks: [], attempts: 0 }, block),
-      withPhase({ v: 1, blocks: [], attempts: 0 }, "t2"),
-    ]) {
-      const storage = memoryStorage({
-        [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
-        [stateKey("ses_test")]: initial,
-      })
-      let compacts = 0
-      const ctx = fakeCtx(
-        storage,
-        () => Promise.resolve({ text: JSON.stringify(summary) }),
-        () => {
-          compacts += 1
-          return Promise.resolve()
-        },
-      )
-      await maybeAutoCompress({
-        ctx,
-        sessionID: "ses_test",
-        messages: autoMessages(),
-        system: [],
-        tools: {},
-        model: { providerID: "test", id: "test" },
-      })
-      expect(compacts).toBe(0)
-    }
+  it("pending 非空时不再入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+      [stateKey("ses_test")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("phase 非空时下一次模型请求入队合并，不等阈值", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+      [stateKey("ses_test")]: withPhase({ v: 1, blocks: [], attempts: 0 }, "t2"),
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    // 消息量远低于阈值，但已排下一层蒸馏时必须入队，否则合并永远等不到。
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: [{ id: "m1", role: "user", content: [{ type: "text", text: "hi" }] }],
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
   })
 
   it("模型窗口未知时不自动入队", async () => {

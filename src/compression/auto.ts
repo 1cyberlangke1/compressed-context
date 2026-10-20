@@ -99,8 +99,15 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (isCompressionInstruction(input.messages)) return
 
     const state = await loadState(input.ctx.storage, input.sessionID)
-    if (state.pending || state.phase !== undefined) return
+    if (state.pending) return
     if (state.attempts >= MAX_ATTEMPTS) return
+
+    // 已排下一层蒸馏：下一次模型请求就入队 compaction，由 compaction 钩子合并。
+    // 不能在 T1 刚结束时入队——那时历史里只剩 checkpoint，OpenCode 会拒绝压缩。
+    if (state.phase !== undefined) {
+      await input.ctx.session.compact({ sessionID: input.sessionID })
+      return
+    }
 
     const settings = await loadServerSettings(input.ctx.storage)
     const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit)

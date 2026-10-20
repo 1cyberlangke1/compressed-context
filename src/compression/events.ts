@@ -105,9 +105,8 @@ export async function handleCompactionEvent(
 
   const detail = eventError ?? state.lastError ?? "compaction failed"
   // 钩子从未运行的失败（state 里没有任何本层错误记录）且已排下一层 phase：
-  // 典型是 enqueueNext 入队的空压缩——历史只剩 checkpoint，OpenCode 在钩子前就
-  // 判定无可压缩内容。T2/T3 合并不需要新消息，这不是本层失败，保留 phase 等
-  // 下一次带真实消息的压缩，不计 attempts。
+  // 典型是历史里只剩 checkpoint，OpenCode 在钩子前就判定无可压缩内容。
+  // 这不是本层失败，保留 phase 等下一次带真实消息的压缩，不计 attempts。
   if (eventError !== undefined && state.lastError === undefined && state.phase !== undefined) {
     await saveState(ctx.storage, sessionID, { ...state, attempts: 0 })
     return
@@ -126,27 +125,19 @@ export async function handleCompactionEvent(
 }
 
 /**
- * 输入：服务端上下文 + 可选的成功回调。
+ * 输入：服务端上下文。
  * 输出：订阅 compaction.ended / compaction.failed，并返回取消函数。
- * 预期：成功时 pending 转正并回调；失败时丢弃 pending。
+ * 预期：成功时 pending 转正；失败时按错误类型重试或丢弃。
  */
-export function startCompactionEvents(
-  ctx: Plugin.Context,
-  onCommitted?: (sessionID: string) => void,
-): () => void {
+export function startCompactionEvents(ctx: Plugin.Context): () => void {
   const controller = new AbortController()
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         if (
           event.type !== "session.compaction.ended" &&
-          event.type !== "session.compaction.failed" &&
-          event.type !== "session.idle"
+          event.type !== "session.compaction.failed"
         ) {
-          continue
-        }
-        if (event.type === "session.idle") {
-          onCommitted?.(event.data.sessionID)
           continue
         }
         const type: CompactionEventType = event.type === "session.compaction.ended" ? "ended" : "failed"
@@ -157,7 +148,6 @@ export function startCompactionEvents(
             ? ((event.data as { error?: { message?: string } }).error?.message ?? "compaction failed")
             : undefined
         await handleCompactionEvent(ctx, type, sessionID, failure)
-        if (type === "ended") onCommitted?.(sessionID)
       }
     } catch {
       // aborted or disconnected; reconciliation on next startup covers it
