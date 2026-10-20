@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { hitRateColor, renderBrailleChart, type ChartCell } from "../src/tui/cache-chart.ts"
+import { hitRateColor, renderBrailleChart, chartAxis, xAxisLabels, type ChartCell } from "../src/tui/cache-chart.ts"
 
 const COLORS = {
   success: "#00ff00",
@@ -95,5 +95,37 @@ describe("renderBrailleChart", () => {
         }
       }
     }
+  })
+
+  it("网格行在没有折线点时显示 ·", () => {
+    const rows = renderBrailleChart([0, 0], 10, 3, () => "#123456", [1], "#abc")
+    for (const cell of rows[1] ?? []) {
+      expect(cell.char).toBe("·")
+      expect(cell.color).toBe("#abc")
+    }
+    // 底行是折线，不是网格。
+    expect(rows[2]?.some((cell) => cell.char !== "·")).toBe(true)
+  })
+})
+
+describe("chartAxis", () => {
+  it("8 行给出 100/75/50/25/0 五个刻度", () => {
+    const axis = chartAxis(8)
+    expect(axis.labels.map((label) => label.text)).toEqual(["100%", " 75%", " 50%", " 25%", "  0%"])
+    expect(axis.labels.map((label) => label.row)).toEqual([0, 2, 4, 5, 7])
+    expect(axis.gridRows).toEqual([2, 4, 5])
+  })
+})
+
+describe("xAxisLabels", () => {
+  it("10 个点标 1..10", () => {
+    const labels = xAxisLabels(10, 28)
+    expect(labels).toHaveLength(28)
+    expect(labels.charAt(0)).toBe("1")
+    expect(labels.slice(26)).toBe("10")
+  })
+
+  it("没有样本时全空格", () => {
+    expect(xAxisLabels(0, 10)).toBe("          ")
   })
 })

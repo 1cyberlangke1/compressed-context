@@ -1,8 +1,8 @@
 import { mix, toHex, toRgb, type Rgb } from "./color.ts"
 
-/** 侧栏里折线图的默认尺寸：26 列 × 5 行（点阵 52 × 20）。 */
-export const CHART_WIDTH = 26
-export const CHART_HEIGHT = 5
+/** 侧栏里折线图的默认尺寸：28 列 × 8 行（点阵 56 × 32）。 */
+export const CHART_WIDTH = 28
+export const CHART_HEIGHT = 8
 
 /** 一个字符格：Braille 字符或空占位；空格的 color 为空串。 */
 export interface ChartCell {
@@ -30,6 +30,66 @@ const BRAILLE_BITS = [
 
 /** 空 cell 用不换行空格，防止 TUI 把连续空格吞掉。 */
 const EMPTY_CELL = "\u00A0"
+
+/** 网格线字符；只在没有折线点的 cell 上显示。 */
+const GRID_CELL = "·"
+
+/** 一条 y 轴刻度：行号 + 文本（`100%` / ` 75%` …）。 */
+export interface ChartAxisLabel {
+  readonly row: number
+  readonly text: string
+}
+
+/**
+ * 输入：图表高度（行）。
+ * 输出：100/75/50/25/0 五个刻度的行号与文本，以及 75/50/25 的网格行。
+ * 预期：刻度行按点阵 y 映射换算，行号落在实际折线附近。
+ */
+export function chartAxis(height: number): {
+  readonly labels: readonly ChartAxisLabel[]
+  readonly gridRows: readonly number[]
+} {
+  const rows = Math.max(1, Math.floor(height))
+  const dotHeight = rows * 4
+  const values = [100, 75, 50, 25, 0] as const
+  const seen = new Set<number>()
+  const labels: ChartAxisLabel[] = []
+  for (const value of values) {
+    const row = Math.min(
+      rows - 1,
+      Math.floor(Math.round((1 - value / 100) * (dotHeight - 1)) / 4),
+    )
+    if (seen.has(row)) continue
+    seen.add(row)
+    labels.push({ row, text: `${value.toString().padStart(3, " ")}%` })
+  }
+  return {
+    labels,
+    gridRows: labels.filter((label) => label.text !== "100%" && label.text !== "  0%").map((label) => label.row),
+  }
+}
+
+/**
+ * 输入：样本数 + 绘图区宽度。
+ * 输出：长度等于宽度的 x 轴标签行；每个点标 `1`…`n`。
+ * 预期：标签居中在点的列上；宽度不够时后面的标签会覆盖前面的，属于可接受降级。
+ */
+export function xAxisLabels(count: number, width: number): string {
+  const columns = Math.max(1, Math.floor(width))
+  const chars = Array.from({ length: columns }, () => " ")
+  if (count <= 0) return chars.join("")
+  for (let index = 0; index < count; index += 1) {
+    const label = (index + 1).toString()
+    const position =
+      count === 1 ? Math.floor((columns - 1) / 2) : Math.round((index * (columns - 1)) / (count - 1))
+    const start = Math.min(columns - label.length, Math.max(0, position - Math.floor(label.length / 2)))
+    for (let offset = 0; offset < label.length; offset += 1) {
+      const target = start + offset
+      if (target >= 0 && target < columns) chars[target] = label.charAt(offset)
+    }
+  }
+  return chars.join("")
+}
 
 /** 输入：任意百分比；输出：夹在 0..100 的有限值。 */
 function clampPercent(value: number): number {
@@ -112,6 +172,8 @@ export function renderBrailleChart(
   width: number = CHART_WIDTH,
   height: number = CHART_HEIGHT,
   color: (pct: number) => string = () => "",
+  gridRows: readonly number[] = [],
+  gridColor = "",
 ): readonly (readonly ChartCell[])[] {
   if (values.length === 0) return []
   const columns = Math.max(1, Math.floor(width))
@@ -154,9 +216,10 @@ export function renderBrailleChart(
         }
       }
       const pct = valueAtColumn(column, columns, values)
+      const grid = bits === 0 && gridRows.includes(row)
       cells.push({
-        char: bits === 0 ? EMPTY_CELL : String.fromCharCode(0x2800 + bits),
-        color: bits === 0 ? "" : color(pct),
+        char: bits === 0 ? (grid ? GRID_CELL : EMPTY_CELL) : String.fromCharCode(0x2800 + bits),
+        color: bits === 0 ? (grid ? gridColor : "") : color(pct),
       })
     }
     result.push(cells)

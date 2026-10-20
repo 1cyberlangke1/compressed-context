@@ -9,7 +9,15 @@ import { resolveMessages } from "../i18n/index.ts"
 import { ContextRpc } from "../rpc.ts"
 import { effectiveLimit, localeArgument, type Settings } from "../settings.ts"
 import { parseStats, scaleCategories, STATS_KEY, TERMINAL_KEY, type ContextStats } from "../stats.ts"
-import { CHART_HEIGHT, CHART_WIDTH, hitRateColor, renderBrailleChart, type ChartCell } from "./cache-chart.ts"
+import {
+  CHART_HEIGHT,
+  CHART_WIDTH,
+  chartAxis,
+  hitRateColor,
+  renderBrailleChart,
+  xAxisLabels,
+  type ChartCell,
+} from "./cache-chart.ts"
 import { mix, toHex, toRgb, type Rgb } from "./color.ts"
 import type { UpdateSettings } from "./types.ts"
 
@@ -128,6 +136,7 @@ export function Panel(props: {
   }))
 
   const latestHit = createMemo(() => cache().at(-1)?.hitRate)
+  const axis = chartAxis(CHART_HEIGHT)
   const chartRows = createMemo(() => {
     const samples = cache()
     if (samples.length === 0) return []
@@ -136,6 +145,8 @@ export function Panel(props: {
       CHART_WIDTH,
       CHART_HEIGHT,
       (pct) => hitRateColor(pct, chartColors()),
+      axis.gridRows,
+      themeHex(theme.text.muted, [128, 128, 128]),
     )
   })
 
@@ -316,7 +327,26 @@ export function Panel(props: {
                           when={chartRows().length > 0}
                           fallback={<text fg={theme.text.muted}>{copy().noData}</text>}
                         >
-                          <For each={chartRows()}>{(row) => <text>{chartLine(row)}</text>}</For>
+                          <For each={chartRows()}>
+                            {(row, index) => {
+                              const label =
+                                axis.labels.find((item) => item.row === index())?.text ?? "    "
+                              const corner = index() === CHART_HEIGHT - 1
+                              return (
+                                <box flexDirection="row" height={1}>
+                                  <text fg={theme.text.muted}>{`${label} `}</text>
+                                  <text fg={theme.text.muted}>{corner ? "└" : "┤"}</text>
+                                  <text>{chartLine(row)}</text>
+                                </box>
+                              )
+                            }}
+                          </For>
+                          <text fg={theme.text.muted}>
+                            {`${" ".repeat(5)}└${"─".repeat(CHART_WIDTH)}`}
+                          </text>
+                          <text fg={theme.text.muted}>
+                            {`${" ".repeat(6)}${xAxisLabels(cache().length, CHART_WIDTH)}`}
+                          </text>
                         </Show>
                       </Show>
                     </box>
