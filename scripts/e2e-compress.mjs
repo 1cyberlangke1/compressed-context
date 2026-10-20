@@ -251,8 +251,10 @@ function fakeText(body) {
   }
   if (lastUser.includes("checkpoint at the top of the conversation contains summary blocks")) {
     console.log("fake: T2 instruction")
-    // t3-chain 模式：合并摘要保持巨大（6000 CJK ≈ 6000 token），逼出 T2→T3 连续合并
-    const bigFact = mode === "t3-chain" ? "中".repeat(6_000) : "t2 fact"
+    // t3-chain 模式：合并摘要保持巨大（6000 CJK ≈ 6000 token），逼出 T2→T3 连续合并；
+    // long-session 模式：3000 CJK ≈ 3000 token，模拟真实会话里「合并后明显变小」的情况。
+    const bigFact =
+      mode === "t3-chain" ? "中".repeat(6_000) : mode === "long-session" ? "中".repeat(3_000) : "t2 fact"
     return JSON.stringify({
       candidate: 1,
       title: "E2E T2",
@@ -865,6 +867,44 @@ try {
     .map((block) => block.tier)
   assert.deepEqual(activeTiers, [3, 1], "active chain must stay tier-monotonic after T3")
   console.log("case passed: T3 merge runs on the next model request and stops the chain")
+
+  // case: 长会话压测（大窗口 + 多轮，模拟真实尺寸）
+  // 每轮：长消息 + continue → 手动 compact 产 T1 → 再发一条触发下一次模型请求；
+  // 若 T1 后超预算，context 钩子入队合并。验证多轮后链收敛、tier 单调、无残留错误。
+  mode = "long-session"
+  setSettings(10_000, 200_000, 80)
+  const longSession = await newSession("e2e-long-session")
+  const longTurns = 6
+  for (let turn = 0; turn < longTurns; turn += 1) {
+    await promptSession(longSession, longText)
+    await promptSession(longSession, "continue")
+    await api("POST", `/api/session/${longSession}/compact`, {})
+    await waitSession(longSession)
+    await promptSession(longSession, "continue")
+  }
+  const longState = stateFor(longSession)
+  const longBlocks = longState?.blocks ?? []
+  const longMerged = longBlocks.filter((block) => (block.sourceBlockIds ?? []).length > 0)
+  const longConsumed = new Set(longBlocks.flatMap((block) => block.sourceBlockIds ?? []))
+  const longActive = longBlocks
+    .filter((block) => !longConsumed.has(block.id))
+    .sort((left, right) => left.order - right.order)
+  console.log(
+    "long session blocks:",
+    longBlocks.map((block) => `${block.id}:T${block.tier}:${(block.sourceBlockIds ?? []).join("+")}`).join(" "),
+    "active:",
+    longActive.map((block) => `${block.id}:T${block.tier}`).join(" "),
+    "phase:",
+    longState?.phase,
+  )
+  assert.equal(longBlocks.length, longTurns * 2 - 1, "6 turns must produce 6 T1 + 5 merged blocks")
+  assert.ok(longMerged.length >= 4, "long session must merge multiple pairs")
+  assert.equal(longActive.length, 1, "merged chain must collapse to a single active block")
+  assert.equal(longActive[0]?.tier, 3, "repeated merges must reach tier 3")
+  assert.equal(longState?.phase, undefined, "chain must be under budget after the last merge")
+  assert.equal(longState?.attempts, 0, "no failed attempts may linger")
+  assert.equal(longState?.lastError, undefined, "no compression error may linger")
+  console.log("case passed: long session converges to one T3 block")
 
   // case: 缓存指令只追加在尾部，不重发 transcript
   mode = "normal"
