@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 
 import { markCompactionInFlight, maybeAutoCompress, resolveLimit } from "./compression/auto.ts"
+import { startCacheHistoryEvents } from "./compression/cache-history.ts"
 import { distillOnce, isTerminal, planT1Phase } from "./compression/distill.ts"
 import { TERMINAL_MESSAGE, reconcileAll, startCompactionEvents } from "./compression/events.ts"
 import { activeBlocks, renderAll } from "./compression/render.ts"
@@ -54,6 +55,7 @@ export default Plugin.define({
     disposables.push(await registerDecompressTool(ctx))
     disposables.push(await registerSettingsRpc(ctx))
     const stopEvents = startCompactionEvents(ctx)
+    const stopCacheEvents = startCacheHistoryEvents(ctx)
     void reconcileAll(ctx)
 
     disposables.push(
@@ -142,7 +144,7 @@ export default Plugin.define({
           })
           await save(result.blocks, result.pending, result.nextPhase, result.error)
           event.result = { summary: result.summary }
-          // 全 T3 / 没有候选 / 仍超预算：无法再压，记录终止原因并停止自动压缩。
+          // 摘要链仍超预算且没有合法候选：无法再压，记录终止原因并停止自动压缩。
           if (isTerminal(result, activeBlocks(result.blocks, result.pending), limits.budgetTokens, limits.totalChars)) {
             await saveState(ctx.storage, event.sessionID, {
               v: 1,
@@ -250,6 +252,7 @@ export default Plugin.define({
 
     return () => {
       stopEvents()
+      stopCacheEvents()
       for (const disposable of disposables) void disposable.dispose()
     }
   },

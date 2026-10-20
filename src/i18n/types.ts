@@ -10,6 +10,15 @@ export interface Messages {
   readonly labels: Readonly<Record<CategoryKey, string>>
   readonly approximate: string
   readonly terminal: string
+  readonly cacheTitle: string
+  readonly cacheChart: string
+  readonly cacheLog: string
+  readonly cacheInput: string
+  readonly cacheOutput: string
+  readonly cacheCached: string
+  readonly cacheHit: string
+  readonly summariesTitle: string
+  readonly noData: string
   readonly command: {
     readonly title: string
     readonly description: string
@@ -42,6 +51,9 @@ export interface Messages {
     readonly enableDecompressTool: string
     readonly showTimeline: string
     readonly showBlockTokens: string
+    readonly showCacheChart: string
+    readonly showCacheLog: string
+    readonly showSummaries: string
     readonly decompressInlineMax: string
     readonly decompressInlineMaxHint: string
     readonly decompressInlineMaxInvalid: string

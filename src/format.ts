@@ -14,3 +14,10 @@ export function formatTokens(count: number): string {
   if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`
   return `${Math.round(count / 1_000_000).toString()}M`
 }
+
+/** 输入：毫秒时间戳；输出：本地时间 `YYYY/MM/DD HH:mm`；预期：固定格式，不依赖 locale。 */
+export function formatTimestamp(at: number): string {
+  const date = new Date(at)
+  const pad = (value: number): string => value.toString().padStart(2, "0")
+  return `${date.getFullYear().toString()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}

@@ -25,6 +25,14 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     enableDecompressTool: settings.enableDecompressTool,
     showTimeline: settings.showTimeline,
     showBlockTokens: settings.showBlockTokens,
+    cacheExpanded: settings.cacheExpanded,
+    showCacheChart: settings.showCacheChart,
+    cacheChartExpanded: settings.cacheChartExpanded,
+    showCacheLog: settings.showCacheLog,
+    cacheLogExpanded: settings.cacheLogExpanded,
+    showSummaries: settings.showSummaries,
+    summariesExpanded: settings.summariesExpanded,
+    ...(settings.expandedBlockId === undefined ? {} : { expandedBlockId: settings.expandedBlockId }),
     decompressInlineMax: settings.decompressInlineMax,
     decompressTempCap: settings.decompressTempCap,
     decompressShowTokens: settings.decompressShowTokens,
@@ -43,6 +51,14 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     settings.enableDecompressTool === normalized.enableDecompressTool &&
     settings.showTimeline === normalized.showTimeline &&
     settings.showBlockTokens === normalized.showBlockTokens &&
+    settings.cacheExpanded === normalized.cacheExpanded &&
+    settings.showCacheChart === normalized.showCacheChart &&
+    settings.cacheChartExpanded === normalized.cacheChartExpanded &&
+    settings.showCacheLog === normalized.showCacheLog &&
+    settings.cacheLogExpanded === normalized.cacheLogExpanded &&
+    settings.showSummaries === normalized.showSummaries &&
+    settings.summariesExpanded === normalized.summariesExpanded &&
+    settings.expandedBlockId === normalized.expandedBlockId &&
     settings.decompressInlineMax === normalized.decompressInlineMax &&
     settings.decompressTempCap === normalized.decompressTempCap &&
     settings.decompressShowTokens === normalized.decompressShowTokens

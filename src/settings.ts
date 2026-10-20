@@ -57,6 +57,15 @@ export const DEFAULT_ENABLE_DECOMPRESS_TOOL = true
 export const DEFAULT_SHOW_TIMELINE = false
 export const DEFAULT_SHOW_BLOCK_TOKENS = false
 
+/** 面板显示项；都是 TUI 本地状态，不发给服务端。 */
+export const DEFAULT_CACHE_EXPANDED = true
+export const DEFAULT_SHOW_CACHE_CHART = true
+export const DEFAULT_CACHE_CHART_EXPANDED = true
+export const DEFAULT_SHOW_CACHE_LOG = true
+export const DEFAULT_CACHE_LOG_EXPANDED = true
+export const DEFAULT_SHOW_SUMMARIES = true
+export const DEFAULT_SUMMARIES_EXPANDED = true
+
 /** decompress 返回分级与临时文件上限。 */
 export const DEFAULT_DECOMPRESS_INLINE_MAX = 10_000
 export const DEFAULT_DECOMPRESS_TEMP_CAP = 50
@@ -93,6 +102,22 @@ export interface Settings {
   showTimeline: boolean
   /** 块头显示估算 token */
   showBlockTokens: boolean
+  /** 缓存记录区是否展开 */
+  cacheExpanded: boolean
+  /** 显示缓存折线图 */
+  showCacheChart: boolean
+  /** 折线图是否展开 */
+  cacheChartExpanded: boolean
+  /** 显示缓存日志 */
+  showCacheLog: boolean
+  /** 日志是否展开 */
+  cacheLogExpanded: boolean
+  /** 显示摘要块 */
+  showSummaries: boolean
+  /** 摘要区是否展开 */
+  summariesExpanded: boolean
+  /** 当前展开的摘要块 id；undefined 表示全部收起 */
+  expandedBlockId?: string
   /** decompress 内联上限（字符） */
   decompressInlineMax: number
   /** decompress 临时文件上限 */
@@ -115,6 +140,13 @@ export const DEFAULT_SETTINGS: Settings = {
   enableDecompressTool: DEFAULT_ENABLE_DECOMPRESS_TOOL,
   showTimeline: DEFAULT_SHOW_TIMELINE,
   showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
+  cacheExpanded: DEFAULT_CACHE_EXPANDED,
+  showCacheChart: DEFAULT_SHOW_CACHE_CHART,
+  cacheChartExpanded: DEFAULT_CACHE_CHART_EXPANDED,
+  showCacheLog: DEFAULT_SHOW_CACHE_LOG,
+  cacheLogExpanded: DEFAULT_CACHE_LOG_EXPANDED,
+  showSummaries: DEFAULT_SHOW_SUMMARIES,
+  summariesExpanded: DEFAULT_SUMMARIES_EXPANDED,
   decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
   decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
   decompressShowTokens: DEFAULT_DECOMPRESS_SHOW_TOKENS,
@@ -262,6 +294,19 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
       typeof value["enableDecompressTool"] === "boolean" ? value["enableDecompressTool"] : DEFAULT_ENABLE_DECOMPRESS_TOOL,
     showTimeline: typeof value["showTimeline"] === "boolean" ? value["showTimeline"] : DEFAULT_SHOW_TIMELINE,
     showBlockTokens: typeof value["showBlockTokens"] === "boolean" ? value["showBlockTokens"] : DEFAULT_SHOW_BLOCK_TOKENS,
+    cacheExpanded: typeof value["cacheExpanded"] === "boolean" ? value["cacheExpanded"] : DEFAULT_CACHE_EXPANDED,
+    showCacheChart: typeof value["showCacheChart"] === "boolean" ? value["showCacheChart"] : DEFAULT_SHOW_CACHE_CHART,
+    cacheChartExpanded:
+      typeof value["cacheChartExpanded"] === "boolean" ? value["cacheChartExpanded"] : DEFAULT_CACHE_CHART_EXPANDED,
+    showCacheLog: typeof value["showCacheLog"] === "boolean" ? value["showCacheLog"] : DEFAULT_SHOW_CACHE_LOG,
+    cacheLogExpanded:
+      typeof value["cacheLogExpanded"] === "boolean" ? value["cacheLogExpanded"] : DEFAULT_CACHE_LOG_EXPANDED,
+    showSummaries: typeof value["showSummaries"] === "boolean" ? value["showSummaries"] : DEFAULT_SHOW_SUMMARIES,
+    summariesExpanded:
+      typeof value["summariesExpanded"] === "boolean" ? value["summariesExpanded"] : DEFAULT_SUMMARIES_EXPANDED,
+    ...(typeof value["expandedBlockId"] === "string" && value["expandedBlockId"].length > 0
+      ? { expandedBlockId: value["expandedBlockId"] }
+      : {}),
     decompressInlineMax: readInt(
       value["decompressInlineMax"],
       MIN_DECOMPRESS_INLINE_MAX,

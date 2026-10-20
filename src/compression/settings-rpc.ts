@@ -1,6 +1,10 @@
 import type { Plugin } from "@opencode/plugin"
 
+import type { SummaryBlock } from "../blocks.ts"
 import { ContextRpc } from "../rpc.ts"
+import { loadCacheHistory, recordCacheHistory } from "./cache-history.ts"
+import { activeBlocks, renderSummary } from "./render.ts"
+import { loadState } from "./state.ts"
 import {
   RESOLVED_WINDOW_KEY,
   loadServerSettings,
@@ -16,8 +20,9 @@ export interface Disposable {
 
 /**
  * 输入：服务端插件上下文。
- * 输出：注册 settingsGet / settingsSet，并返回注销句柄。
- * 预期：TUI 推来的设置存进 ctx.storage；非法值返回 ok:false；读取时带上最近解析到的原生窗口。
+ * 输出：注册 settingsGet / settingsSet / blocksGet / cacheHistoryGet，并返回注销句柄。
+ * 预期：TUI 推来的设置存进 ctx.storage；非法值返回 ok:false；读取时带上最近解析到的原生窗口；
+ *       blocksGet 只返回 active 链，cacheHistoryGet 读取前先补写当前上下文。
  */
 export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposable> {
   return ctx.rpc.register(ContextRpc, {
@@ -66,6 +71,29 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
       if (!parsed) return { ok: false }
       await saveServerSettings(ctx.storage, parsed)
       return { ok: true }
+    },
+    blocksGet: async (input) => {
+      const sessionID = (input as { readonly sessionID: string }).sessionID
+      const state = await loadState(ctx.storage, sessionID)
+      // 只返回模型实际看到的 active 链；被合并掉的源块不展示。
+      const blocks: SummaryBlock[] = activeBlocks(state.blocks, state.pending).map((block) => ({
+        id: block.id,
+        tier: block.tier,
+        title: block.summary.title,
+        at: block.at,
+        tokensBefore: block.tokensBefore,
+        tokensAfter: block.tokensAfter,
+        ...(block.sourceBlockIds === undefined ? {} : { sourceBlockIds: [...block.sourceBlockIds] }),
+        body: renderSummary(block.summary),
+      }))
+      return { blocks }
+    },
+    cacheHistoryGet: async (input) => {
+      const sessionID = (input as { readonly sessionID: string }).sessionID
+      // 读取前先补写一次，避免 TUI 和 idle 事件抢时序导致少一条。
+      await recordCacheHistory(ctx, sessionID)
+      const history = await loadCacheHistory(ctx.storage, sessionID)
+      return { samples: history.samples }
     },
   })
 }

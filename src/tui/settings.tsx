@@ -533,6 +533,9 @@ export function SettingsCommand(props: {
       | "enableDecompressTool"
       | "showTimeline"
       | "showBlockTokens"
+      | "showCacheChart"
+      | "showCacheLog"
+      | "showSummaries"
       | "decompressShowTokens",
   ): Promise<void> => {
     await props.updateSettings((draft) => {
@@ -663,6 +666,21 @@ export function SettingsCommand(props: {
           footer: props.settings.showBlockTokens ? copy().settings.on : copy().settings.off,
         },
         {
+          title: copy().settings.showCacheChart,
+          value: "showCacheChart",
+          footer: props.settings.showCacheChart ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.showCacheLog,
+          value: "showCacheLog",
+          footer: props.settings.showCacheLog ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.showSummaries,
+          value: "showSummaries",
+          footer: props.settings.showSummaries ? copy().settings.on : copy().settings.off,
+        },
+        {
           title: copy().settings.decompressInlineMax,
           value: "decompressInlineMax",
           footer: formatTokens(effectiveDecompressInlineMax(props.settings)),
@@ -717,6 +735,9 @@ export function SettingsCommand(props: {
       picked === "enableDecompressTool" ||
       picked === "showTimeline" ||
       picked === "showBlockTokens" ||
+      picked === "showCacheChart" ||
+      picked === "showCacheLog" ||
+      picked === "showSummaries" ||
       picked === "decompressShowTokens"
     ) {
       await toggleSetting(picked)

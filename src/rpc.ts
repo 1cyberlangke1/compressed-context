@@ -49,12 +49,68 @@ const OkJson = {
   additionalProperties: false,
 } as const
 
-/** TUI 与服务端共用的设置 RPC。 */
+/** 需要明确指定会话的只读查询。 */
+const SessionInputJson = {
+  type: "object",
+  properties: { sessionID: { type: "string" } },
+  required: ["sessionID"],
+  additionalProperties: false,
+} as const
+
+/** 摘要块：服务端返回 active 链，body 是渲染好的 markdown。 */
+const BlockJson = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    tier: { type: "number", enum: [1, 2, 3] },
+    title: { type: "string" },
+    at: { type: "number" },
+    tokensBefore: { type: "number" },
+    tokensAfter: { type: "number" },
+    sourceBlockIds: { type: "array", items: { type: "string" } },
+    body: { type: "string" },
+  },
+  required: ["id", "tier", "title", "at", "tokensBefore", "tokensAfter", "body"],
+  additionalProperties: false,
+} as const
+
+const BlocksOutputJson = {
+  type: "object",
+  properties: { blocks: { type: "array", items: BlockJson } },
+  required: ["blocks"],
+  additionalProperties: false,
+} as const
+
+/** 一条缓存命中样本。 */
+const CacheSampleJson = {
+  type: "object",
+  properties: {
+    messageID: { type: "string" },
+    at: { type: "number" },
+    input: { type: "number" },
+    output: { type: "number" },
+    cached: { type: "number" },
+    hitRate: { type: "number" },
+  },
+  required: ["messageID", "at", "input", "output", "cached", "hitRate"],
+  additionalProperties: false,
+} as const
+
+const CacheHistoryOutputJson = {
+  type: "object",
+  properties: { samples: { type: "array", items: CacheSampleJson } },
+  required: ["samples"],
+  additionalProperties: false,
+} as const
+
+/** TUI 与服务端共用的设置 / 面板 RPC。 */
 export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
   id: "compressed-context",
   methods: {
     settingsGet: { input: SettingsGetInputJson, output: SettingsOutputJson },
     settingsSet: { input: SettingsInputJson, output: OkJson },
+    blocksGet: { input: SessionInputJson, output: BlocksOutputJson },
+    cacheHistoryGet: { input: SessionInputJson, output: CacheHistoryOutputJson },
   },
   events: {},
 })

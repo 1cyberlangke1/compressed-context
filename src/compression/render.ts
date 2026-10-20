@@ -1,5 +1,6 @@
 import type { Block } from "./state.ts"
 import type { SummaryFields } from "./schema.ts"
+import { formatTimestamp } from "../format.ts"
 import { countText } from "../tokens.ts"
 
 /** 输入：块 id；输出：块头标记；预期：用于渲染和对账。 */
@@ -15,9 +16,7 @@ export interface RenderOptions {
 
 /** 输入：时间戳；输出：本地时间 `YYYY/MM/DD HH:mm`；预期：固定格式，不依赖 locale。 */
 function formatTime(at: number): string {
-  const date = new Date(at)
-  const pad = (value: number): string => value.toString().padStart(2, "0")
-  return `${date.getFullYear().toString()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return formatTimestamp(at)
 }
 
 function bullets(items: readonly string[]): string {

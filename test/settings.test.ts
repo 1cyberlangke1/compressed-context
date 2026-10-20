@@ -40,6 +40,13 @@ describe("initialSettings / normalizeSettings", () => {
       enableDecompressTool: true,
       showTimeline: false,
       showBlockTokens: false,
+      cacheExpanded: true,
+      showCacheChart: true,
+      cacheChartExpanded: true,
+      showCacheLog: true,
+      cacheLogExpanded: true,
+      showSummaries: true,
+      summariesExpanded: true,
       decompressInlineMax: 10_000,
       decompressTempCap: 50,
       decompressShowTokens: true,
@@ -150,6 +157,31 @@ describe("initialSettings / normalizeSettings", () => {
     expect(initialSettings({ decompressTempCap: 2_000 }).decompressTempCap).toBe(50)
     expect(effectiveDecompressInlineMax({ decompressInlineMax: Number.NaN })).toBe(10_000)
     expect(effectiveDecompressTempCap({ decompressTempCap: 0 })).toBe(50)
+  })
+
+  it("面板显示项可配置，非法值回退", () => {
+    const settings = initialSettings({
+      cacheExpanded: false,
+      showCacheChart: false,
+      cacheChartExpanded: false,
+      showCacheLog: false,
+      cacheLogExpanded: false,
+      showSummaries: false,
+      summariesExpanded: false,
+      expandedBlockId: "b2",
+    })
+    expect(settings.cacheExpanded).toBe(false)
+    expect(settings.showCacheChart).toBe(false)
+    expect(settings.cacheChartExpanded).toBe(false)
+    expect(settings.showCacheLog).toBe(false)
+    expect(settings.cacheLogExpanded).toBe(false)
+    expect(settings.showSummaries).toBe(false)
+    expect(settings.summariesExpanded).toBe(false)
+    expect(settings.expandedBlockId).toBe("b2")
+
+    expect(initialSettings({ showCacheChart: "no" }).showCacheChart).toBe(true)
+    expect(initialSettings({ expandedBlockId: 1 }).expandedBlockId).toBeUndefined()
+    expect(initialSettings({ expandedBlockId: "" }).expandedBlockId).toBeUndefined()
   })
 })
 
