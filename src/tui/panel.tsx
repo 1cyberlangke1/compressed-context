@@ -194,14 +194,14 @@ export function Panel(props: {
             <text fg={theme.text.muted}>{`${(percent() ?? 0).toString()}%`}</text>
           </Show>
         </box>
+        <Show when={terminal()}>
+          {(message) => (
+            <text fg={theme.text.feedback.error.base} wrapMode="word">
+              {`⚠ ${message()}`}
+            </text>
+          )}
+        </Show>
         <Show when={props.settings.expanded}>
-          <Show when={terminal()}>
-            {(message) => (
-              <text fg={theme.text.feedback.error.base} wrapMode="word">
-                {`⚠ ${message()}`}
-              </text>
-            )}
-          </Show>
           <For each={rows()}>
             {(row) => (
               <box flexDirection="row" height={1} gap={1}>
