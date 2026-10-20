@@ -1,8 +1,8 @@
 import { Plugin } from "@opencode/plugin"
 
 import { markCompactionInFlight, maybeAutoCompress, resolveLimit } from "./compression/auto.ts"
-import { distillOnce, planT1Phase } from "./compression/distill.ts"
-import { reconcileAll, startCompactionEvents } from "./compression/events.ts"
+import { distillOnce, isTerminal, planT1Phase } from "./compression/distill.ts"
+import { TERMINAL_MESSAGE, reconcileAll, startCompactionEvents } from "./compression/events.ts"
 import { activeBlocks, renderAll } from "./compression/render.ts"
 import { eligibleMessages, olderMessages, type MessageLike } from "./compression/select.ts"
 import { loadServerSettings } from "./compression/settings.ts"
@@ -26,7 +26,7 @@ import { registerCompressTool } from "./compression/tool.ts"
 import { registerDecompressTool } from "./compression/decompress-tool.ts"
 import { buildTranscript } from "./compression/transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./compression/validate.ts"
-import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./stats.ts"
+import { createStats, mergeMetadata, mergeTerminalMetadata, shouldPublish, type ContextStats } from "./stats.ts"
 import { estimateCategories } from "./tokens.ts"
 
 export default Plugin.define({
@@ -90,10 +90,15 @@ export default Plugin.define({
         markCompactionInFlight(event.sessionID, true)
         try {
         const state = await loadState(ctx.storage, event.sessionID)
+        if (state.terminal !== undefined) throw new Error(state.terminal)
         const settings = await loadServerSettings(ctx.storage)
         // auto 窗口在运行时解析后钳制摘要上限；数字窗口已在保存时校验，这里统一再钳一次。
         const windowTokens = await resolveLimit(ctx, event.model, settings.contextLimit)
         const limits = resolveSummaryLimits(settings, windowTokens)
+        const renderOptions = {
+          showTimeline: settings.showTimeline,
+          showBlockTokens: settings.showBlockTokens,
+        }
 
         /** 保存这一层的结果；pending 可选，phase 由下一层决定。 */
         const save = async (
@@ -132,9 +137,31 @@ export default Plugin.define({
             summaryTotalChars: limits.totalChars,
             summaryLanguage: settings.summaryLanguage,
             phase: state.phase,
+            showTimeline: settings.showTimeline,
+            showBlockTokens: settings.showBlockTokens,
           })
           await save(result.blocks, result.pending, result.nextPhase, result.error)
           event.result = { summary: result.summary }
+          // 全 T3 / 没有候选 / 仍超预算：无法再压，记录终止原因并停止自动压缩。
+          if (isTerminal(result, activeBlocks(result.blocks, result.pending), limits.budgetTokens, limits.totalChars)) {
+            await saveState(ctx.storage, event.sessionID, {
+              v: 1,
+              blocks: result.blocks,
+              attempts: 0,
+              lastError: TERMINAL_MESSAGE,
+              terminal: TERMINAL_MESSAGE,
+            })
+            // 让 TUI 面板能显示终止原因；写失败不影响压缩状态。
+            try {
+              const session = await ctx.session.get({ sessionID: event.sessionID })
+              await ctx.session.update({
+                sessionID: event.sessionID,
+                metadata: mergeTerminalMetadata(session.metadata, TERMINAL_MESSAGE),
+              })
+            } catch {
+              // best effort
+            }
+          }
           return
         }
 
@@ -190,7 +217,7 @@ export default Plugin.define({
 
         // T1 之后再检查预算；没超就不排 T2。
         const active = activeBlocks(state.blocks, pending)
-        const summary = renderAll(state.blocks, pending)
+        const summary = renderAll(state.blocks, pending, renderOptions)
         const nextPhase = planT1Phase(
           summary,
           active,
@@ -210,6 +237,14 @@ export default Plugin.define({
         } finally {
           markCompactionInFlight(event.sessionID, false)
         }
+      }),
+    )
+
+    // 终止后拒绝一切新输入：把真实原因直接抛给宿主，TUI 会显示这条错误。
+    disposables.push(
+      await ctx.session.hook("prompt", async (event) => {
+        const state = await loadState(ctx.storage, event.sessionID)
+        if (state.terminal !== undefined) throw new Error(state.terminal)
       }),
     )
 

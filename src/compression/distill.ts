@@ -30,6 +30,8 @@ export interface DistillOnceInput {
   readonly summaryTotalChars?: number
   readonly summaryLanguage?: SummaryLanguage
   readonly phase: Exclude<CompactionPhase, undefined>
+  readonly showTimeline?: boolean
+  readonly showBlockTokens?: boolean
 }
 
 export interface DistillOnceResult {
@@ -71,6 +73,22 @@ export function planT1Phase(
     : undefined
 }
 
+/**
+ * 输入：一次蒸馏结果 + active 链 + 预算。
+ * 输出：是否已经无法继续压缩（全 T3 / 没有候选 / 仍超预算）。
+ * 预期：只有成功但没合并、仍超预算、且没有任何合法候选时才判定终止。
+ */
+export function isTerminal(
+  result: DistillOnceResult,
+  active: readonly Block[],
+  budgetTokens: number,
+  totalChars: number,
+): boolean {
+  if (result.merged || result.error !== undefined) return false
+  if (countText(result.summary) <= budgetTokens && result.summary.length <= totalChars) return false
+  return mergeCandidates(active).length === 0
+}
+
 /** 输入：块；输出：候选列表里的简短描述。 */
 function describe(block: Block): string {
   const goal = block.summary.goal.replace(/\s+/g, " ").slice(0, 160)
@@ -88,8 +106,12 @@ function pairTranscript(candidate: MergeCandidate): string {
  * 预期：每层只合一次；模型在会话前缀后只看到追加的候选指令。
  */
 export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceResult> {
+  const renderOptions = {
+    showTimeline: input.showTimeline === true,
+    showBlockTokens: input.showBlockTokens === true,
+  }
   const active = activeBlocks(input.state.blocks, input.pending)
-  const currentSummary = renderAll(input.state.blocks, input.pending)
+  const currentSummary = renderAll(input.state.blocks, input.pending, renderOptions)
   const totalChars = input.summaryTotalChars ?? Number.POSITIVE_INFINITY
   if (
     active.length < 2 ||
@@ -173,11 +195,11 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     toId: chosen.right.toId,
     tokensBefore: chosen.left.tokensAfter + chosen.right.tokensAfter,
     tokensAfter: Math.ceil(JSON.stringify(picked.summary).length / 4),
-    at: Date.now(),
+    at: Math.max(chosen.left.at, chosen.right.at),
     order: chosen.left.order,
     sourceBlockIds: [chosen.left.id, chosen.right.id],
   }
-  const summary = renderAll(working, merged)
+  const summary = renderAll(working, merged, renderOptions)
   const nextPhase: CompactionPhase | undefined =
     input.phase === "t2" &&
     (countText(summary) > input.budgetTokens || summary.length > totalChars) &&

@@ -1,10 +1,20 @@
 import type { Schema } from "effect"
 
 import {
+  DEFAULT_AUTO_COMPRESS,
+  DEFAULT_DECOMPRESS_INLINE_MAX,
+  DEFAULT_DECOMPRESS_SHOW_TOKENS,
+  DEFAULT_DECOMPRESS_TEMP_CAP,
+  DEFAULT_SHOW_BLOCK_TOKENS,
+  DEFAULT_SHOW_TIMELINE,
   DEFAULT_SUMMARY_BLOCK_PERCENT,
   DEFAULT_SUMMARY_TOTAL_PERCENT,
+  MAX_DECOMPRESS_INLINE_MAX,
+  MAX_DECOMPRESS_TEMP_CAP,
   MAX_SUMMARY_PERCENT,
   MIN_CONTEXT_LIMIT,
+  MIN_DECOMPRESS_INLINE_MAX,
+  MIN_DECOMPRESS_TEMP_CAP,
   MIN_SUMMARY_PERCENT,
   isSummaryLanguage,
   type SummaryLanguage,
@@ -18,6 +28,12 @@ export interface ServerSettings {
   readonly summaryBlockPercent: number
   readonly summaryTotalPercent: number
   readonly summaryLanguage: SummaryLanguage
+  readonly autoCompress: boolean
+  readonly showTimeline: boolean
+  readonly showBlockTokens: boolean
+  readonly decompressInlineMax: number
+  readonly decompressTempCap: number
+  readonly decompressShowTokens: boolean
 }
 
 export const SETTINGS_KEY = "settings"
@@ -33,6 +49,26 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
+  autoCompress: DEFAULT_AUTO_COMPRESS,
+  showTimeline: DEFAULT_SHOW_TIMELINE,
+  showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
+  decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
+  decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
+  decompressShowTokens: DEFAULT_DECOMPRESS_SHOW_TOKENS,
+}
+
+/** 输入：任意值 + 范围；输出：合法整数；非法返回 undefined。 */
+function readInt(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  const rounded = Math.round(value)
+  if (rounded < min || rounded > max) return undefined
+  return rounded
+}
+
+/** 输入：任意值；输出：布尔值；缺省返回 fallback，类型不对返回 undefined。 */
+function readBoolean(value: unknown, fallback: boolean): boolean | undefined {
+  if (value === undefined) return fallback
+  return typeof value === "boolean" ? value : undefined
 }
 
 /**
@@ -82,12 +118,39 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     return undefined
   }
   if (!isSummaryLanguage(language)) return undefined
+  const autoCompress = readBoolean(record["autoCompress"], DEFAULT_AUTO_COMPRESS)
+  const showTimeline = readBoolean(record["showTimeline"], DEFAULT_SHOW_TIMELINE)
+  const showBlockTokens = readBoolean(record["showBlockTokens"], DEFAULT_SHOW_BLOCK_TOKENS)
+  const decompressShowTokens = readBoolean(record["decompressShowTokens"], DEFAULT_DECOMPRESS_SHOW_TOKENS)
+  if (
+    autoCompress === undefined ||
+    showTimeline === undefined ||
+    showBlockTokens === undefined ||
+    decompressShowTokens === undefined
+  ) {
+    return undefined
+  }
+  const decompressInlineMax =
+    record["decompressInlineMax"] === undefined
+      ? DEFAULT_DECOMPRESS_INLINE_MAX
+      : readInt(record["decompressInlineMax"], MIN_DECOMPRESS_INLINE_MAX, MAX_DECOMPRESS_INLINE_MAX)
+  const decompressTempCap =
+    record["decompressTempCap"] === undefined
+      ? DEFAULT_DECOMPRESS_TEMP_CAP
+      : readInt(record["decompressTempCap"], MIN_DECOMPRESS_TEMP_CAP, MAX_DECOMPRESS_TEMP_CAP)
+  if (decompressInlineMax === undefined || decompressTempCap === undefined) return undefined
   return {
     contextLimit: limit,
     triggerPercent: Math.round(percent),
     summaryBlockPercent: Math.round(blockPercent * 10) / 10,
     summaryTotalPercent: Math.round(totalPercent * 10) / 10,
     summaryLanguage: language,
+    autoCompress,
+    showTimeline,
+    showBlockTokens,
+    decompressInlineMax,
+    decompressTempCap,
+    decompressShowTokens,
   }
 }
 

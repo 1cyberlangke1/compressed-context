@@ -46,6 +46,22 @@ export const DEFAULT_TRIGGER_PERCENT = 80
 export const MIN_CONTEXT_LIMIT = 50_000
 export const MAX_CONTEXT_LIMIT = 10_000_000
 
+/** 自动压缩总开关：关掉后只保留手动 /compact 和 compress 工具。 */
+export const DEFAULT_AUTO_COMPRESS = true
+
+/** 块头是否显示时间线 / 估算 token；默认关闭，避免多占 token。 */
+export const DEFAULT_SHOW_TIMELINE = false
+export const DEFAULT_SHOW_BLOCK_TOKENS = false
+
+/** decompress 返回分级与临时文件上限。 */
+export const DEFAULT_DECOMPRESS_INLINE_MAX = 10_000
+export const DEFAULT_DECOMPRESS_TEMP_CAP = 50
+export const DEFAULT_DECOMPRESS_SHOW_TOKENS = true
+export const MIN_DECOMPRESS_INLINE_MAX = 1_000
+export const MAX_DECOMPRESS_INLINE_MAX = 1_000_000
+export const MIN_DECOMPRESS_TEMP_CAP = 1
+export const MAX_DECOMPRESS_TEMP_CAP = 1_000
+
 export interface Settings {
   /** 是否显示整块上下文面板 */
   enabled: boolean
@@ -63,6 +79,18 @@ export interface Settings {
   summaryTotalPercent: number
   /** 摘要语言；只影响提示词 */
   summaryLanguage: SummaryLanguage
+  /** 自动压缩总开关 */
+  autoCompress: boolean
+  /** 块头显示时间线 */
+  showTimeline: boolean
+  /** 块头显示估算 token */
+  showBlockTokens: boolean
+  /** decompress 内联上限（字符） */
+  decompressInlineMax: number
+  /** decompress 临时文件上限 */
+  decompressTempCap: number
+  /** decompress 返回是否带估算 token */
+  decompressShowTokens: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -74,6 +102,12 @@ export const DEFAULT_SETTINGS: Settings = {
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
+  autoCompress: DEFAULT_AUTO_COMPRESS,
+  showTimeline: DEFAULT_SHOW_TIMELINE,
+  showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
+  decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
+  decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
+  decompressShowTokens: DEFAULT_DECOMPRESS_SHOW_TOKENS,
 }
 
 /** 输入：任意值；输出：是否是合法语言设置。 */
@@ -182,6 +216,14 @@ function readContextLimit(value: unknown): ContextLimit {
   return DEFAULT_SETTINGS.contextLimit
 }
 
+/** 输入：任意值 + 范围；输出：合法的整数，非法回退。 */
+export function readInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  const rounded = Math.round(value)
+  if (rounded < min || rounded > max) return fallback
+  return rounded
+}
+
 /**
  * 输入：任意设置对象（可能来自旧版本、缺字段或类型不对）。
  * 输出：补齐后的合法设置。
@@ -203,6 +245,23 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
     summaryBlockPercent: blockPercent,
     summaryTotalPercent: totalPercent,
     summaryLanguage: isSummaryLanguage(value["summaryLanguage"]) ? value["summaryLanguage"] : "auto",
+    autoCompress: typeof value["autoCompress"] === "boolean" ? value["autoCompress"] : DEFAULT_AUTO_COMPRESS,
+    showTimeline: typeof value["showTimeline"] === "boolean" ? value["showTimeline"] : DEFAULT_SHOW_TIMELINE,
+    showBlockTokens: typeof value["showBlockTokens"] === "boolean" ? value["showBlockTokens"] : DEFAULT_SHOW_BLOCK_TOKENS,
+    decompressInlineMax: readInt(
+      value["decompressInlineMax"],
+      MIN_DECOMPRESS_INLINE_MAX,
+      MAX_DECOMPRESS_INLINE_MAX,
+      DEFAULT_DECOMPRESS_INLINE_MAX,
+    ),
+    decompressTempCap: readInt(
+      value["decompressTempCap"],
+      MIN_DECOMPRESS_TEMP_CAP,
+      MAX_DECOMPRESS_TEMP_CAP,
+      DEFAULT_DECOMPRESS_TEMP_CAP,
+    ),
+    decompressShowTokens:
+      typeof value["decompressShowTokens"] === "boolean" ? value["decompressShowTokens"] : DEFAULT_DECOMPRESS_SHOW_TOKENS,
   }
 }
 
@@ -228,6 +287,26 @@ export function effectiveSummaryTotalPercent(settings: Settings): number {
 /** 输入：设置；输出：合法的摘要语言。 */
 export function effectiveSummaryLanguage(settings: Settings): SummaryLanguage {
   return isSummaryLanguage(settings.summaryLanguage) ? settings.summaryLanguage : "auto"
+}
+
+/** 输入：设置；输出：合法的 decompress 内联上限。 */
+export function effectiveDecompressInlineMax(settings: { readonly decompressInlineMax?: unknown }): number {
+  return readInt(
+    settings.decompressInlineMax,
+    MIN_DECOMPRESS_INLINE_MAX,
+    MAX_DECOMPRESS_INLINE_MAX,
+    DEFAULT_DECOMPRESS_INLINE_MAX,
+  )
+}
+
+/** 输入：设置；输出：合法的 decompress 临时文件上限。 */
+export function effectiveDecompressTempCap(settings: { readonly decompressTempCap?: unknown }): number {
+  return readInt(
+    settings.decompressTempCap,
+    MIN_DECOMPRESS_TEMP_CAP,
+    MAX_DECOMPRESS_TEMP_CAP,
+    DEFAULT_DECOMPRESS_TEMP_CAP,
+  )
 }
 
 /**

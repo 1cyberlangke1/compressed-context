@@ -42,6 +42,8 @@ export interface State {
   readonly phase?: CompactionPhase
   readonly attempts: number
   readonly lastError?: string
+  /** 全 T3 且无法继续压缩时的终止原因；存在时停止自动压缩。 */
+  readonly terminal?: string
 }
 
 /** 服务端 storage 的最小接口，便于测试替身。 */
@@ -144,6 +146,7 @@ export function parseState(value: unknown): State {
   const pending = isBlock(record["pending"]) ? normalizeBlock(record["pending"], blocks.length) : undefined
   const attempts = typeof record["attempts"] === "number" ? record["attempts"] : 0
   const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
+  const terminal = typeof record["terminal"] === "string" ? record["terminal"] : undefined
   const rawPhase = record["phase"]
   const phase: CompactionPhase | undefined = rawPhase === "t2" || rawPhase === "t3" ? rawPhase : undefined
   return {
@@ -152,6 +155,7 @@ export function parseState(value: unknown): State {
     attempts,
     ...(pending === undefined ? {} : { pending }),
     ...(lastError === undefined ? {} : { lastError }),
+    ...(terminal === undefined ? {} : { terminal }),
     ...(phase === undefined ? {} : { phase }),
   }
 }
@@ -177,13 +181,14 @@ export function commitPending(state: State): State {
   }
 }
 
-/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清掉 phase。 */
+/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清掉 phase，但保留终止标记。 */
 export function dropPending(state: State, error: string): State {
   return {
     v: 1,
     blocks: state.blocks,
     attempts: state.attempts + 1,
     lastError: error,
+    ...(state.terminal === undefined ? {} : { terminal: state.terminal }),
   }
 }
 

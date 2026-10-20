@@ -3,8 +3,8 @@ import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
 
 import { markCompactionInFlight, maybeAutoCompress } from "../src/compression/auto.ts"
-import { distillOnce, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
-import { handleCompactionEvent, isPermanentFailure, retryState } from "../src/compression/events.ts"
+import { distillOnce, isTerminal, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
+import { handleCompactionEvent } from "../src/compression/events.ts"
 import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
@@ -180,8 +180,25 @@ describe("渲染", () => {
 
   it("块头可以带标题，标记仍可被 includes 命中", () => {
     const titled = renderBlock({ ...block, summary: { ...summary, title: "压缩内核" } })
-    expect(titled.startsWith(`${blockMarker("b1")} 压缩内核`)).toBe(true)
+    expect(titled.startsWith(`${blockMarker("b1")} [T1] 压缩内核`)).toBe(true)
     expect(titled).toContain(blockMarker("b1"))
+  })
+
+  it("块头显示层级与合并来源", () => {
+    const merged = renderBlock({ ...block, id: "b3", tier: 2, sourceBlockIds: ["b1", "b2"] })
+    expect(merged.startsWith(`${blockMarker("b3")} [T2 · merged #b1 + #b2]`)).toBe(true)
+  })
+
+  it("token 估算与时间线只在开关打开时出现", () => {
+    const at = new Date(2026, 9, 20, 10, 30).getTime()
+    const plain = renderBlock({ ...block, at })
+    expect(plain).not.toContain("≈")
+    expect(plain).not.toContain("2026/10/20")
+
+    const withMeta = renderBlock({ ...block, at }, { showBlockTokens: true, showTimeline: true })
+    expect(withMeta).toContain("≈")
+    expect(withMeta).toContain("tok")
+    expect(withMeta).toContain("2026/10/20 10:30")
   })
 })
 
@@ -235,6 +252,12 @@ describe("服务端设置", () => {
       summaryBlockPercent: 10,
       summaryTotalPercent: 50,
       summaryLanguage: "auto",
+      autoCompress: true,
+      showTimeline: false,
+      showBlockTokens: false,
+      decompressInlineMax: 10_000,
+      decompressTempCap: 50,
+      decompressShowTokens: true,
     })
     expect(
       parseServerSettings({
@@ -250,6 +273,12 @@ describe("服务端设置", () => {
       summaryBlockPercent: 30,
       summaryTotalPercent: 60,
       summaryLanguage: "zh",
+      autoCompress: true,
+      showTimeline: false,
+      showBlockTokens: false,
+      decompressInlineMax: 10_000,
+      decompressTempCap: 50,
+      decompressShowTokens: true,
     })
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 59 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 96 })).toBeUndefined()
@@ -742,6 +771,55 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
+  it("autoCompress 关闭时不入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60, autoCompress: false },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("terminal 状态不再自动入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
+      [stateKey("ses_test")]: { v: 1, blocks: [], attempts: 0, terminal: "cannot reduce" },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
   it("模型窗口未知时不自动入队", async () => {
     const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: "auto", triggerPercent: 60 } })
     let compacts = 0
@@ -906,32 +984,20 @@ describe("compaction 事件", () => {
     expect(state.pending?.id).toBe("b1")
   })
 
-  it("失败事件保留 pending 和 phase 重试，超过上限才丢弃", async () => {
+  it("失败事件丢弃 pending 并记录真实错误，不自动重试", async () => {
     const storage = memoryStorage({
-      [stateKey("ses_event")]: withPhase(
-        withPending({ v: 1, blocks: [], attempts: 0 }, block),
-        "t2",
-      ),
+      // 钩子跑过并失败时，catch 已经写过 lastError；这里模拟同样的状态。
+      [stateKey("ses_event")]: {
+        ...withPhase(withPending({ v: 1, blocks: [], attempts: 0 }, block), "t2"),
+        lastError: "network down",
+      },
     })
-    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event")
-    const first = await loadState(storage, "ses_event")
-    expect(first.pending?.id).toBe("b1")
-    expect(first.phase).toBe("t2")
-    expect(first.attempts).toBe(1)
-
-    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event")
-    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event")
-    const final = await loadState(storage, "ses_event")
-    expect(final.pending).toBeUndefined()
-    expect(final.phase).toBeUndefined()
-    expect(final.attempts).toBe(3)
-  })
-
-  it("永久错误与瞬时错误分类", () => {
-    expect(isPermanentFailure("nothing to compress")).toBe(true)
-    expect(isPermanentFailure("empty field: goal")).toBe(true)
-    expect(isPermanentFailure("summary too short")).toBe(true)
-    expect(isPermanentFailure("network down")).toBe(false)
+    await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "network down")
+    const state = await loadState(storage, "ses_event")
+    expect(state.pending).toBeUndefined()
+    expect(state.phase).toBeUndefined()
+    expect(state.attempts).toBe(1)
+    expect(state.lastError).toContain("network down")
   })
 
   it("事件 error 优先于 state.lastError（钩子没跑过的失败也能拿到真实原因）", async () => {
@@ -970,21 +1036,6 @@ describe("compaction 事件", () => {
     await handleCompactionEvent(ctx, "ended", "ses_event")
     const state = await loadState(storage, "ses_event")
     expect(state.pending?.id).toBe("b1")
-  })
-
-  it("retryState 未到上限保留状态，到上限丢弃", () => {
-    const initial = withPhase(withPending({ v: 1, blocks: [], attempts: 0 }, block), "t2")
-    const first = retryState(initial, "boom")
-    expect(first.retry).toBe(true)
-    expect(first.state.pending?.id).toBe("b1")
-    expect(first.state.phase).toBe("t2")
-    expect(first.state.attempts).toBe(1)
-
-    const last = retryState({ ...initial, attempts: 2 }, "boom")
-    expect(last.retry).toBe(false)
-    expect(last.state.pending).toBeUndefined()
-    expect(last.state.phase).toBeUndefined()
-    expect(last.state.attempts).toBe(3)
   })
 })
 
@@ -1362,4 +1413,25 @@ describe("摘要单层合并", () => {
     ).rejects.toThrow("empty field: goal")
   })
 
+})
+
+describe("终止判定", () => {
+  it("全 T3、没有候选、仍超预算时判定终止", () => {
+    const t3 = tierBlock("b1", 3, 1)
+    const result = { blocks: [t3], pending: undefined, summary: "x".repeat(100), merged: false }
+    expect(isTerminal(result, [t3], 10, 10)).toBe(true)
+  })
+
+  it("还有候选（含 T3+T3）或未超预算时不终止", () => {
+    const a = tierBlock("b1", 1, 1)
+    const b = tierBlock("b2", 1, 2)
+    const result = { blocks: [a, b], pending: undefined, summary: "x".repeat(100), merged: false }
+    expect(isTerminal(result, [a, b], 10, 10)).toBe(false)
+    expect(isTerminal(result, [a, b], 1_000, 1_000)).toBe(false)
+
+    const t3a = tierBlock("b1", 3, 1)
+    const t3b = tierBlock("b2", 3, 2)
+    const t3Pair = { blocks: [t3a, t3b], pending: undefined, summary: "x".repeat(100), merged: false }
+    expect(isTerminal(t3Pair, [t3a, t3b], 10, 10)).toBe(false)
+  })
 })

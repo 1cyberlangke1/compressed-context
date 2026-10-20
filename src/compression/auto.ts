@@ -113,8 +113,10 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (state.pending) return
     if (state.attempts >= MAX_ATTEMPTS) return
+    if (state.terminal !== undefined) return
 
     const settings = await loadServerSettings(input.ctx.storage)
+    if (!settings.autoCompress) return
     const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit)
     if (limit === undefined || limit <= 0) return
     // 窗口小到连最小摘要都放不下：压缩必然失败，别反复入队空压缩。

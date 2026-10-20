@@ -14,6 +14,12 @@ const SettingsProperties = {
   summaryBlockPercent: { type: "number" },
   summaryTotalPercent: { type: "number" },
   summaryLanguage: { type: "string", enum: ["auto", "zh", "en"] },
+  autoCompress: { type: "boolean" },
+  showTimeline: { type: "boolean" },
+  showBlockTokens: { type: "boolean" },
+  decompressInlineMax: { type: "number" },
+  decompressTempCap: { type: "number" },
+  decompressShowTokens: { type: "boolean" },
 } as const
 
 const SettingsInputJson = {

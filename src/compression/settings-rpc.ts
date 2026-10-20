@@ -30,6 +30,12 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
         summaryBlockPercent: settings.summaryBlockPercent,
         summaryTotalPercent: settings.summaryTotalPercent,
         summaryLanguage: settings.summaryLanguage,
+        autoCompress: settings.autoCompress,
+        showTimeline: settings.showTimeline,
+        showBlockTokens: settings.showBlockTokens,
+        decompressInlineMax: settings.decompressInlineMax,
+        decompressTempCap: settings.decompressTempCap,
+        decompressShowTokens: settings.decompressShowTokens,
         ...(resolvedWindow === undefined ? {} : { resolvedWindow }),
       }
     },

@@ -90,4 +90,39 @@ describe("resolveDecompress（集成）", () => {
       expect(result.inline).toContain("unavailable")
     }
   })
+
+  it("token 估算可开关", async () => {
+    const withTokens = await resolveDecompress({ block: "b5" }, { storage }, "ses_x", {
+      inlineMax: 10_000,
+      tempCap: 50,
+      showTokens: true,
+    })
+    expect(withTokens.status).toBe("ok")
+    if (withTokens.status === "ok") {
+      expect(withTokens.inline).toContain("≈")
+      expect(withTokens.inline).toContain("tok")
+      expect(typeof withTokens.tokens).toBe("number")
+    }
+
+    const without = await resolveDecompress({ block: "b5" }, { storage }, "ses_x", {
+      inlineMax: 10_000,
+      tempCap: 50,
+      showTokens: false,
+    })
+    expect(without.status).toBe("ok")
+    if (without.status === "ok") expect(without.inline).not.toContain("≈")
+  })
+
+  it("超过内联上限时写临时文件", async () => {
+    const result = await resolveDecompress({ block: "b5" }, { storage }, "ses_x", {
+      inlineMax: 10,
+      tempCap: 50,
+      showTokens: true,
+    })
+    expect(result.status).toBe("ok")
+    if (result.status === "ok") {
+      expect(result.path).toBeDefined()
+      expect(result.inline).toContain("written to")
+    }
+  })
 })

@@ -36,6 +36,16 @@ export interface Messages {
     readonly windowKnown: (value: string) => string
     readonly windowUnknown: string
     readonly summaryLanguage: string
+    readonly autoCompress: string
+    readonly showTimeline: string
+    readonly showBlockTokens: string
+    readonly decompressInlineMax: string
+    readonly decompressInlineMaxHint: string
+    readonly decompressInlineMaxInvalid: string
+    readonly decompressTempCap: string
+    readonly decompressTempCapHint: string
+    readonly decompressTempCapInvalid: string
+    readonly decompressShowTokens: string
     readonly submit: string
     readonly language: string
     readonly auto: string

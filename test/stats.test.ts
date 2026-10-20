@@ -4,11 +4,13 @@ import { formatTokens } from "../src/format.ts"
 import {
   createStats,
   mergeMetadata,
+  mergeTerminalMetadata,
   parseStats,
   PUBLISH_MIN_DELTA,
   scaleCategories,
   shouldPublish,
   STATS_KEY,
+  TERMINAL_KEY,
 } from "../src/stats.ts"
 
 const categories = {
@@ -100,5 +102,13 @@ describe("formatTokens", () => {
   it("非法输入不会显示 NaNM", () => {
     expect(formatTokens(Number.NaN)).toBe("0")
     expect(formatTokens(-1)).toBe("0")
+  })
+})
+
+describe("mergeTerminalMetadata", () => {
+  it("保留其他键并写入终止原因", () => {
+    const merged = mergeTerminalMetadata({ other: 1 }, "cannot reduce")
+    expect(merged["other"]).toBe(1)
+    expect(merged[TERMINAL_KEY]).toBe("cannot reduce")
   })
 })

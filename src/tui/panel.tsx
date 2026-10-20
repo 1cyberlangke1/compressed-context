@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 import { formatTokens } from "../format.ts"
 import { resolveMessages } from "../i18n/index.ts"
 import { effectiveLimit, localeArgument, type Settings } from "../settings.ts"
-import { parseStats, scaleCategories, STATS_KEY, type ContextStats } from "../stats.ts"
+import { parseStats, scaleCategories, STATS_KEY, TERMINAL_KEY, type ContextStats } from "../stats.ts"
 import type { UpdateSettings } from "./types.ts"
 
 /** 颜色三元组，分量 0-255。 */
@@ -99,6 +99,7 @@ export function Panel(props: {
 }) {
   const theme = props.context.theme
   const [stats, setStats] = createSignal<ContextStats>()
+  const [terminal, setTerminal] = createSignal<string>()
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
 
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
@@ -145,6 +146,8 @@ export function Panel(props: {
     try {
       const info = await props.context.client.session.get({ sessionID: props.sessionID })
       setStats(parseStats(info.metadata?.[STATS_KEY]))
+      const rawTerminal = info.metadata?.[TERMINAL_KEY]
+      setTerminal(typeof rawTerminal === "string" ? rawTerminal : undefined)
     } catch {
       // 统计缺失不影响主界面，保持上一次的值
     }
@@ -192,6 +195,13 @@ export function Panel(props: {
           </Show>
         </box>
         <Show when={props.settings.expanded}>
+          <Show when={terminal()}>
+            {(message) => (
+              <text fg={theme.text.feedback.error.base} wrapMode="word">
+                {`⚠ ${message()}`}
+              </text>
+            )}
+          </Show>
           <For each={rows()}>
             {(row) => (
               <box flexDirection="row" height={1} gap={1}>
@@ -205,7 +215,7 @@ export function Panel(props: {
                   {`${row.pct.toString()}%`}
                 </text>
                 <text fg={theme.text.muted} width={7} flexShrink={0} textAlign="right">
-                  {`${formatTokens(row.value)}${copy().approximate}`}
+                  {`${copy().approximate}${formatTokens(row.value)}`}
                 </text>
               </box>
             )}

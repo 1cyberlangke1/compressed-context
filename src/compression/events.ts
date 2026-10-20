@@ -36,50 +36,15 @@ async function reconcile(ctx: Plugin.Context, sessionID: string, state: State): 
 
 export type CompactionEventType = "ended" | "failed"
 
-/** 压缩失败最多重试次数；超过后才丢弃 pending/phase。 */
-export const MAX_COMPACTION_ATTEMPTS = 3
-
-/**
- * 输入：错误文本。
- * 输出：是否是重试也不会变的永久错误。
- * 预期：空历史、内容不足、缺 id、摘要校验失败不重试。
- */
-export function isPermanentFailure(error: string): boolean {
-  return /nothing to compress|not enough content|messages are missing ids|empty field|summary too (short|long)|not smaller than the source/.test(
-    error,
-  )
-}
-
-/**
- * 输入：失败时的状态 + 错误。
- * 输出：下一次状态 + 是否继续重试。
- * 预期：未到上限时保留 pending/phase 并累加 attempts；到上限才丢弃。
- */
-export function retryState(state: State, error: string): { readonly state: State; readonly retry: boolean } {
-  const attempts = state.attempts + 1
-  if (attempts >= MAX_COMPACTION_ATTEMPTS) {
-    return {
-      state: { ...dropPending(state, `${error} (after ${attempts.toString()} attempts)`), attempts },
-      retry: false,
-    }
-  }
-  return {
-    state: {
-      v: 1,
-      blocks: state.blocks,
-      attempts,
-      ...(state.pending === undefined ? {} : { pending: state.pending }),
-      ...(state.phase === undefined ? {} : { phase: state.phase }),
-      lastError: error,
-    },
-    retry: true,
-  }
-}
+/** 全 T3 且无法继续压缩时的终止提示。 */
+export const TERMINAL_MESSAGE =
+  "compression cannot reduce this context further: start a new session or use native compaction"
 
 /**
  * 输入：服务端上下文 + 事件类型 + sessionID + 事件自带错误（仅 failed 有）。
  * 输出：无。
- * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败丢弃 pending 和 phase。
+ * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败丢弃 pending 和 phase，
+ *       记录真实原因，不自动重试（网络与 JSON 重试已由 OpenCode / runSummaryPrompt 覆盖）。
  *       事件 error 优先于 state.lastError——钩子没跑过的失败（如 OpenCode 在钩子前判定
  *       「无可压缩内容」）state 里没有任何错误记录，只能从事件拿真实原因。
  */
@@ -111,23 +76,14 @@ export async function handleCompactionEvent(
     await saveState(ctx.storage, sessionID, { ...state, attempts: 0 })
     return
   }
-  if (isPermanentFailure(detail)) {
-    await saveState(ctx.storage, sessionID, dropPending(state, detail))
-    return
-  }
-  const next = retryState(state, detail)
-  await saveState(ctx.storage, sessionID, next.state)
-  if (!next.retry) return
-  // 失败后保留 pending/phase，稍等 inbox 行清掉再重新入队。
-  setTimeout(() => {
-    void ctx.session.compact({ sessionID, delivery: "steer" }).catch(() => undefined)
-  }, 100)
+  // 不自动重试：丢弃 pending/phase，记录真实原因，交给下一次触发。
+  await saveState(ctx.storage, sessionID, dropPending(state, detail))
 }
 
 /**
  * 输入：服务端上下文。
  * 输出：订阅 compaction.ended / compaction.failed，并返回取消函数。
- * 预期：成功时 pending 转正；失败时按错误类型重试或丢弃。
+ * 预期：成功时 pending 转正；失败时丢弃 pending/phase，不自动重试。
  */
 export function startCompactionEvents(ctx: Plugin.Context): () => void {
   const controller = new AbortController()

@@ -1,6 +1,8 @@
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
+import { effectiveDecompressInlineMax, effectiveDecompressTempCap } from "../settings.ts"
+import { loadServerSettings } from "./settings.ts"
 import type { Disposable } from "./settings-rpc.ts"
 
 const DESCRIPTION =
@@ -19,6 +21,7 @@ const DecompressInput = Schema.Struct({
 const DecompressOutput = Schema.Struct({
   inline: Schema.optional(Schema.String),
   path: Schema.optional(Schema.String),
+  tokens: Schema.optional(Schema.Number),
 })
 
 /**
@@ -36,7 +39,12 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
       output: DecompressOutput,
       execute: async (input, toolCtx) => {
         const { resolveDecompress } = await import("./decompress.ts")
-        const result = await resolveDecompress(input, ctx, toolCtx.sessionID)
+        const settings = await loadServerSettings(ctx.storage)
+        const result = await resolveDecompress(input, ctx, toolCtx.sessionID, {
+          inlineMax: effectiveDecompressInlineMax(settings),
+          tempCap: effectiveDecompressTempCap(settings),
+          showTokens: settings.decompressShowTokens,
+        })
         if (result.status === "error") {
           return {
             output: {},
@@ -44,8 +52,9 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
             metadata: { error: true },
           }
         }
-        const output: { inline?: string; path?: string } = {
+        const output: { inline?: string; path?: string; tokens?: number } = {
           ...(result.path === undefined ? {} : { path: result.path }),
+          ...(result.tokens === undefined ? {} : { tokens: result.tokens }),
         }
         return {
           output,

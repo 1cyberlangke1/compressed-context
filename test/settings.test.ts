@@ -4,6 +4,8 @@ import {
   DEFAULT_SETTINGS,
   SUMMARY_WINDOW_RESERVE,
   effectiveLimit,
+  effectiveDecompressInlineMax,
+  effectiveDecompressTempCap,
   effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
@@ -33,6 +35,12 @@ describe("initialSettings / normalizeSettings", () => {
       summaryBlockPercent: 10,
       summaryTotalPercent: 50,
       summaryLanguage: "auto",
+      autoCompress: true,
+      showTimeline: false,
+      showBlockTokens: false,
+      decompressInlineMax: 10_000,
+      decompressTempCap: 50,
+      decompressShowTokens: true,
     })
   })
 
@@ -109,6 +117,31 @@ describe("initialSettings / normalizeSettings", () => {
     )
     expect(normalizeSettings({ enabled: true, locale: "zh" }).contextLimit).toBe("auto")
     expect(normalizeSettings({ summaryBlockPercent: 200 }).summaryBlockPercent).toBe(10)
+  })
+
+  it("新开关与 decompress 限制可配置，非法值回退", () => {
+    const settings = initialSettings({
+      autoCompress: false,
+      showTimeline: true,
+      showBlockTokens: true,
+      decompressInlineMax: 5_000,
+      decompressTempCap: 10,
+      decompressShowTokens: false,
+    })
+    expect(settings.autoCompress).toBe(false)
+    expect(settings.showTimeline).toBe(true)
+    expect(settings.showBlockTokens).toBe(true)
+    expect(settings.decompressInlineMax).toBe(5_000)
+    expect(settings.decompressTempCap).toBe(10)
+    expect(settings.decompressShowTokens).toBe(false)
+
+    expect(initialSettings({ autoCompress: "no" }).autoCompress).toBe(true)
+    expect(initialSettings({ decompressInlineMax: 999 }).decompressInlineMax).toBe(10_000)
+    expect(initialSettings({ decompressInlineMax: 2_000_000 }).decompressInlineMax).toBe(10_000)
+    expect(initialSettings({ decompressTempCap: 0 }).decompressTempCap).toBe(50)
+    expect(initialSettings({ decompressTempCap: 2_000 }).decompressTempCap).toBe(50)
+    expect(effectiveDecompressInlineMax({ decompressInlineMax: Number.NaN })).toBe(10_000)
+    expect(effectiveDecompressTempCap({ decompressTempCap: 0 })).toBe(50)
   })
 })
 

@@ -454,6 +454,17 @@ try {
     return typeof row?.value === "string" ? JSON.parse(row.value) : undefined
   }
 
+  /** 输入：sessionID + state；输出：无；预期：只改临时 DB 的插件状态。 */
+  const setState = (sessionID, state) => {
+    const conn = new Database(join(root, "opencode.db"))
+    const key = `plugin:${pluginHex}:compression:state:${sessionID}`
+    const at = Date.now()
+    conn
+      .query("insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)")
+      .run(key, JSON.stringify(state), at, at)
+    conn.close()
+  }
+
   /** 输入：sessionID；输出：messages 数组。 */
   const messagesFor = async (sessionID) =>
     api("GET", `/api/session/${sessionID}/message?limit=200`)
@@ -560,6 +571,8 @@ try {
   assert.ok(raw.includes("[Compressed conversation section #b1]"), "T1 checkpoint missing")
   assert.ok(raw.includes("[Compressed conversation section #b3]"), "T2 checkpoint missing")
   assert.ok(!String(latest?.summary ?? "").includes("[Compressed conversation section #b1]"), "latest checkpoint still shows T1")
+  assert.ok(String(latest?.summary ?? "").includes("[T2 · merged #b1 + #b2]"), "T2 header must show merged sources")
+  assert.ok(raw.includes("[T1]"), "block header must show tier")
   console.log("T1 and T2 checkpoints found")
 
   assert.ok(
@@ -597,6 +610,24 @@ try {
       prompts.slice(-5).map((prompt) => prompt.slice(0, 100).replace(/\s+/g, " ")),
     ),
   )
+
+  // case: 块头显示 token 估算与时间线（默认关闭，这里显式打开）
+  mode = "normal"
+  setSettings(50, 1_000_000, 95, { showBlockTokens: true, showTimeline: true })
+  const meta = await newSession("e2e-block-meta")
+  await promptSession(meta, longText)
+  await promptSession(meta, "continue")
+  await api("POST", `/api/session/${meta}/compact`, {})
+  await waitSession(meta)
+  const metaMessages = await messagesFor(meta)
+  const metaCompaction = [...metaMessages]
+    .reverse()
+    .find((item) => item.type === "compaction" && item.status === "completed")
+  const metaSummary = String(metaCompaction?.summary ?? "")
+  assert.ok(metaSummary.includes("≈"), "block header must show token estimate")
+  assert.ok(metaSummary.includes("tok"), "block header must show tok unit")
+  assert.ok(/\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}/.test(metaSummary), "block header must show timeline")
+  console.log("case passed: block header shows token estimate and timeline")
 
   // case: 手动 compact 空历史 → failed，state 不产生块
   mode = "short"
@@ -766,6 +797,8 @@ try {
     !(decompressCall.content ?? "").includes("unavailable"),
     "decompress should restore original transcript from the DB",
   )
+  assert.ok((decompressCall.content ?? "").includes("≈"), "decompress result must show token estimate")
+  assert.ok((decompressCall.content ?? "").includes("tok"), "decompress result must show tok unit")
   console.log("case passed: decompress tool restores content")
 
   // case: 超大摘要上限被运行时钳制，压缩仍成功
@@ -798,6 +831,38 @@ try {
   assert.equal(stateB?.blocks?.[0]?.tier, 1)
   assert.notEqual(stateA?.blocks?.[0]?.fromId, stateB?.blocks?.[0]?.fromId)
   console.log("case passed: auto T1 triggered by context hook, no manual compact")
+
+  // case: autoCompress 关闭时只保留手动压缩
+  mode = "normal"
+  setSettings(50, 50_000, 60, { autoCompress: false })
+  const noAuto = await newSession("e2e-no-auto")
+  await promptSession(noAuto, longText)
+  await promptSession(noAuto, "continue")
+  assert.equal(stateFor(noAuto)?.blocks?.length ?? 0, 0, "autoCompress off must not compress")
+  await api("POST", `/api/session/${noAuto}/compact`, {})
+  await waitSession(noAuto)
+  assert.equal(stateFor(noAuto)?.blocks?.length, 1, "manual compact must still work")
+  console.log("case passed: autoCompress off keeps manual compaction")
+
+  // case: 终止状态拒绝新输入，并带回终止原因
+  mode = "normal"
+  setSettings(50)
+  const terminalSession = await newSession("e2e-terminal")
+  setState(terminalSession, {
+    v: 1,
+    blocks: [],
+    attempts: 0,
+    terminal: "compression cannot reduce this context further: start a new session or use native compaction",
+  })
+  let rejected = false
+  try {
+    await api("POST", `/api/session/${terminalSession}/prompt`, { text: "hello" })
+  } catch (error) {
+    rejected = true
+    console.log("terminal prompt rejected:", String(error).slice(0, 200))
+  }
+  assert.equal(rejected, true, "terminal session must reject new input")
+  console.log("case passed: terminal session rejects input")
 
   const child = await newSession("e2e-iso-child", sessionA)
   await promptSession(child, longText)

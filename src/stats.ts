@@ -10,6 +10,9 @@ import { totalCategories, type TokenCategories } from "./tokens.ts"
 /** metadata 里存放统计的键名，避免和其他插件撞车。 */
 export const STATS_KEY = "compressed-context"
 
+/** metadata 里存放终止原因的键名；TUI 面板据此显示警告。 */
+export const TERMINAL_KEY = "compressed-context-terminal"
+
 export const CATEGORY_KEYS = ["system", "tools", "tool", "text", "recent", "summaries", "media"] as const
 
 export type CategoryKey = (typeof CATEGORY_KEYS)[number]
@@ -102,6 +105,18 @@ export function mergeMetadata(
       at: stats.at,
     },
   }
+}
+
+/**
+ * 输入：已有 metadata + 终止原因。
+ * 输出：保留其他键、写入终止原因的新对象。
+ * 预期：TUI 面板读 TERMINAL_KEY 显示警告；写入失败不影响压缩状态。
+ */
+export function mergeTerminalMetadata(
+  metadata: Readonly<Record<string, JsonValue>> | undefined,
+  message: string,
+): Record<string, JsonValue> {
+  return { ...(metadata ?? {}), [TERMINAL_KEY]: message }
 }
 
 export interface ScaledCategory {

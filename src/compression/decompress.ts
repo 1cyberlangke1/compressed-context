@@ -12,6 +12,7 @@ import { unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { countText } from "../tokens.ts"
 import type { Block, StorageLike } from "./state.ts"
 import { loadState } from "./state.ts"
 import { renderBlock } from "./render.ts"
@@ -24,10 +25,23 @@ import {
   type HistoryDb,
 } from "./history.ts"
 
-/** 内联返回的字符上限；超出走临时文件。与 bili 的 10000 对齐。 */
+/** 内联返回的默认字符上限；运行时由设置覆盖。 */
 export const INLINE_MAX = 10_000
-/** 临时文件数量上限；超过删最老。与 bili 的 decompressTmpCap 默认对齐。 */
+/** 临时文件数量默认上限；运行时由设置覆盖。 */
 export const TEMP_CAP = 50
+
+/** decompress 的运行时限制。 */
+export interface DecompressLimits {
+  readonly inlineMax: number
+  readonly tempCap: number
+  readonly showTokens: boolean
+}
+
+const DEFAULT_LIMITS: DecompressLimits = {
+  inlineMax: INLINE_MAX,
+  tempCap: TEMP_CAP,
+  showTokens: true,
+}
 
 /** 一次解压收集的文本。 */
 export interface CollectedContent {
@@ -45,14 +59,14 @@ export interface CollectInput {
 
 /** 解压工具结果；ok 时 inline 或 path 至少一项存在。 */
 export type DecompressResult =
-  | { readonly status: "ok"; readonly inline: string; readonly path?: string }
+  | { readonly status: "ok"; readonly inline: string; readonly path?: string; readonly tokens?: number }
   | { readonly status: "error"; readonly message: string }
 
 const tempFiles: { path: string; mtimeMs: number }[] = []
 
-/** 输入：无；输出：清理过期临时文件。预期：超 TEMP_CAP 删最老，绝不抛错。 */
-function reapTempFiles(): void {
-  while (tempFiles.length > TEMP_CAP) {
+/** 输入：上限；输出：清理过期临时文件。预期：超上限删最老，绝不抛错。 */
+function reapTempFiles(cap: number): void {
+  while (tempFiles.length > cap) {
     tempFiles.sort((a, b) => a.mtimeMs - b.mtimeMs)
     const oldest = tempFiles.shift()
     if (oldest === undefined) break
@@ -64,13 +78,13 @@ function reapTempFiles(): void {
   }
 }
 
-/** 输入：块 id + 正文；输出：临时文件路径。预期：文件名含 id 和时间戳，永不互相覆盖。 */
-function writeTempFile(blockId: string, body: string): string {
+/** 输入：块 id + 正文 + 上限；输出：临时文件路径。预期：文件名含 id 和时间戳，永不互相覆盖。 */
+function writeTempFile(blockId: string, body: string, cap: number): string {
   const safeId = blockId.replace(/[^a-zA-Z0-9_-]/g, "-")
   const path = join(tmpdir(), `compressed-context-decompress-${safeId}-${String(Date.now())}.txt`)
   writeFileSync(path, body, { encoding: "utf8", mode: 0o600 })
   tempFiles.push({ path, mtimeMs: Date.now() })
-  reapTempFiles()
+  reapTempFiles(cap)
   return path
 }
 
@@ -155,6 +169,7 @@ export async function resolveDecompress(
   args: Record<string, unknown>,
   ctx: { readonly storage: StorageLike },
   sessionID: string,
+  limits: DecompressLimits = DEFAULT_LIMITS,
 ): Promise<DecompressResult> {
   const raw = args["block"]
   if (typeof raw !== "string" || raw.trim().length === 0) {
@@ -219,15 +234,18 @@ export async function resolveDecompress(
 
   walk(target, 0)
   const body = parts.length > 0 ? parts.join("\n\n") : "(no restorable content for this block)"
-  const header = `[Block ${blockId} content${full ? ", full" : ""}]`
+  const tokens = countText(body)
+  const tokenLabel = limits.showTokens ? ` · ≈${tokens.toString()} tok` : ""
+  const header = `[Block ${blockId} content${full ? ", full" : ""}${tokenLabel}]`
 
-  if (body.length > INLINE_MAX) {
-    const path = writeTempFile(blockId, body)
+  if (body.length > limits.inlineMax) {
+    const path = writeTempFile(blockId, body, limits.tempCap)
     return {
       status: "ok",
       inline: `${header}\nContent (${body.length.toString()} chars) written to: ${path}\nUse the read tool to access it.`,
       path,
+      tokens,
     }
   }
-  return { status: "ok", inline: `${header}\n${body}` }
+  return { status: "ok", inline: `${header}\n${body}`, tokens }
 }

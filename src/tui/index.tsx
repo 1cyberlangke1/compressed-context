@@ -20,6 +20,12 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     summaryBlockPercent: settings.summaryBlockPercent,
     summaryTotalPercent: settings.summaryTotalPercent,
     summaryLanguage: settings.summaryLanguage,
+    autoCompress: settings.autoCompress,
+    showTimeline: settings.showTimeline,
+    showBlockTokens: settings.showBlockTokens,
+    decompressInlineMax: settings.decompressInlineMax,
+    decompressTempCap: settings.decompressTempCap,
+    decompressShowTokens: settings.decompressShowTokens,
   })
   if (
     settings.enabled === normalized.enabled &&
@@ -29,7 +35,13 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     settings.triggerPercent === normalized.triggerPercent &&
     settings.summaryBlockPercent === normalized.summaryBlockPercent &&
     settings.summaryTotalPercent === normalized.summaryTotalPercent &&
-    settings.summaryLanguage === normalized.summaryLanguage
+    settings.summaryLanguage === normalized.summaryLanguage &&
+    settings.autoCompress === normalized.autoCompress &&
+    settings.showTimeline === normalized.showTimeline &&
+    settings.showBlockTokens === normalized.showBlockTokens &&
+    settings.decompressInlineMax === normalized.decompressInlineMax &&
+    settings.decompressTempCap === normalized.decompressTempCap &&
+    settings.decompressShowTokens === normalized.decompressShowTokens
   ) {
     return
   }

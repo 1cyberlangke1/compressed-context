@@ -8,9 +8,15 @@ import {
   isContextLimit,
   localeArgument,
   MAX_CONTEXT_LIMIT,
+  MAX_DECOMPRESS_INLINE_MAX,
+  MAX_DECOMPRESS_TEMP_CAP,
   MAX_TRIGGER_PERCENT,
   MIN_CONTEXT_LIMIT,
+  MIN_DECOMPRESS_INLINE_MAX,
+  MIN_DECOMPRESS_TEMP_CAP,
   MIN_TRIGGER_PERCENT,
+  effectiveDecompressInlineMax,
+  effectiveDecompressTempCap,
   effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
@@ -358,6 +364,12 @@ export function SettingsCommand(props: {
       summaryBlockPercent: effectiveSummaryBlockPercent(props.settings),
       summaryTotalPercent: effectiveSummaryTotalPercent(props.settings),
       summaryLanguage: effectiveSummaryLanguage(props.settings),
+      autoCompress: props.settings.autoCompress,
+      showTimeline: props.settings.showTimeline,
+      showBlockTokens: props.settings.showBlockTokens,
+      decompressInlineMax: effectiveDecompressInlineMax(props.settings),
+      decompressTempCap: effectiveDecompressTempCap(props.settings),
+      decompressShowTokens: props.settings.decompressShowTokens,
     }
     try {
       // ContextRpc 是 PortableDefinition，具体方法名在类型上退化成索引签名，这里补回调用形状。
@@ -368,6 +380,12 @@ export function SettingsCommand(props: {
           summaryBlockPercent: number
           summaryTotalPercent: number
           summaryLanguage: SummaryLanguage
+          autoCompress: boolean
+          showTimeline: boolean
+          showBlockTokens: boolean
+          decompressInlineMax: number
+          decompressTempCap: number
+          decompressShowTokens: boolean
         }): Promise<unknown>
       }
       void rpc.settingsSet(payload).catch(() => undefined)
@@ -488,6 +506,58 @@ export function SettingsCommand(props: {
     })
   }
 
+  /** 输入：布尔设置键；输出：无；预期：翻转后重开菜单。 */
+  const toggleSetting = async (
+    key: "autoCompress" | "showTimeline" | "showBlockTokens" | "decompressShowTokens",
+  ): Promise<void> => {
+    await props.updateSettings((draft) => {
+      draft[key] = !draft[key]
+    })
+    void openSettings()
+  }
+
+  const openDecompressInline = (): void => {
+    props.context.ui.dialog.show(() => (
+      <TokenDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.decompressInlineMax}
+        hint={copy().settings.decompressInlineMaxHint}
+        invalid={copy().settings.decompressInlineMaxInvalid}
+        placeholder="10k"
+        initial={formatTokens(effectiveDecompressInlineMax(props.settings))}
+        min={MIN_DECOMPRESS_INLINE_MAX}
+        max={MAX_DECOMPRESS_INLINE_MAX}
+        onConfirm={(next) => {
+          void props.updateSettings((draft) => {
+            draft.decompressInlineMax = next
+          })
+        }}
+      />
+    ))
+  }
+
+  const openDecompressCap = (): void => {
+    props.context.ui.dialog.show(() => (
+      <TokenDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.decompressTempCap}
+        hint={copy().settings.decompressTempCapHint}
+        invalid={copy().settings.decompressTempCapInvalid}
+        placeholder="50"
+        initial={effectiveDecompressTempCap(props.settings).toString()}
+        min={MIN_DECOMPRESS_TEMP_CAP}
+        max={MAX_DECOMPRESS_TEMP_CAP}
+        onConfirm={(next) => {
+          void props.updateSettings((draft) => {
+            draft.decompressTempCap = next
+          })
+        }}
+      />
+    ))
+  }
+
   const openLimit = async (): Promise<boolean> => {
     const picked = await props.context.ui.dialog.select<ContextLimit | "custom">({
       title: copy().settings.limit,
@@ -540,6 +610,36 @@ export function SettingsCommand(props: {
           value: "summaryLanguage",
           footer: summaryLanguageLabel(props.settings, copy()),
         },
+        {
+          title: copy().settings.autoCompress,
+          value: "autoCompress",
+          footer: props.settings.autoCompress ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.showTimeline,
+          value: "showTimeline",
+          footer: props.settings.showTimeline ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.showBlockTokens,
+          value: "showBlockTokens",
+          footer: props.settings.showBlockTokens ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.decompressInlineMax,
+          value: "decompressInlineMax",
+          footer: formatTokens(effectiveDecompressInlineMax(props.settings)),
+        },
+        {
+          title: copy().settings.decompressTempCap,
+          value: "decompressTempCap",
+          footer: effectiveDecompressTempCap(props.settings).toString(),
+        },
+        {
+          title: copy().settings.decompressShowTokens,
+          value: "decompressShowTokens",
+          footer: props.settings.decompressShowTokens ? copy().settings.on : copy().settings.off,
+        },
         { title: copy().settings.language, value: "language", footer: localeLabel(props.settings, copy()) },
         { title: copy().settings.close, value: "close" },
       ],
@@ -572,6 +672,23 @@ export function SettingsCommand(props: {
     if (picked === "summaryLanguage") {
       await openSummaryLanguage()
       void openSettings()
+      return
+    }
+    if (
+      picked === "autoCompress" ||
+      picked === "showTimeline" ||
+      picked === "showBlockTokens" ||
+      picked === "decompressShowTokens"
+    ) {
+      await toggleSetting(picked)
+      return
+    }
+    if (picked === "decompressInlineMax") {
+      openDecompressInline()
+      return
+    }
+    if (picked === "decompressTempCap") {
+      openDecompressCap()
       return
     }
     if (picked === "language") {
