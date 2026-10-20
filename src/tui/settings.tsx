@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, onMount } from "solid-js"
 
 import { formatTokens } from "../shared/format.ts"
 import { resolveMessages } from "../i18n/index.ts"
-import { ContextRpc } from "../shared/rpc.ts"
+import { contextRpc } from "../shared/rpc.ts"
 import {
   localeArgument,
   MAX_CONTEXT_LIMIT,
@@ -18,13 +18,14 @@ import {
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
   maxSummaryPercent,
+  serverSettingsPayload,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
   type SummaryLanguage,
 } from "../shared/settings.ts"
 import { PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
-import { buildSettingsOptions } from "./settings/options.ts"
+import { buildSettingsOptions, type SettingsAction, type ToggleSetting } from "./settings/options.ts"
 import type { UpdateSettings } from "./types.ts"
 
 /** 可选上限预设；菜单里只出现合法值（最低 50k）。 */
@@ -67,10 +68,9 @@ export function SettingsCommand(props: {
   /** 输入：sessionID；输出：无；预期：按会话模型拉取原生窗口，失败保留旧值。 */
   const fetchWindow = async (sessionID: string | undefined): Promise<void> => {
     try {
-      const rpc = props.context.client.rpc(ContextRpc) as unknown as {
-        settingsGet(input: { sessionID?: string }): Promise<{ resolvedWindow?: number }>
-      }
-      const got = await rpc.settingsGet(sessionID === undefined ? {} : { sessionID })
+      const got = await contextRpc(props.context.client).settingsGet(
+        sessionID === undefined ? {} : { sessionID },
+      )
       if (typeof got.resolvedWindow === "number" && got.resolvedWindow > 0) setResolvedWindow(got.resolvedWindow)
     } catch {
       // server plugin not loaded
@@ -90,41 +90,10 @@ export function SettingsCommand(props: {
 
   // 设置变化时推给服务端；服务端插件未加载时静默忽略。
   createEffect(() => {
-    const payload = {
-      contextLimit: props.settings.contextLimit,
-      triggerPercent: props.settings.triggerPercent,
-      summaryBlockPercent: effectiveSummaryBlockPercent(props.settings),
-      summaryTotalPercent: effectiveSummaryTotalPercent(props.settings),
-      summaryLanguage: effectiveSummaryLanguage(props.settings),
-      autoCompress: props.settings.autoCompress,
-      enableCompressTool: props.settings.enableCompressTool,
-      enableDecompressTool: props.settings.enableDecompressTool,
-      showTimeline: props.settings.showTimeline,
-      showBlockTokens: props.settings.showBlockTokens,
-      decompressInlineMax: effectiveDecompressInlineMax(props.settings),
-      decompressTempCap: effectiveDecompressTempCap(props.settings),
-      decompressShowTokens: props.settings.decompressShowTokens,
-    }
     try {
-      // ContextRpc 是 PortableDefinition，具体方法名在类型上退化成索引签名，这里补回调用形状。
-      const rpc = props.context.client.rpc(ContextRpc) as unknown as {
-        settingsSet(input: {
-          contextLimit: "auto" | number
-          triggerPercent: number
-          summaryBlockPercent: number
-          summaryTotalPercent: number
-          summaryLanguage: SummaryLanguage
-          autoCompress: boolean
-          enableCompressTool: boolean
-          enableDecompressTool: boolean
-          showTimeline: boolean
-          showBlockTokens: boolean
-          decompressInlineMax: number
-          decompressTempCap: number
-          decompressShowTokens: boolean
-        }): Promise<unknown>
-      }
-      void rpc.settingsSet(payload).catch(() => undefined)
+      void contextRpc(props.context.client)
+        .settingsSet(serverSettingsPayload(props.settings))
+        .catch(() => undefined)
     } catch {
       // server plugin not loaded
     }
@@ -243,18 +212,7 @@ export function SettingsCommand(props: {
   }
 
   /** 输入：布尔设置键；输出：无；预期：翻转后重开菜单。 */
-  const toggleSetting = async (
-    key:
-      | "autoCompress"
-      | "enableCompressTool"
-      | "enableDecompressTool"
-      | "showTimeline"
-      | "showBlockTokens"
-      | "showCacheChart"
-      | "showCacheLog"
-      | "showSummaries"
-      | "decompressShowTokens",
-  ): Promise<void> => {
+  const toggleSetting = async (key: ToggleSetting): Promise<void> => {
     await props.updateSettings((draft) => {
       draft[key] = !draft[key]
     })
@@ -328,7 +286,7 @@ export function SettingsCommand(props: {
     // 每次打开菜单都按当前会话模型刷新窗口，避免显示成别的模型。
     await fetchWindow(routeSessionID())
     const window = currentWindow()
-    const picked = await props.context.ui.dialog.select<string>({
+    const picked = await props.context.ui.dialog.select<SettingsAction>({
       title: copy().settings.title,
       options: buildSettingsOptions({ settings: props.settings, copy: copy(), window }),
     })

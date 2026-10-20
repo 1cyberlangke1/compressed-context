@@ -103,7 +103,7 @@ export function appendCacheSamples(
   return normalizeSamples([...existing, ...added])
 }
 
-/** 输入：任意 storage 值；输出：合法历史；损坏时返回空历史，绝不抛错。 */
+/** 输入：任意 storage 值；输出：合法历史；损坏时返回空历史，绝不抛错。hitRate 按 input/cached 重算。 */
 export function parseCacheHistory(value: unknown): CacheHistory {
   if (typeof value !== "object" || value === null) return EMPTY_CACHE_HISTORY
   const record = value as Record<string, unknown>
@@ -117,7 +117,6 @@ export function parseCacheHistory(value: unknown): CacheHistory {
     const input = sample["input"]
     const output = sample["output"]
     const cached = sample["cached"]
-    const hitRate = sample["hitRate"]
     if (typeof messageID !== "string" || messageID.length === 0) continue
     if (
       typeof at !== "number" ||
@@ -131,15 +130,18 @@ export function parseCacheHistory(value: unknown): CacheHistory {
       output < 0 ||
       typeof cached !== "number" ||
       !Number.isFinite(cached) ||
-      cached < 0 ||
-      typeof hitRate !== "number" ||
-      !Number.isFinite(hitRate) ||
-      hitRate < 0 ||
-      hitRate > 100
+      cached < 0
     ) {
       continue
     }
-    samples.push({ messageID, at, input, output, cached, hitRate })
+    samples.push({
+      messageID,
+      at,
+      input,
+      output,
+      cached,
+      hitRate: input > 0 ? Math.round((cached / input) * 100) : 0,
+    })
   }
   return { v: 1, samples: normalizeSamples(samples) }
 }

@@ -118,12 +118,13 @@ function fakeContext(): Context {
   } as unknown as Context
 }
 
-/** 输入：无；输出：带可写 settings 的 Panel 根组件。 */
-function Fixture() {
+/** 输入：可选初始设置；输出：带可写 settings 的 Panel 根组件。 */
+function Fixture(props: { readonly initial?: Partial<Settings> }) {
   const [settings, setSettings] = createSignal<Settings>({
     ...DEFAULT_SETTINGS,
     showTimeline: true,
     showBlockTokens: true,
+    ...props.initial,
   })
   const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
     setSettings((previous) => {
@@ -196,6 +197,26 @@ describe("Panel", () => {
       await app.waitForFrame((value) => value.includes("BODY_MARKER"))
       await app.mockMouse.click(2, rowOf(app, "b1: first"))
       await app.waitForFrame((value) => !value.includes("BODY_MARKER"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("关闭显示开关后隐藏缓存与摘要", async () => {
+    const app = await testRender(
+      () => (
+        <Fixture
+          initial={{ showCacheChart: false, showCacheLog: false, showSummaries: false }}
+        />
+      ),
+      { width: 42, height: 80 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes("上下文构成"))
+      expect(frame).not.toContain("缓存记录")
+      expect(frame).not.toContain("折线图")
+      expect(frame).not.toContain("摘要块")
     } finally {
       app.renderer.destroy()
     }

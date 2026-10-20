@@ -1,5 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
+import { cacheHistoryKey } from "../shared/cache.ts"
+import { recordCacheHistory } from "./cache-history.ts"
 import { blockMarker } from "./render.ts"
 import {
   STATE_PREFIX,
@@ -8,6 +10,7 @@ import {
   loadState,
   parseState,
   saveState,
+  stateKey,
   type State,
 } from "./state.ts"
 
@@ -36,7 +39,7 @@ async function reconcile(ctx: Plugin.Context, sessionID: string, state: State): 
 
 export type CompactionEventType = "ended" | "failed"
 
-/** 全 T3 且无法继续压缩时的终止提示。 */
+/** 摘要链仍超预算且没有任何合法合并候选时的终止提示。 */
 export const TERMINAL_MESSAGE =
   "compression cannot reduce this context further: start a new session or use native compaction"
 
@@ -80,33 +83,64 @@ export async function handleCompactionEvent(
   await saveState(ctx.storage, sessionID, dropPending(state, detail))
 }
 
+export interface SessionEventOptions {
+  readonly onSessionIdle?: (sessionID: string) => void
+  readonly onSessionDeleted?: (sessionID: string) => void
+}
+
+/** 输入：插件上下文 + sessionID；输出：无；预期：删除该会话的压缩状态与缓存历史。 */
+async function forgetSession(ctx: Plugin.Context, sessionID: string): Promise<void> {
+  try {
+    await Promise.all([
+      ctx.storage.remove(stateKey(sessionID)),
+      ctx.storage.remove(cacheHistoryKey(sessionID)),
+    ])
+  } catch {
+    // best effort：删不掉也不影响当前进程
+  }
+}
+
 /**
- * 输入：服务端上下文。
- * 输出：订阅 compaction.ended / compaction.failed，并返回取消函数。
- * 预期：成功时 pending 转正；失败时丢弃 pending/phase，不自动重试。
+ * 输入：插件上下文 + 可选清理回调。
+ * 输出：订阅会话事件并返回取消函数。
+ * 预期：compaction 成功/失败对账 pending；usage.updated/idle 补写缓存历史；
+ *       idle 清理内存；deleted 清理内存与 storage。
  */
-export function startCompactionEvents(ctx: Plugin.Context): () => void {
+export function startSessionEvents(
+  ctx: Plugin.Context,
+  options: SessionEventOptions = {},
+): () => void {
   const controller = new AbortController()
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        if (
-          event.type !== "session.compaction.ended" &&
-          event.type !== "session.compaction.failed"
-        ) {
-          continue
+        switch (event.type) {
+          case "session.compaction.ended":
+          case "session.compaction.failed": {
+            const type: CompactionEventType =
+              event.type === "session.compaction.ended" ? "ended" : "failed"
+            const failure =
+              event.type === "session.compaction.failed"
+                ? ((event.data as { error?: { message?: string } }).error?.message ?? "compaction failed")
+                : undefined
+            await handleCompactionEvent(ctx, type, event.data.sessionID, failure)
+            break
+          }
+          case "session.usage.updated":
+          case "session.idle":
+            // session.idle 在新版本里已标记 deprecated，usage.updated 每个 step 都会发；
+            // 两个都接，谁先到都能补写（按 messageID 去重）。
+            await recordCacheHistory(ctx, event.data.sessionID)
+            if (event.type === "session.idle") options.onSessionIdle?.(event.data.sessionID)
+            break
+          case "session.deleted":
+            await forgetSession(ctx, event.data.sessionID)
+            options.onSessionDeleted?.(event.data.sessionID)
+            break
         }
-        const type: CompactionEventType = event.type === "session.compaction.ended" ? "ended" : "failed"
-        const sessionID = event.data.sessionID
-        // failed 事件自带真实错误（钩子没跑时 state.lastError 是空的，只能从事件拿）
-        const failure =
-          event.type === "session.compaction.failed"
-            ? ((event.data as { error?: { message?: string } }).error?.message ?? "compaction failed")
-            : undefined
-        await handleCompactionEvent(ctx, type, sessionID, failure)
       }
     } catch {
-      // aborted or disconnected; reconciliation on next startup covers it
+      // aborted or disconnected；下一次事件或启动对账会补上
     }
   })()
   return () => {

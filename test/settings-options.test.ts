@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 
 import { resolveMessages } from "../src/i18n/index.ts"
 import { DEFAULT_SETTINGS } from "../src/shared/settings.ts"
-import { buildSettingsOptions, limitLabel, percentLabel } from "../src/tui/settings/options.ts"
+import {
+  SETTINGS_ACTIONS,
+  buildSettingsOptions,
+  limitLabel,
+  percentLabel,
+} from "../src/tui/settings/options.ts"
 
 const copy = resolveMessages("zh")
 
@@ -46,6 +51,11 @@ describe("buildSettingsOptions", () => {
     expect(values).toContain("showCacheChart")
     expect(values).toContain("showCacheLog")
     expect(values).toContain("showSummaries")
+  })
+
+  it("SETTINGS_ACTIONS 与菜单项完全一致", () => {
+    const options = buildSettingsOptions({ settings: DEFAULT_SETTINGS, copy, window: 200_000 })
+    expect(new Set(options.map((option) => option.value))).toEqual(new Set(SETTINGS_ACTIONS))
   })
 
   it("footer 显示开关与上限", () => {

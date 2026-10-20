@@ -1,5 +1,9 @@
 import { Rpc } from "@opencode/plugin/rpc"
 
+import type { SummaryBlock } from "./blocks.ts"
+import type { CacheSample } from "./cache.ts"
+import type { CompressionSettings } from "./settings.ts"
+
 const SettingsGetInputJson = {
   type: "object",
   properties: { sessionID: { type: "string" } },
@@ -114,3 +118,25 @@ export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
   },
   events: {},
 })
+
+/** 服务端设置读取结果。 */
+export interface ContextSettingsResult extends CompressionSettings {
+  readonly resolvedWindow?: number
+}
+
+/** TUI 侧对 ContextRpc 的类型化视图。 */
+export interface ContextRpcClient {
+  settingsGet(input: { readonly sessionID?: string }): Promise<ContextSettingsResult>
+  settingsSet(input: CompressionSettings): Promise<{ readonly ok: boolean }>
+  blocksGet(input: { readonly sessionID: string }): Promise<{ readonly blocks: readonly SummaryBlock[] }>
+  cacheHistoryGet(input: {
+    readonly sessionID: string
+  }): Promise<{ readonly samples: readonly CacheSample[] }>
+}
+
+/** 输入：带 rpc 方法的 TUI client；输出：类型化 RPC 客户端。 */
+export function contextRpc(client: {
+  rpc(definition: Rpc.PortableDefinition): unknown
+}): ContextRpcClient {
+  return client.rpc(ContextRpc) as ContextRpcClient
+}

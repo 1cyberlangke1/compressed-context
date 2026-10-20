@@ -37,7 +37,6 @@ export interface State {
   readonly v: 1
   readonly blocks: readonly Block[]
   readonly pending?: Block
-  readonly autoInFlight?: boolean
   /** 下一次 compaction 是二级压缩；T1 时缺省。 */
   readonly phase?: CompactionPhase
   readonly attempts: number
@@ -170,7 +169,7 @@ export async function saveState(storage: StorageLike, sessionID: string, state: 
   await storage.set(stateKey(sessionID), state as unknown as Schema.Json)
 }
 
-/** 输入：状态；输出：pending 转正后的新状态；预期：保留下一层 phase。 */
+/** 输入：状态；输出：pending 转正后的新状态；预期：成功时清 lastError/terminal，保留下一层 phase。 */
 export function commitPending(state: State): State {
   if (!state.pending) return state
   return {
@@ -181,7 +180,7 @@ export function commitPending(state: State): State {
   }
 }
 
-/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清掉 phase，但保留终止标记。 */
+/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清 pending/phase，保留 terminal。 */
 export function dropPending(state: State, error: string): State {
   return {
     v: 1,
@@ -189,19 +188,6 @@ export function dropPending(state: State, error: string): State {
     attempts: state.attempts + 1,
     lastError: error,
     ...(state.terminal === undefined ? {} : { terminal: state.terminal }),
-  }
-}
-
-/** 输入：状态 + 下一层 phase；输出：替换 phase 后的状态。 */
-export function withPhase(state: State, phase: CompactionPhase | undefined): State {
-  return {
-    v: state.v,
-    blocks: state.blocks,
-    attempts: state.attempts,
-    ...(state.pending === undefined ? {} : { pending: state.pending }),
-    ...(state.autoInFlight === undefined ? {} : { autoInFlight: state.autoInFlight }),
-    ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
-    ...(phase === undefined ? {} : { phase }),
   }
 }
 

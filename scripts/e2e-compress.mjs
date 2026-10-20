@@ -1063,6 +1063,32 @@ try {
   )
   console.log("case passed: cache histories isolated by session")
 
+  // case: 删除会话时清理插件 storage
+  const deleteSession = await newSession("delete-cleanup")
+  await promptSession(deleteSession, "delete cleanup")
+  await waitForCacheHistory(
+    deleteSession,
+    (history) => (history?.samples?.length ?? 0) > 0,
+    "delete cleanup history",
+  )
+  setState(deleteSession, { v: 1, blocks: [], attempts: 0 })
+  assert.notEqual(stateFor(deleteSession), undefined, "seed state must exist before delete")
+  await api("DELETE", `/api/session/${deleteSession}`)
+  const deleteDeadline = Date.now() + 10_000
+  while (
+    Date.now() < deleteDeadline &&
+    (stateFor(deleteSession) !== undefined || cacheHistoryFor(deleteSession) !== undefined)
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  assert.equal(stateFor(deleteSession), undefined, "state must be removed on session delete")
+  assert.equal(
+    cacheHistoryFor(deleteSession),
+    undefined,
+    "cache history must be removed on session delete",
+  )
+  console.log("case passed: session delete cleans plugin storage")
+
   // case: 缓存指令只追加在尾部，不重发 transcript
   mode = "normal"
   assert.ok(

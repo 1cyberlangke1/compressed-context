@@ -1,3 +1,5 @@
+import { readInt } from "./parse.ts"
+
 /**
  * TUI 面板设置。
  *
@@ -75,13 +77,8 @@ export const MAX_DECOMPRESS_INLINE_MAX = 1_000_000
 export const MIN_DECOMPRESS_TEMP_CAP = 1
 export const MAX_DECOMPRESS_TEMP_CAP = 1_000
 
-export interface Settings {
-  /** 是否显示整块上下文面板 */
-  enabled: boolean
-  /** 面板是否展开（折叠后只剩标题行） */
-  expanded: boolean
-  /** 界面语言；auto 跟随系统 */
-  locale: LocaleSetting
+/** 服务端关心的压缩设置；TUI 的 Settings 在此基础上加显示项。 */
+export interface CompressionSettings {
   /** 上下文窗口上限；数字是上限，实际取「设置值」和「模型原生窗口」中较小的那个 */
   contextLimit: ContextLimit
   /** 强制压缩阈值（占用百分比） */
@@ -102,6 +99,21 @@ export interface Settings {
   showTimeline: boolean
   /** 块头显示估算 token */
   showBlockTokens: boolean
+  /** decompress 内联上限（字符） */
+  decompressInlineMax: number
+  /** decompress 临时文件上限 */
+  decompressTempCap: number
+  /** decompress 返回是否带估算 token */
+  decompressShowTokens: boolean
+}
+
+export interface Settings extends CompressionSettings {
+  /** 是否显示整块上下文面板 */
+  enabled: boolean
+  /** 面板是否展开（折叠后只剩标题行） */
+  expanded: boolean
+  /** 界面语言；auto 跟随系统 */
+  locale: LocaleSetting
   /** 缓存记录区是否展开 */
   cacheExpanded: boolean
   /** 显示缓存折线图 */
@@ -118,12 +130,6 @@ export interface Settings {
   summariesExpanded: boolean
   /** 当前展开的摘要块 id；undefined 表示全部收起 */
   expandedBlockId?: string
-  /** decompress 内联上限（字符） */
-  decompressInlineMax: number
-  /** decompress 临时文件上限 */
-  decompressTempCap: number
-  /** decompress 返回是否带估算 token */
-  decompressShowTokens: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -258,14 +264,6 @@ function readContextLimit(value: unknown): ContextLimit {
   return DEFAULT_SETTINGS.contextLimit
 }
 
-/** 输入：任意值 + 范围；输出：合法的整数，非法回退。 */
-export function readInt(value: unknown, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
-  const rounded = Math.round(value)
-  if (rounded < min || rounded > max) return fallback
-  return rounded
-}
-
 /**
  * 输入：任意设置对象（可能来自旧版本、缺字段或类型不对）。
  * 输出：补齐后的合法设置。
@@ -366,6 +364,25 @@ export function effectiveDecompressTempCap(settings: { readonly decompressTempCa
     MAX_DECOMPRESS_TEMP_CAP,
     DEFAULT_DECOMPRESS_TEMP_CAP,
   )
+}
+
+/** 输入：TUI 设置；输出：发给服务端的压缩设置子集；预期：字段列表只在这里维护。 */
+export function serverSettingsPayload(settings: Settings): CompressionSettings {
+  return {
+    contextLimit: settings.contextLimit,
+    triggerPercent: settings.triggerPercent,
+    summaryBlockPercent: effectiveSummaryBlockPercent(settings),
+    summaryTotalPercent: effectiveSummaryTotalPercent(settings),
+    summaryLanguage: effectiveSummaryLanguage(settings),
+    autoCompress: settings.autoCompress,
+    enableCompressTool: settings.enableCompressTool,
+    enableDecompressTool: settings.enableDecompressTool,
+    showTimeline: settings.showTimeline,
+    showBlockTokens: settings.showBlockTokens,
+    decompressInlineMax: effectiveDecompressInlineMax(settings),
+    decompressTempCap: effectiveDecompressTempCap(settings),
+    decompressShowTokens: settings.decompressShowTokens,
+  }
 }
 
 /**

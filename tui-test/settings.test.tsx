@@ -6,11 +6,14 @@ import { createSignal } from "solid-js"
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
 import { SettingsCommand } from "../src/tui/settings.tsx"
 
-/** 输入：捕获对象；输出：SettingsCommand 需要的最小上下文。 */
-function fakeContext(captured: {
+interface Captured {
   options?: DialogSelectOptions<string>
   run?: () => void
-}): Context {
+  readonly answers: (string | undefined)[]
+}
+
+/** 输入：捕获对象；输出：SettingsCommand 需要的最小上下文。 */
+function fakeContext(captured: Captured): Context {
   return {
     theme: {
       text: {
@@ -30,7 +33,7 @@ function fakeContext(captured: {
       dialog: {
         select: (options: DialogSelectOptions<string>) => {
           captured.options = options
-          return Promise.resolve(undefined)
+          return Promise.resolve(captured.answers.shift())
         },
         clear: () => {},
       },
@@ -45,25 +48,31 @@ function fakeContext(captured: {
   } as unknown as Context
 }
 
+/** 输入：每次 select 的返回值队列；输出：渲染好的 app + 捕获对象 + 设置信号。 */
+async function mount(answers: (string | undefined)[]) {
+  const captured: Captured = { answers }
+  const context = fakeContext(captured)
+  const [settings, setSettings] = createSignal<Settings>({ ...DEFAULT_SETTINGS })
+  const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
+    setSettings((previous) => {
+      const draft = { ...previous }
+      mutation(draft)
+      return draft
+    })
+  }
+  const app = await testRender(
+    () => <SettingsCommand context={context} settings={settings()} updateSettings={updateSettings} />,
+    { width: 40, height: 20 },
+  )
+  app.renderer.start()
+  await app.waitFor(() => captured.run !== undefined)
+  return { app, captured, settings }
+}
+
 describe("SettingsCommand", () => {
   test("打开菜单时按分类分组", async () => {
-    const captured: { options?: DialogSelectOptions<string>; run?: () => void } = {}
-    const context = fakeContext(captured)
-    const [settings, setSettings] = createSignal<Settings>({ ...DEFAULT_SETTINGS })
-    const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
-      setSettings((previous) => {
-        const draft = { ...previous }
-        mutation(draft)
-        return draft
-      })
-    }
-    const app = await testRender(
-      () => <SettingsCommand context={context} settings={settings()} updateSettings={updateSettings} />,
-      { width: 40, height: 20 },
-    )
-    app.renderer.start()
+    const { app, captured } = await mount([])
     try {
-      await app.waitFor(() => captured.run !== undefined)
       captured.run?.()
       await app.waitFor(() => captured.options !== undefined)
       const options = captured.options?.options ?? []
@@ -77,6 +86,17 @@ describe("SettingsCommand", () => {
         "解压",
         "界面",
       ])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("选择 showCacheChart 会翻转设置", async () => {
+    const { app, captured, settings } = await mount(["showCacheChart", undefined])
+    try {
+      captured.run?.()
+      await app.waitFor(() => settings().showCacheChart === false)
+      expect(settings().showCacheChart).toBe(false)
     } finally {
       app.renderer.destroy()
     }

@@ -166,6 +166,14 @@ describe("parseCacheHistory", () => {
     expect(parsed.samples).toHaveLength(1)
     expect(parsed.samples[0]?.at).toBe(10)
   })
+
+  it("命中率按 input/cached 重算，不信任旧值", () => {
+    const parsed = parseCacheHistory({
+      v: 1,
+      samples: [{ messageID: "m1", at: 10, input: 100, output: 10, cached: 80, hitRate: 1 }],
+    })
+    expect(parsed.samples[0]?.hitRate).toBe(80)
+  })
 })
 
 describe("cacheHistoryEquals", () => {

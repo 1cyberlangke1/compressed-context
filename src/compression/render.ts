@@ -14,11 +14,6 @@ export interface RenderOptions {
   readonly showBlockTokens?: boolean
 }
 
-/** 输入：时间戳；输出：本地时间 `YYYY/MM/DD HH:mm`；预期：固定格式，不依赖 locale。 */
-function formatTime(at: number): string {
-  return formatTimestamp(at)
-}
-
 function bullets(items: readonly string[]): string {
   if (items.length === 0) return "- (none)"
   return items.map((item) => `- ${item}`).join("\n")
@@ -70,7 +65,7 @@ export function renderBlock(block: Block, options: RenderOptions = {}): string {
     meta.push(`≈${countText(body).toString()} tok`)
   }
   if (options.showTimeline === true) {
-    meta.push(formatTime(block.at))
+    meta.push(formatTimestamp(block.at))
   }
   const title = block.summary.title.trim()
   const header = `${blockMarker(block.id)} [${meta.join(" · ")}]${title ? ` ${title}` : ""}`

@@ -42,27 +42,3 @@ export async function recordCacheHistory(ctx: Plugin.Context, sessionID: string)
     // best effort：历史缺失不影响主界面
   }
 }
-
-/**
- * 输入：插件上下文。
- * 输出：订阅 session.idle，并在每个会话空闲时记录缓存历史；返回取消函数。
- * 预期：TUI 没打开也照常记录；每个会话独立 key，不会串对话。
- */
-export function startCacheHistoryEvents(ctx: Plugin.Context): () => void {
-  const controller = new AbortController()
-  void (async () => {
-    try {
-      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        // session.idle 在新版本里已标记 deprecated，session.usage.updated 每个 step 都会发；
-        // 两个都接，谁先到都能补写（按 messageID 去重）。
-        if (event.type !== "session.idle" && event.type !== "session.usage.updated") continue
-        await recordCacheHistory(ctx, event.data.sessionID)
-      }
-    } catch {
-      // aborted or disconnected；下一次 idle / RPC 读取会补上
-    }
-  })()
-  return () => {
-    controller.abort()
-  }
-}

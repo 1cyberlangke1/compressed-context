@@ -50,6 +50,16 @@ export function olderMessages(messages: readonly MessageLike[]): readonly Messag
   return messages.filter((message) => !isCheckpoint(message))
 }
 
+/** 输入：消息列表；输出：首尾带 id 的消息 id；没有可用 id 时返回 undefined。 */
+export function messageRange(
+  messages: readonly MessageLike[],
+): { readonly fromId: string; readonly toId: string } | undefined {
+  const first = messages.find((message) => message.id !== undefined)
+  const last = [...messages].reverse().find((message) => message.id !== undefined)
+  if (first?.id === undefined || last?.id === undefined) return undefined
+  return { fromId: first.id, toId: last.id }
+}
+
 /** 输入：消息列表；输出：所有 text part 的总字符数。 */
 export function textChars(messages: readonly MessageLike[]): number {
   let total = 0

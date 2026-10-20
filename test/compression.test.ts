@@ -9,7 +9,7 @@ import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.t
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
-import { commitPending, dropPending, loadState, parseState, saveState, stateKey, withPending, withPhase, type Block, type StorageLike } from "../src/compression/state.ts"
+import { commitPending, dropPending, loadState, parseState, saveState, stateKey, withPending, type Block, type CompactionPhase, type State, type StorageLike } from "../src/compression/state.ts"
 import {
   buildMergeInstruction,
   buildT1Instruction,
@@ -21,6 +21,19 @@ import {
 import { registerCompressTool } from "../src/compression/tool.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
 import { minSummaryChars, validateSummary } from "../src/compression/validate.ts"
+
+/** 测试辅助：显式设置/清空 phase；生产代码不再使用 withPhase。 */
+function withPhase(state: State, phase: CompactionPhase | undefined): State {
+  return {
+    v: state.v,
+    blocks: state.blocks,
+    attempts: state.attempts,
+    ...(state.pending === undefined ? {} : { pending: state.pending }),
+    ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+    ...(state.terminal === undefined ? {} : { terminal: state.terminal }),
+    ...(phase === undefined ? {} : { phase }),
+  }
+}
 
 const summary: SummaryFields = {
   title: "compress core",

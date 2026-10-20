@@ -1,16 +1,14 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
-import type { SummaryBlock } from "../../shared/blocks.ts"
-import type { CacheSample } from "../../shared/cache.ts"
 import { formatTokens } from "../../shared/format.ts"
-import { ContextRpc } from "../../shared/rpc.ts"
 import { effectiveLimit, localeArgument, type Settings } from "../../shared/settings.ts"
-import { parseStats, scaleCategories, STATS_KEY, TERMINAL_KEY, type ContextStats } from "../../shared/stats.ts"
+import { scaleCategories } from "../../shared/stats.ts"
 import { mix, toHex, toRgb, type Rgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
 import { CacheSection } from "./cache.tsx"
+import { usePanelData } from "./data.ts"
 import { SummarySection } from "./summaries.tsx"
 
 /**
@@ -50,11 +48,12 @@ export function Panel(props: {
   readonly updateSettings: UpdateSettings
 }) {
   const theme = props.context.theme
-  const [stats, setStats] = createSignal<ContextStats>()
-  const [terminal, setTerminal] = createSignal<string>()
-  const [cache, setCache] = createSignal<readonly CacheSample[]>([])
-  const [blocks, setBlocks] = createSignal<readonly SummaryBlock[]>([])
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
+  const data = usePanelData({
+    context: props.context,
+    sessionID: props.sessionID,
+    settings: () => props.settings,
+  })
 
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const messages = createMemo(() => props.context.data.session.message.list(props.sessionID))
@@ -95,85 +94,8 @@ export function Panel(props: {
     return Math.round((value.used / max) * 100)
   })
 
-  /** 输入：无；输出：RPC 客户端；预期：方法名在 PortableDefinition 上退化成索引签名，这里补回形状。 */
-  const rpc = () =>
-    props.context.client.rpc(ContextRpc) as unknown as {
-      cacheHistoryGet(input: { sessionID: string }): Promise<{ samples: readonly CacheSample[] }>
-      blocksGet(input: { sessionID: string }): Promise<{ blocks: readonly SummaryBlock[] }>
-    }
-
-  /** 输入：无；输出：无；预期：从服务端拉取该会话持久化的缓存历史。 */
-  const refreshCache = async (): Promise<void> => {
-    try {
-      const got = await rpc().cacheHistoryGet({ sessionID: props.sessionID })
-      setCache(got.samples)
-    } catch {
-      // server plugin not loaded；保留上一次数据
-    }
-  }
-
-  /** 输入：无；输出：无；预期：从服务端拉取 active 摘要链。 */
-  const refreshBlocks = async (): Promise<void> => {
-    if (!props.settings.showSummaries) return
-    try {
-      const got = await rpc().blocksGet({ sessionID: props.sessionID })
-      setBlocks(got.blocks)
-    } catch {
-      // server plugin not loaded；保留上一次数据
-    }
-  }
-
-  /** 输入：无；输出：无；预期：从服务端重新拉取 session metadata 里的统计。 */
-  const refresh = async (): Promise<void> => {
-    try {
-      const info = await props.context.client.session.get({ sessionID: props.sessionID })
-      setStats(parseStats(info.metadata?.[STATS_KEY]))
-      const rawTerminal = info.metadata?.[TERMINAL_KEY]
-      setTerminal(typeof rawTerminal === "string" ? rawTerminal : undefined)
-    } catch {
-      // 统计缺失不影响主界面，保持上一次的值
-    }
-  }
-
-  // 显示开关变化时重新拉取；首次挂载也会跑一次。
-  createEffect(() => {
-    if (props.settings.showCacheChart || props.settings.showCacheLog) void refreshCache()
-  })
-  createEffect(() => {
-    if (props.settings.showSummaries) void refreshBlocks()
-  })
-
-  createEffect(() => {
-    void refresh()
-  })
-
-  onCleanup(
-    props.context.data.on("session.usage.updated", (event) => {
-      if (event.data.sessionID !== props.sessionID) return
-      void refresh()
-      // 缓存历史由服务端在 usage.updated 时补写；这里同步刷新面板。
-      if (props.settings.showCacheChart || props.settings.showCacheLog) void refreshCache()
-    }),
-  )
-  onCleanup(
-    props.context.data.on("session.compaction.ended", (event) => {
-      if (event.data.sessionID !== props.sessionID) return
-      void refresh()
-      void refreshCache()
-      void refreshBlocks()
-    }),
-  )
-  onCleanup(
-    props.context.data.on("session.idle", (event) => {
-      if (event.data.sessionID !== props.sessionID) return
-      void refresh()
-      void refreshCache()
-      void refreshBlocks()
-    }),
-  )
-
   const rows = createMemo(() => {
-    const value = stats()
+    const value = data.stats()
     if (value === undefined || value.estimatedTotal <= 0) return []
     return scaleCategories(value, usage()?.used ?? 0).filter((row) => row.value > 0)
   })
@@ -198,7 +120,7 @@ export function Panel(props: {
             <text fg={theme.text.muted}>{`${(percent() ?? 0).toString()}%`}</text>
           </Show>
         </box>
-        <Show when={terminal()}>
+        <Show when={data.terminal()}>
           <text fg={theme.text.feedback.error.base} wrapMode="word">
             {`⚠ ${copy().terminal}`}
           </text>
@@ -228,14 +150,14 @@ export function Panel(props: {
             copy={copy()}
             settings={props.settings}
             updateSettings={props.updateSettings}
-            samples={cache()}
+            samples={data.cache()}
           />
           <SummarySection
             theme={theme}
             copy={copy()}
             settings={props.settings}
             updateSettings={props.updateSettings}
-            blocks={blocks()}
+            blocks={data.blocks()}
           />
         </Show>
       </box>

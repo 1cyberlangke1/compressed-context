@@ -48,6 +48,45 @@ export function percentLabel(percent: number, window: number | undefined): strin
     : `${percent.toString()}% ≈ ${formatTokens(chars)}`
 }
 
+/** 设置菜单里所有可选 action；options.ts 与 settings.tsx 共用。 */
+export const SETTINGS_ACTIONS = [
+  "limit",
+  "threshold",
+  "autoCompress",
+  "enableCompressTool",
+  "enableDecompressTool",
+  "blockPercent",
+  "totalPercent",
+  "summaryLanguage",
+  "showTimeline",
+  "showBlockTokens",
+  "show",
+  "showCacheChart",
+  "showCacheLog",
+  "showSummaries",
+  "decompressInlineMax",
+  "decompressTempCap",
+  "decompressShowTokens",
+  "language",
+  "close",
+] as const
+
+export type SettingsAction = (typeof SETTINGS_ACTIONS)[number]
+
+/** 设置菜单里可切换的布尔项。 */
+export type ToggleSetting = Extract<
+  SettingsAction,
+  | "autoCompress"
+  | "enableCompressTool"
+  | "enableDecompressTool"
+  | "showTimeline"
+  | "showBlockTokens"
+  | "showCacheChart"
+  | "showCacheLog"
+  | "showSummaries"
+  | "decompressShowTokens"
+>
+
 /**
  * 输入：当前设置 + 文案 + 已解析窗口。
  * 输出：按「压缩 / 摘要 / 面板 / 解压 / 界面」分组的设置菜单项。
@@ -57,7 +96,7 @@ export function buildSettingsOptions(input: {
   readonly settings: Settings
   readonly copy: Messages
   readonly window: number | undefined
-}): readonly DialogSelectOption<string>[] {
+}): readonly DialogSelectOption<SettingsAction>[] {
   const { settings, copy, window } = input
   const onOff = (value: boolean): string => (value ? copy.settings.on : copy.settings.off)
   return [

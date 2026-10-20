@@ -90,9 +90,13 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
     },
     cacheHistoryGet: async (input) => {
       const sessionID = (input as { readonly sessionID: string }).sessionID
-      // 读取前先补写一次，避免 TUI 和 idle 事件抢时序导致少一条。
-      await recordCacheHistory(ctx, sessionID)
       const history = await loadCacheHistory(ctx.storage, sessionID)
+      // 只在历史为空时补写一次；已有历史时只读，避免每次 TUI 刷新都拉全文。
+      if (history.samples.length === 0) {
+        await recordCacheHistory(ctx, sessionID)
+        const bootstrapped = await loadCacheHistory(ctx.storage, sessionID)
+        return { samples: bootstrapped.samples }
+      }
       return { samples: history.samples }
     },
   })

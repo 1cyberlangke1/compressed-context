@@ -2,10 +2,11 @@ import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
 import { resolveSummaryLimits } from "../shared/settings.ts"
+import { createT1Block } from "./block.ts"
 import { SummaryFields } from "./schema.ts"
-import { RESOLVED_WINDOW_KEY, loadServerSettings } from "./settings.ts"
-import type { MessageLike } from "./select.ts"
-import { loadState, nextBlockId, nextOrder, saveState, withPending, type Block } from "./state.ts"
+import { RESOLVED_WINDOW_KEY, loadServerSettings, windowKey } from "./settings.ts"
+import { messageRange, type MessageLike } from "./select.ts"
+import { loadState, saveState, withPending } from "./state.ts"
 import type { Disposable } from "./settings-rpc.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
@@ -50,6 +51,7 @@ export async function registerCompressTool(
       execute: async (input, toolCtx) => {
         const sessionID = toolCtx.sessionID
         const state = await loadState(ctx.storage, sessionID)
+        if (state.terminal !== undefined) return failure(state.terminal)
         if (state.pending || state.phase !== undefined) return failure("compression already in progress")
 
         // context 钩子缓存的就是 eligible 消息，这里不能再筛一次。
@@ -65,29 +67,37 @@ export async function registerCompressTool(
 
         const settings = await loadServerSettings(ctx.storage)
         if (!settings.enableCompressTool) return failure("compress tool is disabled in settings")
-        const resolved = await ctx.storage.get(RESOLVED_WINDOW_KEY)
-        const windowTokens = typeof resolved === "number" && resolved > 0 ? resolved : undefined
+        // 优先用当前会话模型自己的窗口；取不到再回退最近一次解析值。
+        let windowTokens: number | undefined
+        try {
+          const session = await ctx.session.get({ sessionID })
+          const model = session.model
+          const stored =
+            model === undefined ? undefined : await ctx.storage.get(windowKey(model.providerID, model.id))
+          if (typeof stored === "number" && stored > 0) windowTokens = stored
+        } catch {
+          // 会话或模型未知：回退到最近一次解析值
+        }
+        if (windowTokens === undefined) {
+          const resolved = await ctx.storage.get(RESOLVED_WINDOW_KEY)
+          if (typeof resolved === "number" && resolved > 0) windowTokens = resolved
+        }
         const limits = resolveSummaryLimits(settings, windowTokens)
         const validation = validateSummary(input, sourceChars, undefined, limits.blockChars)
         if (!validation.ok) return failure(validation.message)
 
-        const first = eligible.find((message) => message.id !== undefined)
-        const last = [...eligible].reverse().find((message) => message.id !== undefined)
-        if (first?.id === undefined || last?.id === undefined) {
+        const range = messageRange(eligible)
+        if (range === undefined) {
           return failure("messages are missing ids")
         }
 
-        const block: Block = {
-          id: nextBlockId(state.blocks),
-          tier: 1,
+        const block = createT1Block({
+          blocks: state.blocks,
           summary: input,
-          fromId: first.id,
-          toId: last.id,
-          tokensBefore: Math.ceil(sourceChars / 4),
-          tokensAfter: Math.ceil(JSON.stringify(input).length / 4),
-          at: Date.now(),
-          order: nextOrder(state.blocks),
-        }
+          fromId: range.fromId,
+          toId: range.toId,
+          sourceChars,
+        })
 
         await saveState(ctx.storage, sessionID, withPending(state, block))
         try {
