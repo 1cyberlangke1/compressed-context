@@ -204,7 +204,18 @@ export function Panel(props: {
 
   onCleanup(
     props.context.data.on("session.usage.updated", (event) => {
-      if (event.data.sessionID === props.sessionID) void refresh()
+      if (event.data.sessionID !== props.sessionID) return
+      void refresh()
+      // 缓存历史由服务端在 usage.updated 时补写；这里同步刷新面板。
+      if (props.settings.showCacheChart || props.settings.showCacheLog) void refreshCache()
+    }),
+  )
+  onCleanup(
+    props.context.data.on("session.compaction.ended", (event) => {
+      if (event.data.sessionID !== props.sessionID) return
+      void refresh()
+      void refreshCache()
+      void refreshBlocks()
     }),
   )
   onCleanup(
@@ -441,49 +452,54 @@ export function Panel(props: {
                 >
                   <box paddingLeft={2} flexDirection="column" width="100%">
                     <For each={blocks()}>
-                      {(block) => (
-                        <box flexDirection="column" width="100%">
-                          <box
-                            flexDirection="row"
-                            gap={1}
-                            onMouseDown={() => {
-                              toggleBlock(block.id)
-                            }}
-                          >
-                            <text fg={theme.text.base}>
-                              {props.settings.expandedBlockId === block.id ? "▼" : "▶"}
-                            </text>
-                            <text wrapMode="word" flexGrow={1}>
-                              <span style={{ fg: tierColor(block.tier, theme) }}>
-                                {`${block.id}: ${block.title}`}
-                              </span>
-                              <span style={{ fg: theme.text.muted }}>
-                                {`  [T${block.tier.toString()}]${
-                                  props.settings.showBlockTokens
-                                    ? `  ≈${formatTokens(block.tokensAfter)}`
-                                    : ""
-                                }${
-                                  props.settings.showTimeline
-                                    ? `  ${formatTimestamp(block.at)}`
-                                    : ""
-                                }${
-                                  block.sourceBlockIds !== undefined &&
-                                  block.sourceBlockIds.length > 0
-                                    ? `  merged ${block.sourceBlockIds
-                                        .map((id) => `#${id}`)
-                                        .join(" + ")}`
-                                    : ""
-                                }`}
-                              </span>
-                            </text>
+                      {(block) => {
+                        const meta = (): string => {
+                          const parts: string[] = []
+                          if (props.settings.showTimeline) parts.push(formatTimestamp(block.at))
+                          if (block.sourceBlockIds !== undefined && block.sourceBlockIds.length > 0) {
+                            parts.push(
+                              `merged ${block.sourceBlockIds.map((id) => `#${id}`).join(" + ")}`,
+                            )
+                          }
+                          return parts.join("  ")
+                        }
+                        return (
+                          <box flexDirection="column" width="100%">
+                            <box
+                              flexDirection="row"
+                              onMouseDown={() => {
+                                toggleBlock(block.id)
+                              }}
+                            >
+                              <text wrapMode="word" flexGrow={1}>
+                                <span style={{ fg: theme.text.base }}>
+                                  {props.settings.expandedBlockId === block.id ? "▼" : "▶"}
+                                </span>
+                                <span style={{ fg: tierColor(block.tier, theme) }}>
+                                  {` ${block.id}: ${block.title}`}
+                                </span>
+                                <span style={{ fg: theme.text.muted }}>
+                                  {`  [T${block.tier.toString()}]${
+                                    props.settings.showBlockTokens
+                                      ? `  ≈${formatTokens(block.tokensAfter)}`
+                                      : ""
+                                  }`}
+                                </span>
+                              </text>
+                            </box>
+                            <Show when={meta() !== ""}>
+                              <text fg={theme.text.muted} wrapMode="word">
+                                {`  ${meta()}`}
+                              </text>
+                            </Show>
+                            <Show when={props.settings.expandedBlockId === block.id}>
+                              <scrollbox height={8} scrollY={true} width="100%">
+                                <markdown content={block.body} syntaxStyle={getSyntaxStyle()} />
+                              </scrollbox>
+                            </Show>
                           </box>
-                          <Show when={props.settings.expandedBlockId === block.id}>
-                            <scrollbox height={8} scrollY={true} width="100%">
-                              <markdown content={block.body} syntaxStyle={getSyntaxStyle()} />
-                            </scrollbox>
-                          </Show>
-                        </box>
-                      )}
+                        )
+                      }}
                     </For>
                   </box>
                 </Show>

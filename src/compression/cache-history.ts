@@ -53,7 +53,9 @@ export function startCacheHistoryEvents(ctx: Plugin.Context): () => void {
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        if (event.type !== "session.idle") continue
+        // session.idle 在新版本里已标记 deprecated，session.usage.updated 每个 step 都会发；
+        // 两个都接，谁先到都能补写（按 messageID 去重）。
+        if (event.type !== "session.idle" && event.type !== "session.usage.updated") continue
         await recordCacheHistory(ctx, event.data.sessionID)
       }
     } catch {

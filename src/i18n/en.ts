@@ -58,6 +58,13 @@ export const en: Messages = {
     showCacheChart: "Show cache chart",
     showCacheLog: "Show cache log",
     showSummaries: "Show summary blocks",
+    categories: {
+      compress: "Compression",
+      summary: "Summary",
+      panel: "Panel",
+      decompress: "Decompression",
+      interface: "Interface",
+    },
     decompressInlineMax: "Decompress inline limit",
     decompressInlineMaxHint: "Above this many characters the content goes to a temp file; digits or a k/m suffix",
     decompressInlineMaxInvalid: "Enter a character limit between 1k and 1m",

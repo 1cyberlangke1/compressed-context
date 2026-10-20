@@ -1,34 +1,30 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createEffect, createMemo, createSignal, onMount, Show, type ParentProps } from "solid-js"
+import { createEffect, createMemo, createSignal, onMount } from "solid-js"
 
 import { formatTokens } from "../format.ts"
-import { resolveMessages, type Messages } from "../i18n/index.ts"
+import { resolveMessages } from "../i18n/index.ts"
 import { ContextRpc } from "../rpc.ts"
 import {
-  isContextLimit,
   localeArgument,
   MAX_CONTEXT_LIMIT,
   MAX_DECOMPRESS_INLINE_MAX,
   MAX_DECOMPRESS_TEMP_CAP,
-  MAX_TRIGGER_PERCENT,
   MIN_CONTEXT_LIMIT,
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
-  MIN_TRIGGER_PERCENT,
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
   effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
   maxSummaryPercent,
-  parseSummaryPercent,
-  parseTokenCount,
-  percentToChars,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
   type SummaryLanguage,
 } from "../settings.ts"
+import { PercentDialog, ThresholdDialog, TokenDialog } from "./dialogs.tsx"
+import { buildSettingsOptions } from "./settings-options.ts"
 import type { UpdateSettings } from "./types.ts"
 
 /** 可选上限预设；菜单里只出现合法值（最低 50k）。 */
@@ -44,285 +40,6 @@ const PRESET_LIMITS = [
   768_000,
   1_000_000,
 ] as const
-
-/** 输入：设置；输出：当前语言标签；预期：用于设置菜单右侧的当前值。 */
-function localeLabel(settings: Settings, copy: Messages): string {
-  if (settings.locale === "auto") return copy.settings.auto
-  if (settings.locale === "zh") return copy.languages.zh
-  return copy.languages.en
-}
-
-/** 输入：设置；输出：当前摘要语言标签。 */
-function summaryLanguageLabel(settings: Settings, copy: Messages): string {
-  const language = effectiveSummaryLanguage(settings)
-  if (language === "zh") return copy.languages.zh
-  if (language === "en") return copy.languages.en
-  return copy.settings.auto
-}
-
-/** 输入：设置 + 已知窗口；输出：上下文上限标签；数字设置是上限，被模型原生窗口压低时显示箭头。 */
-function limitLabel(settings: Settings, copy: Messages, window: number | undefined): string {
-  const value: unknown = settings.contextLimit
-  if (!isContextLimit(value) || value === "auto") {
-    return window === undefined ? copy.settings.limitAuto : `${copy.settings.limitAuto} (${formatTokens(window)})`
-  }
-  if (window !== undefined && window < value) {
-    return `${formatTokens(value)} → ${formatTokens(window)}`
-  }
-  return formatTokens(value)
-}
-
-/** 输入：百分比 + 窗口；输出：`10% ≈ 20k` 这样的标签。 */
-function percentLabel(percent: number, window: number | undefined): string {
-  const chars = percentToChars(percent, window)
-  return chars === undefined
-    ? `${percent.toString()}%`
-    : `${percent.toString()}% ≈ ${formatTokens(chars)}`
-}
-
-/**
- * 输入：TUI 上下文 + 标题 + 内容。
- * 输出：与原生对话框一致的外框（左右 3 格内边距、标题栏、底部操作行）。
- * 预期：标题在左、esc 在右；内容区与底部操作行各留一空行。
- */
-function DialogFrame(
-  props: ParentProps<{ readonly context: Context; readonly title: string; readonly submit: string }>,
-) {
-  const theme = props.context.theme
-  return (
-    <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
-      <box flexDirection="row" justifyContent="space-between" gap={1}>
-        <text fg={theme.text.base}>
-          <b>{props.title}</b>
-        </text>
-        <text
-          fg={theme.text.muted}
-          onMouseUp={() => {
-            props.context.ui.dialog.clear()
-          }}
-        >
-          esc
-        </text>
-      </box>
-      <box gap={1}>{props.children}</box>
-      <text fg={theme.text.muted}>{props.submit} enter</text>
-    </box>
-  )
-}
-
-/**
- * 输入：TUI 上下文 + 文案 + 标题/提示 + 初始值 + 合法范围 + 确认回调。
- * 输出：通用 token 输入对话框；上下文上限共用。
- * 预期：只接受数字 + 结尾 k/m；解析成功才允许回车提交，非法时只提示不写入。
- */
-function TokenDialog(props: {
-  readonly context: Context
-  readonly copy: Messages
-  readonly title: string
-  readonly hint: string
-  readonly invalid: string
-  readonly placeholder: string
-  readonly initial: string
-  readonly min: number
-  readonly max: number
-  readonly onConfirm: (value: number) => void
-}) {
-  const theme = props.context.theme
-  const [text, setText] = createSignal(props.initial)
-  const parsed = createMemo(() => parseTokenCount(text(), props.min, props.max))
-  let area: { plainText: string } | undefined
-
-  const confirm = (): void => {
-    const value = parsed()
-    if (value === undefined) return
-    props.onConfirm(value)
-    props.context.ui.dialog.clear()
-  }
-
-  // 原生 DialogPrompt 用模态层接管回车；这里同样注册，避免 textarea 插入换行。
-  props.context.keymap.layer(() => ({
-    mode: "modal",
-    priority: 1,
-    commands: [{ bind: "enter", title: "Submit", group: "Dialog", run: confirm }],
-  }))
-
-  return (
-    <DialogFrame context={props.context} title={props.title} submit={props.copy.settings.submit}>
-      <textarea
-        height={1}
-        wrapMode="none"
-        initialValue={props.initial}
-        placeholder={props.placeholder}
-        placeholderColor={theme.text.muted}
-        textColor={theme.text.formfield.base}
-        focusedTextColor={theme.text.formfield.base}
-        cursorColor={theme.text.base}
-        onContentChange={() => setText(area?.plainText ?? "")}
-        ref={(input) => {
-          area = input
-          setTimeout(() => {
-            if (!input.isDestroyed) input.focus()
-          }, 1)
-        }}
-      />
-      <Show
-        when={parsed()}
-        fallback={<text fg={theme.text.feedback.error.base}>{props.invalid}</text>}
-      >
-        {(value: () => number) => (
-          <text fg={theme.text.muted}>{props.copy.settings.limitPreview(formatTokens(value()))}</text>
-        )}
-      </Show>
-      <text fg={theme.text.muted}>{props.hint}</text>
-    </DialogFrame>
-  )
-}
-
-/**
- * 输入：TUI 上下文 + 文案 + 初始百分比 + 窗口 + 允许范围 + 确认回调。
- * 输出：摘要上限对话框。
- * 预期：接受 `10%` 或 `20k`/`20000`；绝对值按窗口换算；超出范围不提交。
- */
-function PercentDialog(props: {
-  readonly context: Context
-  readonly copy: Messages
-  readonly title: string
-  readonly hint: string
-  readonly invalid: string
-  readonly initial: number
-  readonly windowTokens: number | undefined
-  readonly minPercent: number
-  readonly maxPercent: number
-  readonly onConfirm: (value: number) => void
-}) {
-  const theme = props.context.theme
-  const [text, setText] = createSignal(`${props.initial.toString()}%`)
-  const parsed = createMemo(() => {
-    const value = parseSummaryPercent(text(), props.windowTokens)
-    if (value === undefined || value < props.minPercent || value > props.maxPercent) return undefined
-    return value
-  })
-  let area: { plainText: string } | undefined
-
-  const confirm = (): void => {
-    const value = parsed()
-    if (value === undefined) return
-    props.onConfirm(value)
-    props.context.ui.dialog.clear()
-  }
-
-  // 原生 DialogPrompt 用模态层接管回车；这里同样注册，避免 textarea 插入换行。
-  props.context.keymap.layer(() => ({
-    mode: "modal",
-    priority: 1,
-    commands: [{ bind: "enter", title: "Submit", group: "Dialog", run: confirm }],
-  }))
-
-  return (
-    <DialogFrame context={props.context} title={props.title} submit={props.copy.settings.submit}>
-      <textarea
-        height={1}
-        wrapMode="none"
-        initialValue={`${props.initial.toString()}%`}
-        placeholder="10%"
-        placeholderColor={theme.text.muted}
-        textColor={theme.text.formfield.base}
-        focusedTextColor={theme.text.formfield.base}
-        cursorColor={theme.text.base}
-        onContentChange={() => setText(area?.plainText ?? "")}
-        ref={(input) => {
-          area = input
-          setTimeout(() => {
-            if (!input.isDestroyed) input.focus()
-          }, 1)
-        }}
-      />
-      <Show
-        when={parsed()}
-        fallback={<text fg={theme.text.feedback.error.base}>{props.invalid}</text>}
-      >
-        {(value: () => number) => (
-          <text fg={theme.text.muted}>
-            {percentLabel(value(), props.windowTokens)}
-          </text>
-        )}
-      </Show>
-      <text fg={theme.text.muted}>
-        {props.windowTokens === undefined
-          ? props.copy.settings.windowUnknown
-          : props.copy.settings.windowKnown(formatTokens(props.windowTokens))}
-      </text>
-      <text fg={theme.text.muted}>{props.hint}</text>
-    </DialogFrame>
-  )
-}
-
-/**
- * 输入：TUI 上下文 + 文案 + 初始值 + 确认回调。
- * 输出：压缩阈值的输入对话框。
- * 预期：只接受 60 ~ 95 的整数；解析失败回车不生效。
- */
-function ThresholdDialog(props: {
-  readonly context: Context
-  readonly copy: Messages
-  readonly initial: string
-  readonly onConfirm: (value: number) => void
-}) {
-  const theme = props.context.theme
-  const [text, setText] = createSignal(props.initial)
-  const parsed = createMemo(() => {
-    if (!/^\d{1,2}$/.test(text())) return undefined
-    const value = Number(text())
-    if (value < MIN_TRIGGER_PERCENT || value > MAX_TRIGGER_PERCENT) return undefined
-    return value
-  })
-  let area: { plainText: string } | undefined
-
-  const confirm = (): void => {
-    const value = parsed()
-    if (value === undefined) return
-    props.onConfirm(value)
-    props.context.ui.dialog.clear()
-  }
-
-  // 原生 DialogPrompt 用模态层接管回车；这里同样注册，避免 textarea 插入换行。
-  props.context.keymap.layer(() => ({
-    mode: "modal",
-    priority: 1,
-    commands: [{ bind: "enter", title: "Submit", group: "Dialog", run: confirm }],
-  }))
-
-  return (
-    <DialogFrame context={props.context} title={props.copy.settings.threshold} submit={props.copy.settings.submit}>
-      <textarea
-        height={1}
-        wrapMode="none"
-        initialValue={props.initial}
-        placeholder="80"
-        placeholderColor={theme.text.muted}
-        textColor={theme.text.formfield.base}
-        focusedTextColor={theme.text.formfield.base}
-        cursorColor={theme.text.base}
-        onContentChange={() => setText(area?.plainText ?? "")}
-        ref={(input) => {
-          area = input
-          setTimeout(() => {
-            if (!input.isDestroyed) input.focus()
-          }, 1)
-        }}
-      />
-      <Show
-        when={parsed()}
-        fallback={<text fg={theme.text.feedback.error.base}>{props.copy.settings.thresholdInvalid}</text>}
-      >
-        {(value: () => number) => (
-          <text fg={theme.text.muted}>{props.copy.settings.thresholdPreview(value().toString())}</text>
-        )}
-      </Show>
-      <text fg={theme.text.muted}>{props.copy.settings.thresholdHint}</text>
-    </DialogFrame>
-  )
-}
 
 /**
  * 输入：TUI 插件上下文 + 设置。
@@ -613,91 +330,7 @@ export function SettingsCommand(props: {
     const window = currentWindow()
     const picked = await props.context.ui.dialog.select<string>({
       title: copy().settings.title,
-      options: [
-        {
-          title: copy().settings.show,
-          value: "show",
-          footer: props.settings.enabled ? copy().settings.on : copy().settings.off,
-        },
-        { title: copy().settings.limit, value: "limit", footer: limitLabel(props.settings, copy(), window) },
-        {
-          title: copy().settings.threshold,
-          value: "threshold",
-          footer: `${props.settings.triggerPercent.toString()}%`,
-        },
-        {
-          title: copy().settings.summaryBlockPercent,
-          value: "blockPercent",
-          footer: percentLabel(effectiveSummaryBlockPercent(props.settings), window),
-        },
-        {
-          title: copy().settings.summaryTotalPercent,
-          value: "totalPercent",
-          footer: percentLabel(effectiveSummaryTotalPercent(props.settings), window),
-        },
-        {
-          title: copy().settings.summaryLanguage,
-          value: "summaryLanguage",
-          footer: summaryLanguageLabel(props.settings, copy()),
-        },
-        {
-          title: copy().settings.autoCompress,
-          value: "autoCompress",
-          footer: props.settings.autoCompress ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.enableCompressTool,
-          value: "enableCompressTool",
-          footer: props.settings.enableCompressTool ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.enableDecompressTool,
-          value: "enableDecompressTool",
-          footer: props.settings.enableDecompressTool ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.showTimeline,
-          value: "showTimeline",
-          footer: props.settings.showTimeline ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.showBlockTokens,
-          value: "showBlockTokens",
-          footer: props.settings.showBlockTokens ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.showCacheChart,
-          value: "showCacheChart",
-          footer: props.settings.showCacheChart ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.showCacheLog,
-          value: "showCacheLog",
-          footer: props.settings.showCacheLog ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.showSummaries,
-          value: "showSummaries",
-          footer: props.settings.showSummaries ? copy().settings.on : copy().settings.off,
-        },
-        {
-          title: copy().settings.decompressInlineMax,
-          value: "decompressInlineMax",
-          footer: formatTokens(effectiveDecompressInlineMax(props.settings)),
-        },
-        {
-          title: copy().settings.decompressTempCap,
-          value: "decompressTempCap",
-          footer: effectiveDecompressTempCap(props.settings).toString(),
-        },
-        {
-          title: copy().settings.decompressShowTokens,
-          value: "decompressShowTokens",
-          footer: props.settings.decompressShowTokens ? copy().settings.on : copy().settings.off,
-        },
-        { title: copy().settings.language, value: "language", footer: localeLabel(props.settings, copy()) },
-        { title: copy().settings.close, value: "close" },
-      ],
+      options: buildSettingsOptions({ settings: props.settings, copy: copy(), window }),
     })
     if (picked === "show") {
       await props.updateSettings((draft) => {

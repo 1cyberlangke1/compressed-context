@@ -58,6 +58,13 @@ export const zh: Messages = {
     showCacheChart: "显示缓存折线图",
     showCacheLog: "显示缓存日志",
     showSummaries: "显示摘要块",
+    categories: {
+      compress: "压缩",
+      summary: "摘要",
+      panel: "面板",
+      decompress: "解压",
+      interface: "界面",
+    },
     decompressInlineMax: "解压内联上限",
     decompressInlineMaxHint: "超过这个字符数就写成临时文件；输入纯数字或带 k/m 后缀",
     decompressInlineMaxInvalid: "请输入 1k ~ 1m 之间的字符数",

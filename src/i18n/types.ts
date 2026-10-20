@@ -54,6 +54,13 @@ export interface Messages {
     readonly showCacheChart: string
     readonly showCacheLog: string
     readonly showSummaries: string
+    readonly categories: {
+      readonly compress: string
+      readonly summary: string
+      readonly panel: string
+      readonly decompress: string
+      readonly interface: string
+    }
     readonly decompressInlineMax: string
     readonly decompressInlineMaxHint: string
     readonly decompressInlineMaxInvalid: string

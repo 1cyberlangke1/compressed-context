@@ -20,8 +20,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:tui",
     "test": "vitest run",
+    "test:tui": "cd tui-test && bun test",
     "test:watch": "vitest"
   },
   "devDependencies": {

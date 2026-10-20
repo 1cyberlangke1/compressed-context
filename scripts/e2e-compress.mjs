@@ -454,6 +454,15 @@ try {
     return typeof row?.value === "string" ? JSON.parse(row.value) : undefined
   }
 
+  /** 输入：sessionID；输出：插件持久化的缓存命中历史。 */
+  const cacheHistoryFor = (sessionID) => {
+    const conn = new Database(join(root, "opencode.db"))
+    const key = `plugin:${pluginHex}:cache:history:${sessionID}`
+    const row = conn.query("select value from kv where key = ?").get(key)
+    conn.close()
+    return typeof row?.value === "string" ? JSON.parse(row.value) : undefined
+  }
+
   /** 输入：sessionID + state；输出：无；预期：只改临时 DB 的插件状态。 */
   const setState = (sessionID, state) => {
     const conn = new Database(join(root, "opencode.db"))
@@ -488,6 +497,19 @@ try {
           lastError: state?.lastError,
         }
         throw new Error(`timed out waiting for ${label}: ${JSON.stringify(snapshot)}`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+
+  /** 输入：sessionID + 判定函数 + 标签；输出：满足判定时的缓存历史；超时抛错。 */
+  const waitForCacheHistory = async (sessionID, predicate, label) => {
+    const deadline = Date.now() + 30_000
+    for (;;) {
+      const history = cacheHistoryFor(sessionID)
+      if (predicate(history)) return history
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${label}: ${JSON.stringify(history)}`)
       }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
@@ -999,6 +1021,47 @@ try {
   assert.equal(longState?.attempts, 0, "no failed attempts may linger")
   assert.equal(longState?.lastError, undefined, "no compression error may linger")
   console.log("case passed: long session converges to one T3 block")
+
+  // case: 缓存命中历史按会话持久化，最多 10 条
+  const mainHistory = await waitForCacheHistory(
+    sessionID,
+    (history) => (history?.samples?.length ?? 0) > 0,
+    "main cache history",
+  )
+  assert.ok(mainHistory.samples.length <= 10, "cache history must keep at most 10 samples")
+  for (const sample of mainHistory.samples) {
+    assert.equal(typeof sample.messageID, "string", "sample messageID must be a string")
+    assert.ok(sample.at >= 0, "sample time must be non-negative")
+    assert.ok(sample.input >= sample.cached, "input must include cached tokens")
+    assert.equal(
+      sample.hitRate,
+      sample.input > 0 ? Math.round((sample.cached / sample.input) * 100) : 0,
+      "hit rate must match cached / input",
+    )
+    assert.ok(sample.hitRate >= 0 && sample.hitRate <= 100, "hit rate must be 0..100")
+  }
+  for (let index = 1; index < mainHistory.samples.length; index += 1) {
+    assert.ok(
+      mainHistory.samples[index].at >= mainHistory.samples[index - 1].at,
+      "cache history must be sorted by time",
+    )
+  }
+  console.log("case passed: cache history persisted per session")
+
+  // case: 两个会话的缓存历史互不串
+  const otherCacheSession = await newSession("cache-history-other")
+  await promptSession(otherCacheSession, "other session cache history")
+  const otherHistory = await waitForCacheHistory(
+    otherCacheSession,
+    (history) => (history?.samples?.length ?? 0) > 0,
+    "other cache history",
+  )
+  const mainIDs = new Set(mainHistory.samples.map((sample) => sample.messageID))
+  assert.ok(
+    otherHistory.samples.every((sample) => !mainIDs.has(sample.messageID)),
+    "cache histories must not share message ids",
+  )
+  console.log("case passed: cache histories isolated by session")
 
   // case: 缓存指令只追加在尾部，不重发 transcript
   mode = "normal"
