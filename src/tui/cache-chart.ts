@@ -41,40 +41,35 @@ export interface ChartAxisLabel {
 }
 
 /**
- * 输入：图表高度（行）+ 刻度步长（默认 20%）。
- * 输出：100/80/60/40/20/0 等刻度的行号与文本，以及除首尾外的网格行。
- * 预期：刻度行按点阵 y 映射换算，行号落在实际折线附近；同一行只保留一个刻度。
+ * 输入：图表高度（行）+ 标签步长（默认 10%）+ 网格步长（默认 20%）。
+ * 输出：100/90/…/10 的刻度行号与文本，以及 80/60/40/20 的网格行。
+ * 预期：10 行时 10% 正好一行；行不够时同行的低刻度会被丢弃，避免标签重叠。
  */
 export function chartAxis(
   height: number,
-  step = 20,
+  labelStep = 10,
+  gridStep = 20,
 ): {
   readonly labels: readonly ChartAxisLabel[]
   readonly gridRows: readonly number[]
 } {
   const rows = Math.max(1, Math.floor(height))
-  const dotHeight = rows * 4
-  const safeStep = Math.max(1, Math.floor(step))
+  const safeLabel = Math.max(1, Math.floor(labelStep))
+  const safeGrid = Math.max(1, Math.floor(gridStep))
   const seen = new Set<number>()
   const labels: ChartAxisLabel[] = []
-  for (let value = 100; value >= 0; value -= safeStep) {
-    const row = Math.min(
-      rows - 1,
-      Math.floor(Math.round((1 - value / 100) * (dotHeight - 1)) / 4),
-    )
+  for (let value = 100; value > 0; value -= safeLabel) {
+    const row = Math.min(rows - 1, Math.max(0, Math.round(((100 - value) / 100) * rows)))
     if (seen.has(row)) continue
     seen.add(row)
     labels.push({ row, text: `${value.toString().padStart(3, " ")}%` })
   }
-  // 步长不能整除 100 时补上 0%，保证底线有标签。
-  if (labels.at(-1)?.text !== "  0%") {
-    const row = rows - 1
-    if (!seen.has(row)) labels.push({ row, text: "  0%" })
+  const gridRows: number[] = []
+  for (let value = 100 - safeGrid; value > 0; value -= safeGrid) {
+    const row = Math.min(rows - 1, Math.max(0, Math.round(((100 - value) / 100) * rows)))
+    if (!gridRows.includes(row)) gridRows.push(row)
   }
-  return {
-    labels,
-    gridRows: labels.filter((label) => label.text !== "100%" && label.text !== "  0%").map((label) => label.row),
-  }
+  return { labels, gridRows }
 }
 
 /**
@@ -190,7 +185,7 @@ export function renderBrailleChart(
   const dotHeight = rows * 4
   const points = new Set<number>()
   const yOf = (value: number): number =>
-    Math.round((1 - clampPercent(value) / 100) * (dotHeight - 1))
+    Math.min(dotHeight - 1, Math.round((1 - clampPercent(value) / 100) * dotHeight))
 
   if (values.length === 1) {
     const value = values[0] ?? 0

@@ -331,18 +331,17 @@ export function Panel(props: {
                             {(row, index) => {
                               const label =
                                 axis.labels.find((item) => item.row === index())?.text ?? "    "
-                              const corner = index() === CHART_HEIGHT - 1
                               return (
                                 <box flexDirection="row" height={1}>
                                   <text fg={theme.text.muted}>{`${label} `}</text>
-                                  <text fg={theme.text.muted}>{corner ? "└" : "┤"}</text>
+                                  <text fg={theme.text.muted}>{"┤"}</text>
                                   <text>{chartLine(row)}</text>
                                 </box>
                               )
                             }}
                           </For>
                           <text fg={theme.text.muted}>
-                            {`${" ".repeat(5)}└${"─".repeat(CHART_WIDTH)}`}
+                            {`  0% └${"─".repeat(CHART_WIDTH)}`}
                           </text>
                           <text fg={theme.text.muted}>
                             {`${" ".repeat(6)}${xAxisLabels(cache().length, CHART_WIDTH)}`}

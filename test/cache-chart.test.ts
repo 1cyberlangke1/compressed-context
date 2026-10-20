@@ -109,24 +109,39 @@ describe("renderBrailleChart", () => {
 })
 
 describe("chartAxis", () => {
-  it("10 行给出 100/80/60/40/20/0 六个刻度", () => {
+  it("10 行时 10% 一档，正好一行一个刻度", () => {
     const axis = chartAxis(10)
     expect(axis.labels.map((label) => label.text)).toEqual([
       "100%",
+      " 90%",
       " 80%",
+      " 70%",
       " 60%",
+      " 50%",
       " 40%",
+      " 30%",
       " 20%",
-      "  0%",
+      " 10%",
     ])
-    expect(axis.labels.map((label) => label.row)).toEqual([0, 2, 4, 5, 7, 9])
-    expect(axis.gridRows).toEqual([2, 4, 5, 7])
+    expect(axis.labels.map((label) => label.row)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    // 网格按 20% 画，避免 10 条线太密。
+    expect(axis.gridRows).toEqual([2, 4, 6, 8])
   })
 
-  it("8 行时刻度自动落到可用行", () => {
+  it("8 行时同行的低刻度被丢弃，标签不重叠", () => {
     const axis = chartAxis(8)
-    expect(axis.labels.map((label) => label.row)).toEqual([0, 1, 3, 4, 6, 7])
-    expect(axis.gridRows).toEqual([1, 3, 4, 6])
+    expect(axis.labels.map((label) => label.row)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+    expect(axis.labels.map((label) => label.text)).toEqual([
+      "100%",
+      " 90%",
+      " 80%",
+      " 60%",
+      " 50%",
+      " 40%",
+      " 30%",
+      " 10%",
+    ])
+    expect(axis.gridRows).toEqual([2, 3, 5, 6])
   })
 })
 
