@@ -9,6 +9,7 @@ export interface Messages {
   readonly title: string
   readonly labels: Readonly<Record<CategoryKey, string>>
   readonly approximate: string
+  readonly terminal: string
   readonly command: {
     readonly title: string
     readonly description: string

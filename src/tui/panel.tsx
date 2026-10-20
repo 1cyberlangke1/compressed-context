@@ -195,11 +195,9 @@ export function Panel(props: {
           </Show>
         </box>
         <Show when={terminal()}>
-          {(message) => (
-            <text fg={theme.text.feedback.error.base} wrapMode="word">
-              {`⚠ ${message()}`}
-            </text>
-          )}
+          <text fg={theme.text.feedback.error.base} wrapMode="word">
+            {`⚠ ${copy().terminal}`}
+          </text>
         </Show>
         <Show when={props.settings.expanded}>
           <For each={rows()}>

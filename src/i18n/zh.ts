@@ -13,6 +13,7 @@ export const zh: Messages = {
     media: "媒体",
   },
   approximate: "≈",
+  terminal: "上下文无法继续压缩，请开新会话或使用原生压缩",
   command: {
     title: "压缩上下文设置",
     description: "打开插件设置",

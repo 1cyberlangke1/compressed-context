@@ -13,6 +13,7 @@ export const en: Messages = {
     media: "Media",
   },
   approximate: "≈",
+  terminal: "Context cannot be compressed further; start a new session or use native compaction",
   command: {
     title: "Compressed context settings",
     description: "Open plugin settings",
