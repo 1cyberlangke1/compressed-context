@@ -232,68 +232,42 @@ describe("服务端设置", () => {
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 80 })).toEqual({
       contextLimit: "auto",
       triggerPercent: 80,
-      summaryBudgetTokens: 50_000,
-      summaryBlockChars: 20_000,
-      summaryTotalChars: 100_000,
+      summaryBlockPercent: 10,
+      summaryTotalPercent: 50,
       summaryLanguage: "auto",
     })
     expect(
       parseServerSettings({
         contextLimit: 200_000,
         triggerPercent: 95,
-        summaryBudgetTokens: 20_000,
-        summaryBlockChars: 30_000,
-        summaryTotalChars: 190_000,
+        summaryBlockPercent: 30,
+        summaryTotalPercent: 60,
         summaryLanguage: "zh",
       }),
     ).toEqual({
       contextLimit: 200_000,
       triggerPercent: 95,
-      summaryBudgetTokens: 20_000,
-      summaryBlockChars: 30_000,
-      summaryTotalChars: 190_000,
+      summaryBlockPercent: 30,
+      summaryTotalPercent: 60,
       summaryLanguage: "zh",
     })
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 59 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 96 })).toBeUndefined()
-    expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 80, summaryBudgetTokens: 4_999 })).toBeUndefined()
-    expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 80, summaryBudgetTokens: 1_000_001 })).toBeUndefined()
     expect(parseServerSettings({ contextLimit: "nope", triggerPercent: 80 })).toBeUndefined()
+    // 窗口下限 50k：更小的数字窗口直接拒绝，回退默认 auto。
+    expect(parseServerSettings({ contextLimit: 49_999, triggerPercent: 80 })).toBeUndefined()
+    expect(parseServerSettings({ contextLimit: 50_000, triggerPercent: 80 })).toBeDefined()
   })
 
-  it("拒绝任意非法摘要长度和语言", () => {
+  it("拒绝任意非法摘要百分比和语言", () => {
     const base = { contextLimit: "auto", triggerPercent: 80 }
-    for (const bad of [499, 100_001, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
-      expect(parseServerSettings({ ...base, summaryBlockChars: bad })).toBeUndefined()
+    for (const bad of [0, 91, Number.NaN, Number.POSITIVE_INFINITY, -1, "20"]) {
+      expect(parseServerSettings({ ...base, summaryBlockPercent: bad })).toBeUndefined()
     }
-    for (const bad of [4_999, 1_000_001, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
-      expect(parseServerSettings({ ...base, summaryTotalChars: bad })).toBeUndefined()
+    for (const bad of [0, 91, Number.NaN, Number.POSITIVE_INFINITY, -1, "60"]) {
+      expect(parseServerSettings({ ...base, summaryTotalPercent: bad })).toBeUndefined()
     }
-    expect(
-      parseServerSettings({ ...base, summaryBlockChars: 30_000, summaryTotalChars: 20_000 }),
-    ).toBeUndefined()
     expect(parseServerSettings({ ...base, summaryLanguage: "fr" })).toBeUndefined()
-  })
-
-  it("数字窗口下摘要上限不得超过窗口减预留", () => {
-    const base = { triggerPercent: 80, summaryLanguage: "auto" }
-    const limit = 30_000
-    const ceiling = limit - 10_000
-    expect(
-      parseServerSettings({ ...base, contextLimit: limit, summaryBlockChars: ceiling, summaryTotalChars: ceiling }),
-    ).toBeDefined()
-    expect(
-      parseServerSettings({ ...base, contextLimit: limit, summaryBlockChars: 500, summaryTotalChars: ceiling + 1 }),
-    ).toBeUndefined()
-    expect(
-      parseServerSettings({ ...base, contextLimit: limit, summaryBlockChars: ceiling + 1, summaryTotalChars: ceiling + 1 }),
-    ).toBeUndefined()
-    // 窗口小到装不下最小摘要时不校验（运行时兜底），设置照常接受。
-    expect(parseServerSettings({ ...base, contextLimit: 10_000, summaryBlockChars: 500 })).toBeDefined()
-    // auto 窗口保存时不校验，运行时钳制。
-    expect(
-      parseServerSettings({ ...base, contextLimit: "auto", summaryBlockChars: 100_000, summaryTotalChars: 200_000 }),
-    ).toBeDefined()
   })
 })
 
@@ -545,7 +519,7 @@ describe("自动压缩", () => {
       role: "assistant",
       content: [
         { type: "text", text: "short" },
-        ...Array.from({ length: 3 }, () => ({
+        ...Array.from({ length: 6 }, () => ({
           type: "tool-result",
           name: "shell",
           result: "x".repeat(20_000),
@@ -556,7 +530,7 @@ describe("自动压缩", () => {
   ]
 
   it("纯文本不够但工具输出足够时仍然触发", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 } })
     let compacts = 0
     const ctx = fakeCtx(
       storage,
@@ -580,7 +554,7 @@ describe("自动压缩", () => {
   })
 
   it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 } })
     let compacts = 0
     const ctx = fakeCtx(
       storage,
@@ -592,7 +566,7 @@ describe("自动压缩", () => {
     )
     const checkpoint = message(
       "user",
-      `<conversation-checkpoint><summary>old</summary><recent-context>${"x".repeat(20_000)}</recent-context></conversation-checkpoint>`,
+      `<conversation-checkpoint><summary>old</summary><recent-context>${"x".repeat(140_000)}</recent-context></conversation-checkpoint>`,
       "m0",
     )
     await maybeAutoCompress({
@@ -615,7 +589,7 @@ describe("自动压缩", () => {
 
   it("已有块时只入队 compaction，不改 pending", async () => {
     const storage = memoryStorage({
-      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
       [stateKey("ses_test")]: { v: 1, blocks: [block], attempts: 0 },
     })
     let compacts = 0
@@ -643,7 +617,7 @@ describe("自动压缩", () => {
   })
 
   it("压缩进行中不再自动入队", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 } })
     let compacts = 0
     const ctx = fakeCtx(
       storage,
@@ -670,7 +644,7 @@ describe("自动压缩", () => {
   })
 
   it("压缩指令本身不再触发自动压缩", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 } })
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 } })
     let compacts = 0
     const ctx = fakeCtx(
       storage,
@@ -694,7 +668,7 @@ describe("自动压缩", () => {
 
   it("失败次数达到上限后不再自动入队", async () => {
     const storage = memoryStorage({
-      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
       [stateKey("ses_test")]: { v: 1, blocks: [], attempts: 3 },
     })
     let compacts = 0
@@ -719,7 +693,7 @@ describe("自动压缩", () => {
 
   it("pending 非空时不再入队", async () => {
     const storage = memoryStorage({
-      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
       [stateKey("ses_test")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
     })
     let compacts = 0
@@ -744,7 +718,7 @@ describe("自动压缩", () => {
 
   it("phase 非空时下一次模型请求入队合并，不等阈值", async () => {
     const storage = memoryStorage({
-      [SETTINGS_KEY]: { contextLimit: 20_000, triggerPercent: 60, summaryBudgetTokens: 5_000 },
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
       [stateKey("ses_test")]: withPhase({ v: 1, blocks: [], attempts: 0 }, "t2"),
     })
     let compacts = 0
@@ -1186,11 +1160,12 @@ describe("compress 工具只做 T1", () => {
       [SETTINGS_KEY]: {
         contextLimit: "auto",
         triggerPercent: 80,
-        summaryBudgetTokens: 50_000,
-        summaryBlockChars: 600,
-        summaryTotalChars: 100_000,
+        summaryBlockPercent: 1,
+        summaryTotalPercent: 50,
         summaryLanguage: "auto",
       },
+      // 工具路径用最近一次解析到的窗口把百分比换成字符：50k × 1% = 500。
+      "window:last": 50_000,
     })
     const { ctx, tool } = toolCtx(storage)
     await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))

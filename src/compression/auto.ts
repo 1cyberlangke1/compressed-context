@@ -1,8 +1,9 @@
 import type { Plugin } from "@opencode/plugin"
 
+import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../settings.ts"
 import { estimateCategories, totalCategories } from "../tokens.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
-import { loadServerSettings } from "./settings.ts"
+import { RESOLVED_WINDOW_KEY, loadServerSettings } from "./settings.ts"
 import { loadState, saveState } from "./state.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -57,6 +58,16 @@ export interface AutoInput {
   readonly model: ModelRefLike
 }
 
+/** 输入：插件上下文 + 模型 key + 窗口；输出：无；预期：写进 storage 供 TUI 读取，失败不影响压缩。 */
+async function rememberWindow(ctx: Plugin.Context, key: string, limit: number): Promise<void> {
+  try {
+    await ctx.storage.set(`window:${key}`, limit)
+    await ctx.storage.set(RESOLVED_WINDOW_KEY, limit)
+  } catch {
+    // best effort：写不进去只影响 TUI 显示，不影响压缩
+  }
+}
+
 /** 输入：设置 + 模型；输出：实际使用的窗口大小。 */
 export async function resolveLimit(ctx: Plugin.Context, model: ModelRefLike, setting: "auto" | number): Promise<number | undefined> {
   if (setting !== "auto") return setting
@@ -69,6 +80,7 @@ export async function resolveLimit(ctx: Plugin.Context, model: ModelRefLike, set
     const limit = info?.limit.context
     if (typeof limit === "number" && limit > 0) {
       limitCache.set(key, { at: Date.now(), limit })
+      await rememberWindow(ctx, key, limit)
       return limit
     }
   } catch {
@@ -102,6 +114,12 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (state.pending) return
     if (state.attempts >= MAX_ATTEMPTS) return
 
+    const settings = await loadServerSettings(input.ctx.storage)
+    const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit)
+    if (limit === undefined || limit <= 0) return
+    // 窗口小到连最小摘要都放不下：压缩必然失败，别反复入队空压缩。
+    if (limit - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
+
     // 已排下一层蒸馏：下一次模型请求就入队 compaction，由 compaction 钩子合并。
     // 不能在 T1 刚结束时入队——那时历史里只剩 checkpoint，OpenCode 会拒绝压缩。
     if (state.phase !== undefined) {
@@ -109,9 +127,6 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
       return
     }
 
-    const settings = await loadServerSettings(input.ctx.storage)
-    const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit)
-    if (limit === undefined || limit <= 0) return
     const total = estimateTotal(input)
     if (total < limit * (settings.triggerPercent / 100)) return
     const eligible = eligibleMessages(input.messages)

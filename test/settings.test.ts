@@ -3,17 +3,19 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_SETTINGS,
   SUMMARY_WINDOW_RESERVE,
-  clampSummaryLimits,
   effectiveLimit,
-  effectiveSummaryBlockChars,
-  effectiveSummaryBudget,
+  effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
-  effectiveSummaryTotalChars,
+  effectiveSummaryTotalPercent,
   initialSettings,
   localeArgument,
+  maxSummaryPercent,
   normalizeSettings,
+  parseSummaryPercent,
   parseTokenCount,
   parseTokenLimit,
+  percentToChars,
+  resolveSummaryLimits,
   sanitizeLimitInput,
   type ContextLimit,
   type Settings,
@@ -28,38 +30,42 @@ describe("initialSettings / normalizeSettings", () => {
       locale: "en",
       contextLimit: 200_000,
       triggerPercent: 80,
-      summaryBudgetTokens: 50_000,
-      summaryBlockChars: 20_000,
-      summaryTotalChars: 100_000,
+      summaryBlockPercent: 10,
+      summaryTotalPercent: 50,
       summaryLanguage: "auto",
     })
   })
 
-  it("摘要长度和语言可配置，任意非法数字回退", () => {
+  it("摘要百分比可配置，非法值回退，单条与全部互相独立", () => {
     const settings = initialSettings({
-      summaryBlockChars: "30k",
-      summaryTotalChars: "200k",
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 60,
       summaryLanguage: "zh",
     })
-    expect(settings.summaryBlockChars).toBe(30_000)
-    expect(settings.summaryTotalChars).toBe(200_000)
+    expect(settings.summaryBlockPercent).toBe(20)
+    expect(settings.summaryTotalPercent).toBe(60)
     expect(settings.summaryLanguage).toBe("zh")
 
-    for (const bad of [499, 100_001, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
-      expect(initialSettings({ summaryBlockChars: bad }).summaryBlockChars).toBe(20_000)
+    for (const bad of [0, 91, Number.NaN, Number.POSITIVE_INFINITY, -1, "20"]) {
+      expect(initialSettings({ summaryBlockPercent: bad }).summaryBlockPercent).toBe(10)
     }
-    for (const bad of [4_999, 1_000_001, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
-      expect(initialSettings({ summaryTotalChars: bad }).summaryTotalChars).toBe(100_000)
+    for (const bad of [0, 91, Number.NaN, Number.POSITIVE_INFINITY, -1, "60"]) {
+      expect(initialSettings({ summaryTotalPercent: bad }).summaryTotalPercent).toBe(50)
     }
-    expect(initialSettings({ summaryTotalChars: 10_000, summaryBlockChars: 20_000 }).summaryTotalChars).toBe(20_000)
+    // 单条允许大于全部：全部是合并触发线，不是单条的硬上限。
+    expect(initialSettings({ summaryBlockPercent: 30, summaryTotalPercent: 20 }).summaryTotalPercent).toBe(20)
     expect(initialSettings({ summaryLanguage: "fr" }).summaryLanguage).toBe("auto")
   })
 
   it("旧设置缺失或非法时 effective 回退", () => {
-    expect(effectiveSummaryBlockChars({ ...DEFAULT_SETTINGS, summaryBlockChars: Number.NaN })).toBe(20_000)
+    expect(effectiveSummaryBlockPercent({ ...DEFAULT_SETTINGS, summaryBlockPercent: Number.NaN })).toBe(10)
     expect(
-      effectiveSummaryTotalChars({ ...DEFAULT_SETTINGS, summaryBlockChars: 30_000, summaryTotalChars: 10_000 }),
-    ).toBe(30_000)
+      effectiveSummaryTotalPercent({
+        ...DEFAULT_SETTINGS,
+        summaryBlockPercent: 30,
+        summaryTotalPercent: 10,
+      }),
+    ).toBe(10)
     expect(
       effectiveSummaryLanguage({
         ...DEFAULT_SETTINGS,
@@ -68,38 +74,32 @@ describe("initialSettings / normalizeSettings", () => {
     ).toBe("auto")
   })
 
-  it("clampSummaryLimits 按窗口钳制，未知窗口原样返回", () => {
-    const settings = {
-      summaryBlockChars: 30_000,
-      summaryTotalChars: 200_000,
-      summaryBudgetTokens: 80_000,
-    }
-    expect(clampSummaryLimits(settings, undefined)).toEqual({
-      blockChars: 30_000,
-      totalChars: 200_000,
-      budgetTokens: 80_000,
-    })
-    expect(clampSummaryLimits(settings, Number.NaN)).toEqual({
-      blockChars: 30_000,
-      totalChars: 200_000,
-      budgetTokens: 80_000,
-    })
-    const small = SUMMARY_WINDOW_RESERVE + 20_000
-    expect(clampSummaryLimits(settings, small)).toEqual({
+  it("resolveSummaryLimits 按窗口百分比折算，未知窗口回退默认", () => {
+    expect(resolveSummaryLimits(DEFAULT_SETTINGS, undefined)).toEqual({
       blockChars: 20_000,
-      totalChars: 20_000,
-      budgetTokens: 20_000,
+      totalChars: 100_000,
+      budgetTokens: 100_000,
     })
-    expect(clampSummaryLimits(settings, 0)).toEqual({
-      blockChars: 30_000,
-      totalChars: 200_000,
-      budgetTokens: 80_000,
+    expect(resolveSummaryLimits(DEFAULT_SETTINGS, Number.NaN)).toEqual({
+      blockChars: 20_000,
+      totalChars: 100_000,
+      budgetTokens: 100_000,
     })
-    // 窗口小到 ceiling < 最小单条时放弃钳制，避免把上限压成 0。
-    expect(clampSummaryLimits(settings, SUMMARY_WINDOW_RESERVE)).toEqual({
-      blockChars: 30_000,
-      totalChars: 200_000,
-      budgetTokens: 80_000,
+    expect(resolveSummaryLimits(DEFAULT_SETTINGS, 200_000)).toEqual({
+      blockChars: 20_000,
+      totalChars: 100_000,
+      budgetTokens: 100_000,
+    })
+    expect(resolveSummaryLimits(DEFAULT_SETTINGS, 50_000)).toEqual({
+      blockChars: 5_000,
+      totalChars: 25_000,
+      budgetTokens: 25_000,
+    })
+    // 窗口小于预留时物理上放不下，上限归零，由校验报真实原因。
+    expect(resolveSummaryLimits(DEFAULT_SETTINGS, SUMMARY_WINDOW_RESERVE)).toEqual({
+      blockChars: 0,
+      totalChars: 0,
+      budgetTokens: 0,
     })
   })
 
@@ -108,8 +108,34 @@ describe("initialSettings / normalizeSettings", () => {
       DEFAULT_SETTINGS,
     )
     expect(normalizeSettings({ enabled: true, locale: "zh" }).contextLimit).toBe("auto")
-    expect(normalizeSettings({ summaryBudgetTokens: "80k" }).summaryBudgetTokens).toBe(80_000)
-    expect(normalizeSettings({ summaryBudgetTokens: 4_999 }).summaryBudgetTokens).toBe(50_000)
+    expect(normalizeSettings({ summaryBlockPercent: 200 }).summaryBlockPercent).toBe(10)
+  })
+})
+
+describe("parseSummaryPercent", () => {
+  it("接受百分比写法", () => {
+    expect(parseSummaryPercent("10%", undefined)).toBe(10)
+    expect(parseSummaryPercent(" 12.5% ", 200_000)).toBe(12.5)
+    expect(parseSummaryPercent("0.5%", 200_000)).toBeUndefined()
+    expect(parseSummaryPercent("95%", 200_000)).toBeUndefined()
+    expect(parseSummaryPercent("abc%", 200_000)).toBeUndefined()
+  })
+
+  it("绝对值按窗口换算", () => {
+    expect(parseSummaryPercent("20k", 200_000)).toBe(10)
+    expect(parseSummaryPercent("20000", 200_000)).toBe(10)
+    expect(parseSummaryPercent("500", 50_000)).toBe(1)
+    expect(parseSummaryPercent("20k", undefined)).toBeUndefined()
+    expect(parseSummaryPercent("100", 200_000)).toBeUndefined()
+  })
+
+  it("percentToChars / maxSummaryPercent 跟着窗口缩放", () => {
+    expect(percentToChars(10, 200_000)).toBe(20_000)
+    expect(percentToChars(10, undefined)).toBeUndefined()
+    expect(maxSummaryPercent(undefined)).toBe(90)
+    expect(maxSummaryPercent(200_000)).toBe(90)
+    expect(maxSummaryPercent(50_000)).toBe(80)
+    expect(maxSummaryPercent(20_000)).toBe(50)
   })
 })
 
@@ -142,8 +168,6 @@ describe("parseTokenCount", () => {
     expect(parseTokenCount("20k", 500, 100_000)).toBe(20_000)
     expect(parseTokenCount("499", 500, 100_000)).toBeUndefined()
     expect(parseTokenCount("100001", 500, 100_000)).toBeUndefined()
-    expect(parseTokenCount("4k", 5_000, 1_000_000)).toBeUndefined()
-    expect(parseTokenCount("1m", 5_000, 1_000_000)).toBe(1_000_000)
   })
 })
 
@@ -180,14 +204,5 @@ describe("effectiveLimit", () => {
   it("运行时的非法值按 auto 处理", () => {
     const broken = { ...base, contextLimit: undefined as unknown as ContextLimit }
     expect(effectiveLimit(broken, 128_000)).toBe(128_000)
-  })
-})
-
-describe("effectiveSummaryBudget", () => {
-  it("旧设置缺字段或非法值时回退 50k", () => {
-    const missing = { ...DEFAULT_SETTINGS, summaryBudgetTokens: undefined as unknown as number }
-    expect(effectiveSummaryBudget(missing)).toBe(50_000)
-    expect(effectiveSummaryBudget({ ...DEFAULT_SETTINGS, summaryBudgetTokens: 0 })).toBe(50_000)
-    expect(effectiveSummaryBudget({ ...DEFAULT_SETTINGS, summaryBudgetTokens: 80_000 })).toBe(80_000)
   })
 })

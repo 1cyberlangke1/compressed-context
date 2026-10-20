@@ -6,17 +6,29 @@ const EmptyJson = {
   additionalProperties: false,
 } as const
 
-const SettingsJson = {
+const SettingsProperties = {
+  contextLimit: {
+    anyOf: [{ type: "string", enum: ["auto"] }, { type: "number" }],
+  },
+  triggerPercent: { type: "number" },
+  summaryBlockPercent: { type: "number" },
+  summaryTotalPercent: { type: "number" },
+  summaryLanguage: { type: "string", enum: ["auto", "zh", "en"] },
+} as const
+
+const SettingsInputJson = {
+  type: "object",
+  properties: SettingsProperties,
+  required: ["contextLimit", "triggerPercent"],
+  additionalProperties: false,
+} as const
+
+/** 读取结果比写入多一个 resolvedWindow：auto 时从模型原生窗口解析出来的值。 */
+const SettingsOutputJson = {
   type: "object",
   properties: {
-    contextLimit: {
-      anyOf: [{ type: "string", enum: ["auto"] }, { type: "number" }],
-    },
-    triggerPercent: { type: "number" },
-    summaryBudgetTokens: { type: "number" },
-    summaryBlockChars: { type: "number" },
-    summaryTotalChars: { type: "number" },
-    summaryLanguage: { type: "string", enum: ["auto", "zh", "en"] },
+    ...SettingsProperties,
+    resolvedWindow: { type: "number" },
   },
   required: ["contextLimit", "triggerPercent"],
   additionalProperties: false,
@@ -33,8 +45,8 @@ const OkJson = {
 export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
   id: "compressed-context",
   methods: {
-    settingsGet: { input: EmptyJson, output: SettingsJson },
-    settingsSet: { input: SettingsJson, output: OkJson },
+    settingsGet: { input: EmptyJson, output: SettingsOutputJson },
+    settingsSet: { input: SettingsInputJson, output: OkJson },
   },
   events: {},
 })

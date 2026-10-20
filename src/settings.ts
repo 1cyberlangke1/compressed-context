@@ -3,6 +3,8 @@
  *
  * 存在 TUI 自己的 storage 里（`context.storage.store`），用户不用改 config.json。
  * 优先级：UI 改过的值 > 插件 options 给的初始值 > 内置默认。
+ *
+ * 摘要上限按「窗口百分比」存储：换模型、换窗口后自动缩放，不会因为旧的绝对值放不下。
  */
 
 export const LOCALE_SETTINGS = ["auto", "zh", "en"] as const
@@ -14,13 +16,18 @@ export const SUMMARY_LANGUAGES = ["auto", "zh", "en"] as const
 
 export type SummaryLanguage = (typeof SUMMARY_LANGUAGES)[number]
 
+/** 单条摘要的最小字符数；只用于把绝对值输入换算成百分比时的下界。 */
 export const MIN_SUMMARY_BLOCK_CHARS = 500
-export const MAX_SUMMARY_BLOCK_CHARS = 100_000
-export const DEFAULT_SUMMARY_BLOCK_CHARS = 20_000
 
-export const MIN_SUMMARY_TOTAL_CHARS = 5_000
-export const MAX_SUMMARY_TOTAL_CHARS = 1_000_000
+/** 窗口未知时（还没拿到模型信息）退回的绝对值上限。 */
+export const DEFAULT_SUMMARY_BLOCK_CHARS = 20_000
 export const DEFAULT_SUMMARY_TOTAL_CHARS = 100_000
+
+/** 摘要上限允许的窗口百分比范围。 */
+export const MIN_SUMMARY_PERCENT = 1
+export const MAX_SUMMARY_PERCENT = 90
+export const DEFAULT_SUMMARY_BLOCK_PERCENT = 10
+export const DEFAULT_SUMMARY_TOTAL_PERCENT = 50
 
 /**
  * 上下文窗口里预留给 system/tools/recent 的 token 数。
@@ -35,10 +42,9 @@ export const MIN_TRIGGER_PERCENT = 60
 export const MAX_TRIGGER_PERCENT = 95
 export const DEFAULT_TRIGGER_PERCENT = 80
 
-/** 摘要链预算：超过后自动合并摘要块。 */
-export const MIN_SUMMARY_BUDGET = 5_000
-export const MAX_SUMMARY_BUDGET = 1_000_000
-export const DEFAULT_SUMMARY_BUDGET = 50_000
+/** 可用窗口下限：低于它连最小摘要都放不下。 */
+export const MIN_CONTEXT_LIMIT = 50_000
+export const MAX_CONTEXT_LIMIT = 10_000_000
 
 export interface Settings {
   /** 是否显示整块上下文面板 */
@@ -51,12 +57,10 @@ export interface Settings {
   contextLimit: ContextLimit
   /** 强制压缩阈值（占用百分比） */
   triggerPercent: number
-  /** 摘要链 token 预算 */
-  summaryBudgetTokens: number
-  /** 单条摘要字符上限 */
-  summaryBlockChars: number
-  /** 全部摘要字符上限 */
-  summaryTotalChars: number
+  /** 单条摘要最多占窗口的百分比 */
+  summaryBlockPercent: number
+  /** 全部摘要加起来最多占窗口的百分比 */
+  summaryTotalPercent: number
   /** 摘要语言；只影响提示词 */
   summaryLanguage: SummaryLanguage
 }
@@ -67,15 +71,10 @@ export const DEFAULT_SETTINGS: Settings = {
   locale: "auto",
   contextLimit: "auto",
   triggerPercent: DEFAULT_TRIGGER_PERCENT,
-  summaryBudgetTokens: DEFAULT_SUMMARY_BUDGET,
-  summaryBlockChars: DEFAULT_SUMMARY_BLOCK_CHARS,
-  summaryTotalChars: DEFAULT_SUMMARY_TOTAL_CHARS,
+  summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
+  summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
 }
-
-/** 自定义上限允许的范围。 */
-export const MIN_CONTEXT_LIMIT = 1_000
-export const MAX_CONTEXT_LIMIT = 10_000_000
 
 /** 输入：任意值；输出：是否是合法语言设置。 */
 export function isLocaleSetting(value: unknown): value is LocaleSetting {
@@ -87,13 +86,53 @@ export function isSummaryLanguage(value: unknown): value is SummaryLanguage {
   return typeof value === "string" && (SUMMARY_LANGUAGES as readonly string[]).includes(value)
 }
 
-/** 输入：任意值 + 范围；输出：合法的字符上限。 */
-function readCharLimit(value: unknown, min: number, max: number, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value) && value >= min && value <= max) {
-    return Math.round(value)
+/** 输入：任意值；输出：合法的窗口百分比（保留一位小数）。 */
+export function readSummaryPercent(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  const rounded = Math.round(value * 10) / 10
+  if (rounded < MIN_SUMMARY_PERCENT || rounded > MAX_SUMMARY_PERCENT) return fallback
+  return rounded
+}
+
+/**
+ * 输入：用户输入的摘要上限文本（`10%` / `20k` / `20000`）+ 当前窗口。
+ * 输出：窗口百分比；非法或无法换算返回 undefined。
+ * 预期：绝对值按窗口换算；窗口未知时只接受百分比写法。
+ */
+export function parseSummaryPercent(text: string, windowTokens: number | undefined): number | undefined {
+  const trimmed = text.trim()
+  if (trimmed.endsWith("%")) {
+    const value = Number(trimmed.slice(0, -1))
+    if (!Number.isFinite(value)) return undefined
+    const percent = Math.round(value * 10) / 10
+    if (percent < MIN_SUMMARY_PERCENT || percent > MAX_SUMMARY_PERCENT) return undefined
+    return percent
   }
-  if (typeof value === "string") return parseTokenCount(value, min, max) ?? fallback
-  return fallback
+  if (windowTokens === undefined || !Number.isFinite(windowTokens) || windowTokens <= 0) return undefined
+  const tokens = parseTokenCount(trimmed, MIN_SUMMARY_BLOCK_CHARS, Math.floor(windowTokens))
+  if (tokens === undefined) return undefined
+  const percent = Math.round((tokens / windowTokens) * 1000) / 10
+  if (percent < MIN_SUMMARY_PERCENT || percent > MAX_SUMMARY_PERCENT) return undefined
+  return percent
+}
+
+/** 输入：百分比 + 窗口；输出：折算后的字符上限；窗口未知返回 undefined。 */
+export function percentToChars(percent: number, windowTokens: number | undefined): number | undefined {
+  if (windowTokens === undefined || !Number.isFinite(windowTokens) || windowTokens <= 0) return undefined
+  return Math.round((windowTokens * percent) / 100)
+}
+
+/**
+ * 输入：窗口 token 数。
+ * 输出：摘要百分比允许的最大值（扣掉预留）。
+ * 预期：窗口未知时返回全局上限；窗口太小放不下最小摘要时返回 MIN。
+ */
+export function maxSummaryPercent(windowTokens: number | undefined): number {
+  if (windowTokens === undefined || !Number.isFinite(windowTokens) || windowTokens <= 0) {
+    return MAX_SUMMARY_PERCENT
+  }
+  const physical = ((windowTokens - SUMMARY_WINDOW_RESERVE) / windowTokens) * 100
+  return Math.max(MIN_SUMMARY_PERCENT, Math.min(MAX_SUMMARY_PERCENT, Math.floor(physical)))
 }
 
 /**
@@ -143,44 +182,15 @@ function readContextLimit(value: unknown): ContextLimit {
   return DEFAULT_SETTINGS.contextLimit
 }
 
-/** 输入：任意值；输出：合法的摘要预算设置（支持 `50k` 这类字符串）。 */
-function readSummaryBudget(value: unknown): number {
-  if (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= MIN_SUMMARY_BUDGET &&
-    value <= MAX_SUMMARY_BUDGET
-  ) {
-    return Math.round(value)
-  }
-  if (typeof value === "string") {
-    return parseTokenCount(value, MIN_SUMMARY_BUDGET, MAX_SUMMARY_BUDGET) ?? DEFAULT_SUMMARY_BUDGET
-  }
-  return DEFAULT_SUMMARY_BUDGET
-}
-
 /**
  * 输入：任意设置对象（可能来自旧版本、缺字段或类型不对）。
  * 输出：补齐后的合法设置。
- * 预期：用于启动时迁移 storage 里的旧数据，绝不抛错。
+ * 预期：用于启动时迁移 storage 里的旧数据，绝不抛错；旧的绝对值字段不再读取，统一回到百分比默认。
  */
 export function normalizeSettings(value: Readonly<Record<string, unknown>>): Settings {
   const percent = value["triggerPercent"]
-  const blockChars = readCharLimit(
-    value["summaryBlockChars"],
-    MIN_SUMMARY_BLOCK_CHARS,
-    MAX_SUMMARY_BLOCK_CHARS,
-    DEFAULT_SUMMARY_BLOCK_CHARS,
-  )
-  const totalChars = Math.max(
-    blockChars,
-    readCharLimit(
-      value["summaryTotalChars"],
-      MIN_SUMMARY_TOTAL_CHARS,
-      MAX_SUMMARY_TOTAL_CHARS,
-      DEFAULT_SUMMARY_TOTAL_CHARS,
-    ),
-  )
+  const blockPercent = readSummaryPercent(value["summaryBlockPercent"], DEFAULT_SUMMARY_BLOCK_PERCENT)
+  const totalPercent = readSummaryPercent(value["summaryTotalPercent"], DEFAULT_SUMMARY_TOTAL_PERCENT)
   return {
     enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_SETTINGS.enabled,
     expanded: typeof value["expanded"] === "boolean" ? value["expanded"] : DEFAULT_SETTINGS.expanded,
@@ -190,9 +200,8 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
       typeof percent === "number" && Number.isFinite(percent) && percent >= MIN_TRIGGER_PERCENT && percent <= MAX_TRIGGER_PERCENT
         ? Math.round(percent)
         : DEFAULT_SETTINGS.triggerPercent,
-    summaryBudgetTokens: readSummaryBudget(value["summaryBudgetTokens"]),
-    summaryBlockChars: blockChars,
-    summaryTotalChars: totalChars,
+    summaryBlockPercent: blockPercent,
+    summaryTotalPercent: totalPercent,
     summaryLanguage: isSummaryLanguage(value["summaryLanguage"]) ? value["summaryLanguage"] : "auto",
   }
 }
@@ -206,51 +215,14 @@ export function initialSettings(options: Readonly<Record<string, unknown>>): Set
   return normalizeSettings(options)
 }
 
-/**
- * 输入：设置对象（可能是热重载前的旧对象，字段缺失）。
- * 输出：合法的摘要预算；缺失或非法时回退默认值。
- * 预期：运行时兜底，避免旧 settings 直接 .toString() 崩溃。
- */
-export function effectiveSummaryBudget(settings: Settings): number {
-  const value: unknown = settings.summaryBudgetTokens
-  if (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= MIN_SUMMARY_BUDGET &&
-    value <= MAX_SUMMARY_BUDGET
-  ) {
-    return Math.round(value)
-  }
-  return DEFAULT_SUMMARY_BUDGET
+/** 输入：设置对象（可能是热重载前的旧对象，字段缺失）。输出：合法的单条摘要百分比。 */
+export function effectiveSummaryBlockPercent(settings: Settings): number {
+  return readSummaryPercent(settings.summaryBlockPercent, DEFAULT_SUMMARY_BLOCK_PERCENT)
 }
 
-/** 输入：设置；输出：合法的单条摘要字符上限。 */
-export function effectiveSummaryBlockChars(settings: Settings): number {
-  const value: unknown = settings.summaryBlockChars
-  if (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= MIN_SUMMARY_BLOCK_CHARS &&
-    value <= MAX_SUMMARY_BLOCK_CHARS
-  ) {
-    return Math.round(value)
-  }
-  return DEFAULT_SUMMARY_BLOCK_CHARS
-}
-
-/** 输入：设置；输出：合法的摘要总字符上限，保证不小于单条上限。 */
-export function effectiveSummaryTotalChars(settings: Settings): number {
-  const block = effectiveSummaryBlockChars(settings)
-  const value: unknown = settings.summaryTotalChars
-  if (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= MIN_SUMMARY_TOTAL_CHARS &&
-    value <= MAX_SUMMARY_TOTAL_CHARS
-  ) {
-    return Math.max(block, Math.round(value))
-  }
-  return Math.max(block, DEFAULT_SUMMARY_TOTAL_CHARS)
+/** 输入：设置对象。输出：合法的全部摘要百分比。 */
+export function effectiveSummaryTotalPercent(settings: Settings): number {
+  return readSummaryPercent(settings.summaryTotalPercent, DEFAULT_SUMMARY_TOTAL_PERCENT)
 }
 
 /** 输入：设置；输出：合法的摘要语言。 */
@@ -259,34 +231,30 @@ export function effectiveSummaryLanguage(settings: Settings): SummaryLanguage {
 }
 
 /**
- * 输入：设置（结构同 Settings，允许缺字段）+ 已知窗口 token 数（auto 未解析时为 undefined）。
- * 输出：钳制后的 blockChars / totalChars / budgetTokens。
- * 预期：窗口未知时原样返回；窗口已知时任何一项都不得超过 窗口 − 预留。
+ * 输入：设置（结构同 Settings，允许缺字段）+ 已知窗口 token 数。
+ * 输出：折算后的字符上限与合并预算。
+ * 预期：窗口未知时退回默认绝对值；窗口已知时按百分比折算，并扣除 system/tools/recent 预留。
  */
-export function clampSummaryLimits(
+export function resolveSummaryLimits(
   settings: {
-    readonly summaryBlockChars?: unknown
-    readonly summaryTotalChars?: unknown
-    readonly summaryBudgetTokens?: unknown
+    readonly summaryBlockPercent?: unknown
+    readonly summaryTotalPercent?: unknown
   },
   windowTokens: number | undefined,
 ): { blockChars: number; totalChars: number; budgetTokens: number } {
-  const blockChars = effectiveSummaryBlockChars(settings as Settings)
-  const totalChars = Math.max(blockChars, effectiveSummaryTotalChars(settings as Settings))
-  const budgetTokens = effectiveSummaryBudget(settings as Settings)
+  const blockPercent = effectiveSummaryBlockPercent(settings as Settings)
+  const totalPercent = effectiveSummaryTotalPercent(settings as Settings)
   if (windowTokens === undefined || !Number.isFinite(windowTokens) || windowTokens <= 0) {
-    return { blockChars, totalChars, budgetTokens }
+    return {
+      blockChars: DEFAULT_SUMMARY_BLOCK_CHARS,
+      totalChars: DEFAULT_SUMMARY_TOTAL_CHARS,
+      budgetTokens: DEFAULT_SUMMARY_TOTAL_CHARS,
+    }
   }
-  const ceiling = Math.max(0, Math.floor(windowTokens) - SUMMARY_WINDOW_RESERVE)
-  if (ceiling < 500) {
-    // 窗口小到装不下最小摘要时钳制只会把上限压成 0，让压缩必然失败；保持用户值，失败原因交给校验。
-    return { blockChars, totalChars, budgetTokens }
-  }
-  return {
-    blockChars: Math.min(blockChars, ceiling),
-    totalChars: Math.min(totalChars, ceiling),
-    budgetTokens: Math.min(budgetTokens, ceiling),
-  }
+  const physical = Math.max(0, Math.floor(windowTokens) - SUMMARY_WINDOW_RESERVE)
+  const blockChars = Math.min(physical, Math.max(1, Math.round((windowTokens * blockPercent) / 100)))
+  const totalChars = Math.min(physical, Math.max(1, Math.round((windowTokens * totalPercent) / 100)))
+  return { blockChars, totalChars, budgetTokens: totalChars }
 }
 
 /**

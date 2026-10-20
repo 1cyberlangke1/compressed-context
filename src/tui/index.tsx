@@ -17,9 +17,8 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     locale: settings.locale,
     contextLimit: settings.contextLimit,
     triggerPercent: settings.triggerPercent,
-    summaryBudgetTokens: settings.summaryBudgetTokens,
-    summaryBlockChars: settings.summaryBlockChars,
-    summaryTotalChars: settings.summaryTotalChars,
+    summaryBlockPercent: settings.summaryBlockPercent,
+    summaryTotalPercent: settings.summaryTotalPercent,
     summaryLanguage: settings.summaryLanguage,
   })
   if (
@@ -28,7 +27,9 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     settings.locale === normalized.locale &&
     settings.contextLimit === normalized.contextLimit &&
     settings.triggerPercent === normalized.triggerPercent &&
-    settings.summaryBudgetTokens === normalized.summaryBudgetTokens
+    settings.summaryBlockPercent === normalized.summaryBlockPercent &&
+    settings.summaryTotalPercent === normalized.summaryTotalPercent &&
+    settings.summaryLanguage === normalized.summaryLanguage
   ) {
     return
   }

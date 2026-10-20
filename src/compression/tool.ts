@@ -1,8 +1,9 @@
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
+import { resolveSummaryLimits } from "../settings.ts"
 import { SummaryFields } from "./schema.ts"
-import { loadServerSettings } from "./settings.ts"
+import { RESOLVED_WINDOW_KEY, loadServerSettings } from "./settings.ts"
 import type { MessageLike } from "./select.ts"
 import { loadState, nextBlockId, nextOrder, saveState, withPending, type Block } from "./state.ts"
 import type { Disposable } from "./settings-rpc.ts"
@@ -63,7 +64,10 @@ export async function registerCompressTool(
         }
 
         const settings = await loadServerSettings(ctx.storage)
-        const validation = validateSummary(input, sourceChars, undefined, settings.summaryBlockChars)
+        const resolved = await ctx.storage.get(RESOLVED_WINDOW_KEY)
+        const windowTokens = typeof resolved === "number" && resolved > 0 ? resolved : undefined
+        const limits = resolveSummaryLimits(settings, windowTokens)
+        const validation = validateSummary(input, sourceChars, undefined, limits.blockChars)
         if (!validation.ok) return failure(validation.message)
 
         const first = eligible.find((message) => message.id !== undefined)

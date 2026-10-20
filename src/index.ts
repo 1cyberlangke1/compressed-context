@@ -7,7 +7,7 @@ import { activeBlocks, renderAll } from "./compression/render.ts"
 import { eligibleMessages, olderMessages, type MessageLike } from "./compression/select.ts"
 import { loadServerSettings } from "./compression/settings.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
-import { clampSummaryLimits } from "./settings.ts"
+import { resolveSummaryLimits } from "./settings.ts"
 import {
   loadState,
   nextBlockId,
@@ -93,7 +93,7 @@ export default Plugin.define({
         const settings = await loadServerSettings(ctx.storage)
         // auto 窗口在运行时解析后钳制摘要上限；数字窗口已在保存时校验，这里统一再钳一次。
         const windowTokens = await resolveLimit(ctx, event.model, settings.contextLimit)
-        const limits = clampSummaryLimits(settings, windowTokens)
+        const limits = resolveSummaryLimits(settings, windowTokens)
 
         /** 保存这一层的结果；pending 可选，phase 由下一层决定。 */
         const save = async (

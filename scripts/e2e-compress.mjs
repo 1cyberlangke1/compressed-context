@@ -31,7 +31,7 @@ await Promise.all([
 
 const password = randomBytes(24).toString("base64url")
 const basic = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
-const longText = "context ".repeat(4_000)
+const longText = "context ".repeat(16_000)
 const assistantText = "assistant ".repeat(2_000)
 
 /** 输入：content；输出：OpenAI 兼容的非流式响应。 */
@@ -318,7 +318,7 @@ const config = {
       models: {
         fake: {
           name: "Fake",
-          limit: { context: 4_000, output: 2_000 },
+          limit: { context: 50_000, output: 2_000 },
           capabilities: { tools: true, input: ["text"], output: ["text"] },
         },
       },
@@ -390,22 +390,32 @@ try {
     "insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)",
   ).run(
     settingsKey,
-    JSON.stringify({ contextLimit: 4_000, triggerPercent: 60, summaryBudgetTokens: 5_000 }),
+    JSON.stringify({ contextLimit: 50_000, triggerPercent: 60, summaryBlockPercent: 20, summaryTotalPercent: 10 }),
     now,
     now,
   )
   db.close()
   console.log("seeded plugin settings")
 
-  /** 输入：budget；输出：无；预期：只改临时 DB 的插件 settings。 */
-  const setSettings = (budget, contextLimit = 4_000, triggerPercent = 60, extra = {}) => {
+  /**
+   * 输入：全部摘要百分比 + 窗口 + 阈值 + 额外字段。
+   * 输出：无。
+   * 预期：只改临时 DB 的插件 settings；单条默认 20%，可用 extra.summaryBlockPercent 覆盖。
+   */
+  const setSettings = (totalPercent, contextLimit = 50_000, triggerPercent = 60, extra = {}) => {
     const conn = new Database(join(root, "opencode.db"))
     const at = Date.now()
     conn
       .query("insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)")
       .run(
         settingsKey,
-        JSON.stringify({ contextLimit, triggerPercent, summaryBudgetTokens: budget, ...extra }),
+        JSON.stringify({
+          contextLimit,
+          triggerPercent,
+          summaryBlockPercent: 20,
+          summaryTotalPercent: totalPercent,
+          ...extra,
+        }),
         at,
         at,
       )
@@ -502,6 +512,11 @@ try {
   await api("POST", `/api/experimental/session/${sessionID}/wait`)
   console.log("fifth prompt done")
 
+  // 下一次模型请求才会触发 T2 合并（T1 结束时历史里只剩 checkpoint，不能立刻入队）。
+  await api("POST", `/api/session/${sessionID}/prompt`, { text: "merge now" })
+  await api("POST", `/api/experimental/session/${sessionID}/wait`)
+  console.log("sixth prompt done")
+
   const messages = await api("GET", `/api/session/${sessionID}/message?limit=200`)
   const inbox = await api("GET", `/api/session/${sessionID}/inbox`)
   console.log("inbox:", JSON.stringify(inbox).slice(0, 1_000))
@@ -563,7 +578,7 @@ try {
 
   // case: 有消息时手动 compact，检查插件钩子是否报错/是否又跑原生摘要
   mode = "normal"
-  setSettings(50_000, 1_000_000, 95)
+  setSettings(50, 1_000_000, 95)
   const manual = await newSession("e2e-manual-compact")
   await promptSession(manual, longText)
   await promptSession(manual, "continue")
@@ -585,7 +600,7 @@ try {
 
   // case: 手动 compact 空历史 → failed，state 不产生块
   mode = "short"
-  setSettings(50_000)
+  setSettings(50)
   const empty = await newSession("e2e-empty")
   await api("POST", `/api/session/${empty}/compact`, {})
   await promptSession(empty, "continue")
@@ -597,7 +612,7 @@ try {
 
   // case: T1 摘要非法 → compaction failed，state 不产生块
   mode = "invalid-t1"
-  setSettings(50_000)
+  setSettings(50)
   const invalid = await newSession("e2e-invalid-t1")
   await promptSession(invalid, longText)
   await promptSession(invalid, "continue")
@@ -616,7 +631,7 @@ try {
 
   // case: T1 结构非法（goal 为空）→ failed，state 不残留
   mode = "bad-shape-t1"
-  setSettings(50_000)
+  setSettings(50)
   const badShape = await newSession("e2e-bad-shape-t1")
   await promptSession(badShape, longText)
   await promptSession(badShape, "continue")
@@ -636,7 +651,7 @@ try {
   // case: 第一次 T1 摘要失败，OpenCode 重试后成功
   mode = "retry-t1"
   t1Attempts = 0
-  setSettings(50_000)
+  setSettings(50)
   const retry = await newSession("e2e-retry-t1")
   await promptSession(retry, longText)
   await promptSession(retry, "continue")
@@ -651,13 +666,15 @@ try {
   // case: T2 第一次摘要非法，OpenCode 重试后成功
   mode = "retry-t2"
   t2Attempts = 0
-  setSettings(5_000)
+  setSettings(2.5)
   const t2Retry = await newSession("e2e-retry-t2")
   await promptSession(t2Retry, longText)
   await promptSession(t2Retry, "continue")
   await promptSession(t2Retry, "continue again")
   await promptSession(t2Retry, "continue once more")
   await promptSession(t2Retry, "trigger t2")
+  // 下一次模型请求才会触发 T2 合并。
+  await promptSession(t2Retry, "merge now")
   let t2RetryState = stateFor(t2Retry)
   for (let index = 0; index < 40 && !(t2RetryState?.blocks ?? []).some((item) => item.tier === 2); index += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -672,7 +689,7 @@ try {
   // case: compress 工具在真实 OpenCode 里执行并生成 T1
   mode = "tool-compress"
   toolPromptCount = 0
-  setSettings(50_000, 1_000_000, 95)
+  setSettings(50, 1_000_000, 95)
   const toolSession = await newSession("e2e-tool-compress")
   await promptSession(toolSession, longText)
   await promptSession(toolSession, "use compress tool")
@@ -713,7 +730,7 @@ try {
   mode = "tool-decompress"
   toolPromptCount = 0
   decompressTriggered = false
-  setSettings(50_000, 1_000_000, 95)
+  setSettings(50, 1_000_000, 95)
   const decompressSession = await newSession("e2e-tool-decompress")
   await promptSession(decompressSession, longText)
   await promptSession(decompressSession, "use compress tool")
@@ -753,7 +770,7 @@ try {
 
   // case: 超大摘要上限被运行时钳制，压缩仍成功
   mode = "normal"
-  setSettings(50_000, 4_000, 60, { summaryBlockChars: 90_000, summaryTotalChars: 900_000 })
+  setSettings(90, 50_000, 60, { summaryBlockPercent: 90 })
   const clamp = await newSession("e2e-clamp")
   await promptSession(clamp, longText)
   await promptSession(clamp, "continue")
@@ -766,7 +783,7 @@ try {
 
   // case: 父子/不同 session 状态隔离
   mode = "normal"
-  setSettings(50_000)
+  setSettings(50)
   const sessionA = await newSession("e2e-iso-a")
   const sessionB = await newSession("e2e-iso-b")
   for (const id of [sessionA, sessionB]) {
@@ -799,7 +816,7 @@ try {
   // T2 合并后仍超预算挂 phase=t3，再下一次请求触发 T3，T3 封顶（不再排 T4）。
   // 每层只合一对，active 链 tier 单调不增。
   mode = "t3-chain"
-  setSettings(50_000)
+  setSettings(50)
   const t3Session = await newSession("e2e-t3-chain")
   await promptSession(t3Session, longText)
   await promptSession(t3Session, "continue")
@@ -820,7 +837,7 @@ try {
   // 降预算：下一次 T1 完成后 planT1Phase 挂 phase=t2
   // 预算用合法下限 5_000（低于它整包设置被拒绝回退默认 50k，phase 永远挂不上）；
   // 窗口用 1M 防 auto-compress 干扰（摘要 token 超过小窗口触发线会反复排队空压缩踩烂 phase）
-  setSettings(5_000, 1_000_000, 95)
+  setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20 })
   await promptSession(t3Session, longText)
   await promptSession(t3Session, "continue")
   await api("POST", `/api/session/${t3Session}/compact`, {})
@@ -872,7 +889,7 @@ try {
   // 每轮：长消息 + continue → 手动 compact 产 T1 → 再发一条触发下一次模型请求；
   // 若 T1 后超预算，context 钩子入队合并。验证多轮后链收敛、tier 单调、无残留错误。
   mode = "long-session"
-  setSettings(10_000, 200_000, 80)
+  setSettings(5, 200_000, 80)
   const longSession = await newSession("e2e-long-session")
   const longTurns = 6
   for (let turn = 0; turn < longTurns; turn += 1) {

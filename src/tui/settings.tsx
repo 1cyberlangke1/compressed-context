@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createEffect, createMemo, createSignal, Show, type ParentProps } from "solid-js"
+import { createEffect, createMemo, createSignal, onMount, Show, type ParentProps } from "solid-js"
 
 import { formatTokens } from "../format.ts"
 import { resolveMessages, type Messages } from "../i18n/index.ts"
@@ -8,22 +8,16 @@ import {
   isContextLimit,
   localeArgument,
   MAX_CONTEXT_LIMIT,
-  MAX_SUMMARY_BLOCK_CHARS,
-  MAX_SUMMARY_BUDGET,
-  MAX_SUMMARY_TOTAL_CHARS,
   MAX_TRIGGER_PERCENT,
   MIN_CONTEXT_LIMIT,
-  MIN_SUMMARY_BLOCK_CHARS,
-  MIN_SUMMARY_BUDGET,
-  MIN_SUMMARY_TOTAL_CHARS,
   MIN_TRIGGER_PERCENT,
-  effectiveSummaryBlockChars,
-  effectiveSummaryBudget,
+  effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
-  effectiveSummaryTotalChars,
+  effectiveSummaryTotalPercent,
+  maxSummaryPercent,
+  parseSummaryPercent,
   parseTokenCount,
-  SUMMARY_WINDOW_RESERVE,
-  clampSummaryLimits,
+  percentToChars,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
@@ -31,9 +25,8 @@ import {
 } from "../settings.ts"
 import type { UpdateSettings } from "./types.ts"
 
-/** 可选上限预设；菜单里只出现合法值。 */
+/** 可选上限预设；菜单里只出现合法值（最低 50k）。 */
 const PRESET_LIMITS = [
-  32_000,
   64_000,
   100_000,
   128_000,
@@ -53,7 +46,7 @@ function localeLabel(settings: Settings, copy: Messages): string {
   return copy.languages.en
 }
 
-/** 输入：设置；输出：当前上下文上限标签；预期：auto 显示「模型原生」。 */
+/** 输入：设置；输出：当前摘要语言标签。 */
 function summaryLanguageLabel(settings: Settings, copy: Messages): string {
   const language = effectiveSummaryLanguage(settings)
   if (language === "zh") return copy.languages.zh
@@ -61,10 +54,21 @@ function summaryLanguageLabel(settings: Settings, copy: Messages): string {
   return copy.settings.auto
 }
 
-function limitLabel(settings: Settings, copy: Messages): string {
+/** 输入：设置 + 已知窗口；输出：上下文上限标签；auto 时带上解析到的原生窗口。 */
+function limitLabel(settings: Settings, copy: Messages, window: number | undefined): string {
   const value: unknown = settings.contextLimit
-  if (!isContextLimit(value) || value === "auto") return copy.settings.limitAuto
+  if (!isContextLimit(value) || value === "auto") {
+    return window === undefined ? copy.settings.limitAuto : `${copy.settings.limitAuto} (${formatTokens(window)})`
+  }
   return formatTokens(value)
+}
+
+/** 输入：百分比 + 窗口；输出：`10% ≈ 20k` 这样的标签。 */
+function percentLabel(percent: number, window: number | undefined): string {
+  const chars = percentToChars(percent, window)
+  return chars === undefined
+    ? `${percent.toString()}%`
+    : `${percent.toString()}% ≈ ${formatTokens(chars)}`
 }
 
 /**
@@ -99,7 +103,7 @@ function DialogFrame(
 
 /**
  * 输入：TUI 上下文 + 文案 + 标题/提示 + 初始值 + 合法范围 + 确认回调。
- * 输出：通用 token 输入对话框；上下文上限和摘要预算共用。
+ * 输出：通用 token 输入对话框；上下文上限共用。
  * 预期：只接受数字 + 结尾 k/m；解析成功才允许回车提交，非法时只提示不写入。
  */
 function TokenDialog(props: {
@@ -160,6 +164,85 @@ function TokenDialog(props: {
           <text fg={theme.text.muted}>{props.copy.settings.limitPreview(formatTokens(value()))}</text>
         )}
       </Show>
+      <text fg={theme.text.muted}>{props.hint}</text>
+    </DialogFrame>
+  )
+}
+
+/**
+ * 输入：TUI 上下文 + 文案 + 初始百分比 + 窗口 + 允许范围 + 确认回调。
+ * 输出：摘要上限对话框。
+ * 预期：接受 `10%` 或 `20k`/`20000`；绝对值按窗口换算；超出范围不提交。
+ */
+function PercentDialog(props: {
+  readonly context: Context
+  readonly copy: Messages
+  readonly title: string
+  readonly hint: string
+  readonly invalid: string
+  readonly initial: number
+  readonly windowTokens: number | undefined
+  readonly minPercent: number
+  readonly maxPercent: number
+  readonly onConfirm: (value: number) => void
+}) {
+  const theme = props.context.theme
+  const [text, setText] = createSignal(`${props.initial.toString()}%`)
+  const parsed = createMemo(() => {
+    const value = parseSummaryPercent(text(), props.windowTokens)
+    if (value === undefined || value < props.minPercent || value > props.maxPercent) return undefined
+    return value
+  })
+  let area: { plainText: string } | undefined
+
+  const confirm = (): void => {
+    const value = parsed()
+    if (value === undefined) return
+    props.onConfirm(value)
+    props.context.ui.dialog.clear()
+  }
+
+  // 原生 DialogPrompt 用模态层接管回车；这里同样注册，避免 textarea 插入换行。
+  props.context.keymap.layer(() => ({
+    mode: "modal",
+    priority: 1,
+    commands: [{ bind: "enter", title: "Submit", group: "Dialog", run: confirm }],
+  }))
+
+  return (
+    <DialogFrame context={props.context} title={props.title} submit={props.copy.settings.submit}>
+      <textarea
+        height={1}
+        wrapMode="none"
+        initialValue={`${props.initial.toString()}%`}
+        placeholder="10%"
+        placeholderColor={theme.text.muted}
+        textColor={theme.text.formfield.base}
+        focusedTextColor={theme.text.formfield.base}
+        cursorColor={theme.text.base}
+        onContentChange={() => setText(area?.plainText ?? "")}
+        ref={(input) => {
+          area = input
+          setTimeout(() => {
+            if (!input.isDestroyed) input.focus()
+          }, 1)
+        }}
+      />
+      <Show
+        when={parsed()}
+        fallback={<text fg={theme.text.feedback.error.base}>{props.invalid}</text>}
+      >
+        {(value: () => number) => (
+          <text fg={theme.text.muted}>
+            {percentLabel(value(), props.windowTokens)}
+          </text>
+        )}
+      </Show>
+      <text fg={theme.text.muted}>
+        {props.windowTokens === undefined
+          ? props.copy.settings.windowUnknown
+          : props.copy.settings.windowKnown(formatTokens(props.windowTokens))}
+      </text>
       <text fg={theme.text.muted}>{props.hint}</text>
     </DialogFrame>
   )
@@ -243,15 +326,37 @@ export function SettingsCommand(props: {
   readonly updateSettings: UpdateSettings
 }) {
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
+  const [resolvedWindow, setResolvedWindow] = createSignal<number | undefined>(undefined)
+
+  /** 输入：无；输出：当前生效的窗口；预期：数字设置优先，否则用插件解析到的原生窗口。 */
+  const currentWindow = (): number | undefined => {
+    const limit: unknown = props.settings.contextLimit
+    if (typeof limit === "number" && Number.isFinite(limit)) return limit
+    return resolvedWindow()
+  }
+
+  // 读取服务端解析到的原生窗口，auto 时也能把绝对值换算成百分比。
+  onMount(() => {
+    void (async () => {
+      try {
+        const rpc = props.context.client.rpc(ContextRpc) as unknown as {
+          settingsGet(input: Record<string, never>): Promise<{ resolvedWindow?: number }>
+        }
+        const got = await rpc.settingsGet({})
+        if (typeof got.resolvedWindow === "number" && got.resolvedWindow > 0) setResolvedWindow(got.resolvedWindow)
+      } catch {
+        // server plugin not loaded
+      }
+    })()
+  })
 
   // 设置变化时推给服务端；服务端插件未加载时静默忽略。
   createEffect(() => {
     const payload = {
       contextLimit: props.settings.contextLimit,
       triggerPercent: props.settings.triggerPercent,
-      summaryBudgetTokens: effectiveSummaryBudget(props.settings),
-      summaryBlockChars: effectiveSummaryBlockChars(props.settings),
-      summaryTotalChars: effectiveSummaryTotalChars(props.settings),
+      summaryBlockPercent: effectiveSummaryBlockPercent(props.settings),
+      summaryTotalPercent: effectiveSummaryTotalPercent(props.settings),
       summaryLanguage: effectiveSummaryLanguage(props.settings),
     }
     try {
@@ -260,9 +365,8 @@ export function SettingsCommand(props: {
         settingsSet(input: {
           contextLimit: "auto" | number
           triggerPercent: number
-          summaryBudgetTokens: number
-          summaryBlockChars: number
-          summaryTotalChars: number
+          summaryBlockPercent: number
+          summaryTotalPercent: number
           summaryLanguage: SummaryLanguage
         }): Promise<unknown>
       }
@@ -318,64 +422,28 @@ export function SettingsCommand(props: {
         onConfirm={(value) => {
           void props.updateSettings((draft) => {
             draft.contextLimit = value
-            // 窗口变小时钳制摘要上限，否则服务端会拒绝整次保存，TUI 和服务端分叉。
-            const limits = clampSummaryLimits(draft, value)
-            draft.summaryBlockChars = limits.blockChars
-            draft.summaryTotalChars = limits.totalChars
-            draft.summaryBudgetTokens = limits.budgetTokens
           })
         }}
       />
     ))
-  }
-
-  const openBudget = (): void => {
-    const budget = effectiveSummaryBudget(props.settings)
-    props.context.ui.dialog.show(() => (
-      <TokenDialog
-        context={props.context}
-        copy={copy()}
-        title={copy().settings.summaryBudget}
-        hint={copy().settings.summaryBudgetHint}
-        invalid={copy().settings.summaryBudgetInvalid}
-        placeholder={copy().settings.summaryBudgetPlaceholder}
-        initial={formatTokens(budget)}
-        min={MIN_SUMMARY_BUDGET}
-        max={MAX_SUMMARY_BUDGET}
-        onConfirm={(value) => {
-          void props.updateSettings((draft) => {
-            draft.summaryBudgetTokens = value
-          })
-        }}
-      />
-    ))
-  }
-
-  /** 输入：无；输出：数字窗口下的摘要上限，auto 返回 undefined。 */
-  const windowCeiling = (): number | undefined => {
-    const limit: unknown = props.settings.contextLimit
-    if (typeof limit !== "number" || !Number.isFinite(limit)) return undefined
-    return Math.max(0, limit - SUMMARY_WINDOW_RESERVE)
   }
 
   const openSummaryBlock = (): void => {
-    const value = effectiveSummaryBlockChars(props.settings)
-    const ceiling = windowCeiling()
+    const window = currentWindow()
     props.context.ui.dialog.show(() => (
-      <TokenDialog
+      <PercentDialog
         context={props.context}
         copy={copy()}
-        title={copy().settings.summaryBlockChars}
-        hint={copy().settings.summaryBlockCharsHint}
-        invalid={copy().settings.summaryBlockCharsInvalid}
-        placeholder={copy().settings.summaryBlockCharsPlaceholder}
-        initial={formatTokens(value)}
-        min={MIN_SUMMARY_BLOCK_CHARS}
-        max={Math.min(MAX_SUMMARY_BLOCK_CHARS, ceiling ?? MAX_SUMMARY_BLOCK_CHARS)}
+        title={copy().settings.summaryBlockPercent}
+        hint={copy().settings.summaryBlockPercentHint}
+        invalid={copy().settings.summaryPercentInvalid}
+        initial={effectiveSummaryBlockPercent(props.settings)}
+        windowTokens={window}
+        minPercent={1}
+        maxPercent={maxSummaryPercent(window)}
         onConfirm={(next) => {
           void props.updateSettings((draft) => {
-            draft.summaryBlockChars = next
-            if (draft.summaryTotalChars < next) draft.summaryTotalChars = next
+            draft.summaryBlockPercent = next
           })
         }}
       />
@@ -383,23 +451,21 @@ export function SettingsCommand(props: {
   }
 
   const openSummaryTotal = (): void => {
-    const block = effectiveSummaryBlockChars(props.settings)
-    const value = effectiveSummaryTotalChars(props.settings)
-    const ceiling = windowCeiling()
+    const window = currentWindow()
     props.context.ui.dialog.show(() => (
-      <TokenDialog
+      <PercentDialog
         context={props.context}
         copy={copy()}
-        title={copy().settings.summaryTotalChars}
-        hint={copy().settings.summaryTotalCharsHint}
-        invalid={copy().settings.summaryTotalCharsInvalid}
-        placeholder={copy().settings.summaryTotalCharsPlaceholder}
-        initial={formatTokens(value)}
-        min={Math.max(MIN_SUMMARY_TOTAL_CHARS, block)}
-        max={Math.min(MAX_SUMMARY_TOTAL_CHARS, ceiling ?? MAX_SUMMARY_TOTAL_CHARS)}
+        title={copy().settings.summaryTotalPercent}
+        hint={copy().settings.summaryTotalPercentHint}
+        invalid={copy().settings.summaryPercentInvalid}
+        initial={effectiveSummaryTotalPercent(props.settings)}
+        windowTokens={window}
+        minPercent={1}
+        maxPercent={maxSummaryPercent(window)}
         onConfirm={(next) => {
           void props.updateSettings((draft) => {
-            draft.summaryTotalChars = next
+            draft.summaryTotalPercent = next
           })
         }}
       />
@@ -444,6 +510,7 @@ export function SettingsCommand(props: {
   }
 
   const openSettings = async (): Promise<void> => {
+    const window = currentWindow()
     const picked = await props.context.ui.dialog.select<string>({
       title: copy().settings.title,
       options: [
@@ -452,26 +519,21 @@ export function SettingsCommand(props: {
           value: "show",
           footer: props.settings.enabled ? copy().settings.on : copy().settings.off,
         },
-        { title: copy().settings.limit, value: "limit", footer: limitLabel(props.settings, copy()) },
+        { title: copy().settings.limit, value: "limit", footer: limitLabel(props.settings, copy(), window) },
         {
           title: copy().settings.threshold,
           value: "threshold",
           footer: `${props.settings.triggerPercent.toString()}%`,
         },
         {
-          title: copy().settings.summaryBudget,
-          value: "budget",
-          footer: formatTokens(effectiveSummaryBudget(props.settings)),
+          title: copy().settings.summaryBlockPercent,
+          value: "blockPercent",
+          footer: percentLabel(effectiveSummaryBlockPercent(props.settings), window),
         },
         {
-          title: copy().settings.summaryBlockChars,
-          value: "blockChars",
-          footer: formatTokens(effectiveSummaryBlockChars(props.settings)),
-        },
-        {
-          title: copy().settings.summaryTotalChars,
-          value: "totalChars",
-          footer: formatTokens(effectiveSummaryTotalChars(props.settings)),
+          title: copy().settings.summaryTotalPercent,
+          value: "totalPercent",
+          footer: percentLabel(effectiveSummaryTotalPercent(props.settings), window),
         },
         {
           title: copy().settings.summaryLanguage,
@@ -499,15 +561,11 @@ export function SettingsCommand(props: {
       openThreshold()
       return
     }
-    if (picked === "budget") {
-      openBudget()
-      return
-    }
-    if (picked === "blockChars") {
+    if (picked === "blockPercent") {
       openSummaryBlock()
       return
     }
-    if (picked === "totalChars") {
+    if (picked === "totalPercent") {
       openSummaryTotal()
       return
     }

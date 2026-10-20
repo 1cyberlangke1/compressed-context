@@ -1,13 +1,11 @@
 import type { Schema } from "effect"
 
 import {
-  DEFAULT_SUMMARY_BLOCK_CHARS,
-  DEFAULT_SUMMARY_TOTAL_CHARS,
-  MAX_SUMMARY_BLOCK_CHARS,
-  MAX_SUMMARY_TOTAL_CHARS,
-  MIN_SUMMARY_BLOCK_CHARS,
-  MIN_SUMMARY_TOTAL_CHARS,
-  SUMMARY_WINDOW_RESERVE,
+  DEFAULT_SUMMARY_BLOCK_PERCENT,
+  DEFAULT_SUMMARY_TOTAL_PERCENT,
+  MAX_SUMMARY_PERCENT,
+  MIN_CONTEXT_LIMIT,
+  MIN_SUMMARY_PERCENT,
   isSummaryLanguage,
   type SummaryLanguage,
 } from "../settings.ts"
@@ -17,27 +15,23 @@ import type { StorageLike } from "./state.ts"
 export interface ServerSettings {
   readonly contextLimit: "auto" | number
   readonly triggerPercent: number
-  readonly summaryBudgetTokens: number
-  readonly summaryBlockChars: number
-  readonly summaryTotalChars: number
+  readonly summaryBlockPercent: number
+  readonly summaryTotalPercent: number
   readonly summaryLanguage: SummaryLanguage
 }
 
 export const SETTINGS_KEY = "settings"
+/** 插件最近一次从模型解析到的原生窗口；TUI 用它把绝对值换算成百分比。 */
+export const RESOLVED_WINDOW_KEY = "window:last"
 export const MIN_TRIGGER_PERCENT = 60
 export const MAX_TRIGGER_PERCENT = 95
-export const MIN_CONTEXT_LIMIT = 1_000
 export const MAX_CONTEXT_LIMIT = 10_000_000
-export const MIN_SUMMARY_BUDGET = 5_000
-export const MAX_SUMMARY_BUDGET = 1_000_000
-export const DEFAULT_SUMMARY_BUDGET = 50_000
 
 export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   contextLimit: "auto",
   triggerPercent: 80,
-  summaryBudgetTokens: DEFAULT_SUMMARY_BUDGET,
-  summaryBlockChars: DEFAULT_SUMMARY_BLOCK_CHARS,
-  summaryTotalChars: DEFAULT_SUMMARY_TOTAL_CHARS,
+  summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
+  summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
 }
 
@@ -51,9 +45,8 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   const record = value as Record<string, unknown>
   const limit = record["contextLimit"]
   const percent = record["triggerPercent"]
-  const budget = record["summaryBudgetTokens"] ?? DEFAULT_SUMMARY_BUDGET
-  const blockChars = record["summaryBlockChars"] ?? DEFAULT_SUMMARY_BLOCK_CHARS
-  const totalChars = record["summaryTotalChars"] ?? DEFAULT_SUMMARY_TOTAL_CHARS
+  const blockPercent = record["summaryBlockPercent"] ?? DEFAULT_SUMMARY_BLOCK_PERCENT
+  const totalPercent = record["summaryTotalPercent"] ?? DEFAULT_SUMMARY_TOTAL_PERCENT
   const language = record["summaryLanguage"] ?? "auto"
   if (
     limit !== "auto" &&
@@ -73,49 +66,27 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     return undefined
   }
   if (
-    typeof budget !== "number" ||
-    !Number.isFinite(budget) ||
-    budget < MIN_SUMMARY_BUDGET ||
-    budget > MAX_SUMMARY_BUDGET
+    typeof blockPercent !== "number" ||
+    !Number.isFinite(blockPercent) ||
+    blockPercent < MIN_SUMMARY_PERCENT ||
+    blockPercent > MAX_SUMMARY_PERCENT
   ) {
     return undefined
   }
   if (
-    typeof blockChars !== "number" ||
-    !Number.isFinite(blockChars) ||
-    blockChars < MIN_SUMMARY_BLOCK_CHARS ||
-    blockChars > MAX_SUMMARY_BLOCK_CHARS
-  ) {
-    return undefined
-  }
-  if (
-    typeof totalChars !== "number" ||
-    !Number.isFinite(totalChars) ||
-    totalChars < MIN_SUMMARY_TOTAL_CHARS ||
-    totalChars > MAX_SUMMARY_TOTAL_CHARS ||
-    totalChars < blockChars
+    typeof totalPercent !== "number" ||
+    !Number.isFinite(totalPercent) ||
+    totalPercent < MIN_SUMMARY_PERCENT ||
+    totalPercent > MAX_SUMMARY_PERCENT
   ) {
     return undefined
   }
   if (!isSummaryLanguage(language)) return undefined
-  // 数字窗口下，用户显式设置的摘要上限按 1 字符 ≈ 1 token 的最坏情况，不得超过窗口减预留；
-  // 窗口小到装不下最小摘要（或字段缺省回退默认值）时不校验——运行时钳制兜底，失败原因交给校验。
-  if (typeof limit === "number") {
-    const ceiling = limit - SUMMARY_WINDOW_RESERVE
-    if (ceiling >= MIN_SUMMARY_BLOCK_CHARS) {
-      const hasBlock = record["summaryBlockChars"] !== undefined
-      const hasTotal = record["summaryTotalChars"] !== undefined
-      if ((hasBlock && Math.round(blockChars) > ceiling) || (hasTotal && Math.round(totalChars) > ceiling)) {
-        return undefined
-      }
-    }
-  }
   return {
     contextLimit: limit,
     triggerPercent: Math.round(percent),
-    summaryBudgetTokens: Math.round(budget),
-    summaryBlockChars: Math.round(blockChars),
-    summaryTotalChars: Math.round(totalChars),
+    summaryBlockPercent: Math.round(blockPercent * 10) / 10,
+    summaryTotalPercent: Math.round(totalPercent * 10) / 10,
     summaryLanguage: language,
   }
 }

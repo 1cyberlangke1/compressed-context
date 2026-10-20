@@ -28,18 +28,13 @@ export interface Messages {
     readonly thresholdHint: string
     readonly thresholdInvalid: string
     readonly thresholdPreview: (value: string) => string
-    readonly summaryBudget: string
-    readonly summaryBudgetHint: string
-    readonly summaryBudgetInvalid: string
-    readonly summaryBudgetPlaceholder: string
-    readonly summaryBlockChars: string
-    readonly summaryBlockCharsHint: string
-    readonly summaryBlockCharsInvalid: string
-    readonly summaryBlockCharsPlaceholder: string
-    readonly summaryTotalChars: string
-    readonly summaryTotalCharsHint: string
-    readonly summaryTotalCharsInvalid: string
-    readonly summaryTotalCharsPlaceholder: string
+    readonly summaryBlockPercent: string
+    readonly summaryBlockPercentHint: string
+    readonly summaryTotalPercent: string
+    readonly summaryTotalPercentHint: string
+    readonly summaryPercentInvalid: string
+    readonly windowKnown: (value: string) => string
+    readonly windowUnknown: string
     readonly summaryLanguage: string
     readonly submit: string
     readonly language: string
