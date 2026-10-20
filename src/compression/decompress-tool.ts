@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
-import { effectiveDecompressInlineMax, effectiveDecompressTempCap } from "../settings.ts"
+import { effectiveDecompressInlineMax, effectiveDecompressTempCap } from "../shared/settings.ts"
 import { loadServerSettings } from "./settings.ts"
 import type { Disposable } from "./settings-rpc.ts"
 

@@ -20,7 +20,7 @@ import {
   MIN_SUMMARY_PERCENT,
   isSummaryLanguage,
   type SummaryLanguage,
-} from "../settings.ts"
+} from "../shared/settings.ts"
 import type { StorageLike } from "./state.ts"
 
 /** 服务端从 TUI 收到的设置。 */

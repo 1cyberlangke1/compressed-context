@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
-import type { SummaryLanguage } from "../settings.ts"
-import { countText } from "../tokens.ts"
+import type { SummaryLanguage } from "../shared/settings.ts"
+import { countText } from "../shared/tokens.ts"
 import { activeBlocks, renderAll, renderBlock } from "./render.ts"
 import { nextBlockId, type Block, type CompactionPhase, type State, type Tier } from "./state.ts"
 import {

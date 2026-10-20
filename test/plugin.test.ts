@@ -2,7 +2,7 @@ import type { Plugin } from "@opencode/plugin"
 import { describe, expect, it, vi } from "vitest"
 
 import plugin from "../src/index.ts"
-import { STATS_KEY } from "../src/stats.ts"
+import { STATS_KEY } from "../src/shared/stats.ts"
 
 interface RecordedHook {
   readonly name: string

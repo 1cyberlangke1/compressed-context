@@ -1,9 +1,9 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { createEffect, createMemo, createSignal, onMount } from "solid-js"
 
-import { formatTokens } from "../format.ts"
+import { formatTokens } from "../shared/format.ts"
 import { resolveMessages } from "../i18n/index.ts"
-import { ContextRpc } from "../rpc.ts"
+import { ContextRpc } from "../shared/rpc.ts"
 import {
   localeArgument,
   MAX_CONTEXT_LIMIT,
@@ -22,9 +22,9 @@ import {
   type LocaleSetting,
   type Settings,
   type SummaryLanguage,
-} from "../settings.ts"
-import { PercentDialog, ThresholdDialog, TokenDialog } from "./dialogs.tsx"
-import { buildSettingsOptions } from "./settings-options.ts"
+} from "../shared/settings.ts"
+import { PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
+import { buildSettingsOptions } from "./settings/options.ts"
 import type { UpdateSettings } from "./types.ts"
 
 /** 可选上限预设；菜单里只出现合法值（最低 50k）。 */

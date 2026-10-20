@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
-import type { SummaryBlock } from "../blocks.ts"
-import { ContextRpc } from "../rpc.ts"
+import type { SummaryBlock } from "../shared/blocks.ts"
+import { ContextRpc } from "../shared/rpc.ts"
 import { loadCacheHistory, recordCacheHistory } from "./cache-history.ts"
 import { activeBlocks, renderSummary } from "./render.ts"
 import { loadState } from "./state.ts"

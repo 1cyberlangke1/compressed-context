@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 
-import { initialSettings, normalizeSettings, type Settings } from "../settings.ts"
-import { Panel } from "./panel.tsx"
+import { initialSettings, normalizeSettings, type Settings } from "../shared/settings.ts"
+import { Panel } from "./panel/index.tsx"
 import { SettingsCommand } from "./settings.tsx"
 import type { UpdateSettings } from "./types.ts"
 

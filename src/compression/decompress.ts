@@ -12,7 +12,7 @@ import { unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { countText } from "../tokens.ts"
+import { countText } from "../shared/tokens.ts"
 import type { Block, StorageLike } from "./state.ts"
 import { loadState } from "./state.ts"
 import { renderBlock } from "./render.ts"

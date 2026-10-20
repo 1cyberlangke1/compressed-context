@@ -3,10 +3,10 @@ import { describe, expect, test } from "bun:test"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createSignal } from "solid-js"
 
-import type { SummaryBlock } from "../src/blocks.ts"
-import type { CacheSample } from "../src/cache.ts"
-import { DEFAULT_SETTINGS, type Settings } from "../src/settings.ts"
-import { Panel } from "../src/tui/panel.tsx"
+import type { SummaryBlock } from "../src/shared/blocks.ts"
+import type { CacheSample } from "../src/shared/cache.ts"
+import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
+import { Panel } from "../src/tui/panel/index.tsx"
 
 /** 输入：无；输出：Panel 需要的最小主题。 */
 function fakeTheme(): Context["theme"] {

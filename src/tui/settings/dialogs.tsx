@@ -1,15 +1,15 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, createSignal, Show, type ParentProps } from "solid-js"
 
-import { formatTokens } from "../format.ts"
-import type { Messages } from "../i18n/index.ts"
+import { formatTokens } from "../../shared/format.ts"
+import type { Messages } from "../../i18n/index.ts"
 import {
   MAX_TRIGGER_PERCENT,
   MIN_TRIGGER_PERCENT,
   parseSummaryPercent,
   parseTokenCount,
-} from "../settings.ts"
-import { percentLabel } from "./settings-options.ts"
+} from "../../shared/settings.ts"
+import { percentLabel } from "./options.ts"
 
 /**
  * 输入：TUI 上下文 + 标题 + 内容。

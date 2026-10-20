@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { countText, estimateCategories } from "../src/tokens.ts"
+import { countText, estimateCategories } from "../src/shared/tokens.ts"
 
 describe("countText", () => {
   it("ASCII 按 4 字符取整，CJK 按 1:1", () => {

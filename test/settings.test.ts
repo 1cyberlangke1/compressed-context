@@ -21,7 +21,7 @@ import {
   sanitizeLimitInput,
   type ContextLimit,
   type Settings,
-} from "../src/settings.ts"
+} from "../src/shared/settings.ts"
 
 describe("initialSettings / normalizeSettings", () => {
   it("缺字段时补默认值，合法值保留", () => {

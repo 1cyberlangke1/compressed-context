@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test"
 import type { Context, DialogSelectOptions } from "@opencode/plugin/tui/context"
 import { createSignal } from "solid-js"
 
-import { DEFAULT_SETTINGS, type Settings } from "../src/settings.ts"
+import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
 import { SettingsCommand } from "../src/tui/settings.tsx"
 
 /** 输入：捕获对象；输出：SettingsCommand 需要的最小上下文。 */

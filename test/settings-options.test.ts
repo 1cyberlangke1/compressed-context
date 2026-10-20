@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import { resolveMessages } from "../src/i18n/index.ts"
-import { DEFAULT_SETTINGS } from "../src/settings.ts"
-import { buildSettingsOptions, limitLabel, percentLabel } from "../src/tui/settings-options.ts"
+import { DEFAULT_SETTINGS } from "../src/shared/settings.ts"
+import { buildSettingsOptions, limitLabel, percentLabel } from "../src/tui/settings/options.ts"
 
 const copy = resolveMessages("zh")
 

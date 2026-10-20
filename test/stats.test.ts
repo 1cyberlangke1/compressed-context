@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { formatTokens } from "../src/format.ts"
+import { formatTokens } from "../src/shared/format.ts"
 import {
   createStats,
   mergeMetadata,
@@ -11,7 +11,7 @@ import {
   shouldPublish,
   STATS_KEY,
   TERMINAL_KEY,
-} from "../src/stats.ts"
+} from "../src/shared/stats.ts"
 
 const categories = {
   system: 1_000,

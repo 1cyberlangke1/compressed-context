@@ -1,7 +1,7 @@
 import type { Block } from "./state.ts"
 import type { SummaryFields } from "./schema.ts"
-import { formatTimestamp } from "../format.ts"
-import { countText } from "../tokens.ts"
+import { formatTimestamp } from "../shared/format.ts"
+import { countText } from "../shared/tokens.ts"
 
 /** 输入：块 id；输出：块头标记；预期：用于渲染和对账。 */
 export function blockMarker(id: string): string {

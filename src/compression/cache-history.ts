@@ -8,7 +8,7 @@ import {
   parseCacheHistory,
   type CacheHistory,
   type CacheSample,
-} from "../cache.ts"
+} from "../shared/cache.ts"
 import type { StorageLike } from "./state.ts"
 
 /** 输入：storage + sessionID；输出：该会话的历史；缺失或损坏时为空历史。 */

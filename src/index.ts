@@ -8,7 +8,7 @@ import { activeBlocks, renderAll } from "./compression/render.ts"
 import { eligibleMessages, olderMessages, type MessageLike } from "./compression/select.ts"
 import { loadServerSettings } from "./compression/settings.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
-import { resolveSummaryLimits } from "./settings.ts"
+import { resolveSummaryLimits } from "./shared/settings.ts"
 import {
   loadState,
   nextBlockId,
@@ -27,8 +27,8 @@ import { registerCompressTool } from "./compression/tool.ts"
 import { registerDecompressTool } from "./compression/decompress-tool.ts"
 import { buildTranscript } from "./compression/transcript.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./compression/validate.ts"
-import { createStats, mergeMetadata, mergeTerminalMetadata, shouldPublish, type ContextStats } from "./stats.ts"
-import { estimateCategories } from "./tokens.ts"
+import { createStats, mergeMetadata, mergeTerminalMetadata, shouldPublish, type ContextStats } from "./shared/stats.ts"
+import { estimateCategories } from "./shared/tokens.ts"
 
 export default Plugin.define({
   id: "compressed-context",

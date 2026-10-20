@@ -1,4 +1,4 @@
-import type { CategoryKey } from "../stats.ts"
+import type { CategoryKey } from "../shared/stats.ts"
 
 /**
  * 面板文案。

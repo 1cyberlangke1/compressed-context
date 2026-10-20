@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
-import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../settings.ts"
-import { estimateCategories, totalCategories } from "../tokens.ts"
+import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/settings.ts"
+import { estimateCategories, totalCategories } from "../shared/tokens.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
 import { RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
 import { loadState, saveState } from "./state.ts"

@@ -1,7 +1,7 @@
 import type { DialogSelectOption } from "@opencode/plugin/tui/context"
 
-import { formatTokens } from "../format.ts"
-import type { Messages } from "../i18n/index.ts"
+import { formatTokens } from "../../shared/format.ts"
+import type { Messages } from "../../i18n/index.ts"
 import {
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
@@ -11,7 +11,7 @@ import {
   isContextLimit,
   percentToChars,
   type Settings,
-} from "../settings.ts"
+} from "../../shared/settings.ts"
 
 /** 输入：设置；输出：当前语言标签；预期：用于设置菜单右侧的当前值。 */
 export function localeLabel(settings: Settings, copy: Messages): string {

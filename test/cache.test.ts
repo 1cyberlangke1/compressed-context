@@ -9,7 +9,7 @@ import {
   sampleFromMessage,
   type CacheMessage,
   type CacheSample,
-} from "../src/cache.ts"
+} from "../src/shared/cache.ts"
 
 /** 输入：id + usage；输出：带 tokens 的 assistant 消息。 */
 function assistant(

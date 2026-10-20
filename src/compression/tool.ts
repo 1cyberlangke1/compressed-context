@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
-import { resolveSummaryLimits } from "../settings.ts"
+import { resolveSummaryLimits } from "../shared/settings.ts"
 import { SummaryFields } from "./schema.ts"
 import { RESOLVED_WINDOW_KEY, loadServerSettings } from "./settings.ts"
 import type { MessageLike } from "./select.ts"

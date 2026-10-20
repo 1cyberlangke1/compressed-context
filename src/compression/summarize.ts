@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { jsonrepair } from "jsonrepair"
 
-import type { SummaryLanguage } from "../settings.ts"
+import type { SummaryLanguage } from "../shared/settings.ts"
 import { SummaryFields, type SummaryFields as Summary } from "./schema.ts"
 import type { Tier } from "./state.ts"
 import { MAX_SUMMARY_CHARS, MIN_SUMMARY_CHARS, minSummaryChars, validateSummary } from "./validate.ts"

@@ -2,7 +2,7 @@ import type { Plugin } from "@opencode/plugin"
 import type { Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
-import { type CacheMessage, type CacheSample } from "../src/cache.ts"
+import { type CacheMessage, type CacheSample } from "../src/shared/cache.ts"
 import { loadCacheHistory, recordCacheHistory, saveCacheHistory } from "../src/compression/cache-history.ts"
 import type { StorageLike } from "../src/compression/state.ts"
 

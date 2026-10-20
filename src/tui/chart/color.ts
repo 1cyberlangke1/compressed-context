@@ -51,3 +51,8 @@ export function toRgb(value: unknown): Rgb | undefined {
   }
   return undefined
 }
+
+/** 输入：主题色 + 回退 RGB；输出：hex 字符串。 */
+export function themeHex(value: unknown, fallback: Rgb): string {
+  return toHex(toRgb(value) ?? fallback)
+}

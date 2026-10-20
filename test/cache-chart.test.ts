@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { hitRateColor, renderBrailleChart, chartAxis, xAxisLabels, type ChartCell } from "../src/tui/cache-chart.ts"
+import { hitRateColor, renderBrailleChart, chartAxis, xAxisLabels, type ChartCell } from "../src/tui/chart/cache-chart.ts"
 
 const COLORS = {
   success: "#00ff00",
