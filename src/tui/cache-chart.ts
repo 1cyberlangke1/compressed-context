@@ -1,8 +1,8 @@
 import { mix, toHex, toRgb, type Rgb } from "./color.ts"
 
-/** 侧栏里折线图的默认尺寸：28 列 × 8 行（点阵 56 × 32）。 */
+/** 侧栏里折线图的默认尺寸：28 列 × 10 行（点阵 56 × 40）。 */
 export const CHART_WIDTH = 28
-export const CHART_HEIGHT = 8
+export const CHART_HEIGHT = 10
 
 /** 一个字符格：Braille 字符或空占位；空格的 color 为空串。 */
 export interface ChartCell {
@@ -41,20 +41,23 @@ export interface ChartAxisLabel {
 }
 
 /**
- * 输入：图表高度（行）。
- * 输出：100/75/50/25/0 五个刻度的行号与文本，以及 75/50/25 的网格行。
- * 预期：刻度行按点阵 y 映射换算，行号落在实际折线附近。
+ * 输入：图表高度（行）+ 刻度步长（默认 20%）。
+ * 输出：100/80/60/40/20/0 等刻度的行号与文本，以及除首尾外的网格行。
+ * 预期：刻度行按点阵 y 映射换算，行号落在实际折线附近；同一行只保留一个刻度。
  */
-export function chartAxis(height: number): {
+export function chartAxis(
+  height: number,
+  step = 20,
+): {
   readonly labels: readonly ChartAxisLabel[]
   readonly gridRows: readonly number[]
 } {
   const rows = Math.max(1, Math.floor(height))
   const dotHeight = rows * 4
-  const values = [100, 75, 50, 25, 0] as const
+  const safeStep = Math.max(1, Math.floor(step))
   const seen = new Set<number>()
   const labels: ChartAxisLabel[] = []
-  for (const value of values) {
+  for (let value = 100; value >= 0; value -= safeStep) {
     const row = Math.min(
       rows - 1,
       Math.floor(Math.round((1 - value / 100) * (dotHeight - 1)) / 4),
@@ -62,6 +65,11 @@ export function chartAxis(height: number): {
     if (seen.has(row)) continue
     seen.add(row)
     labels.push({ row, text: `${value.toString().padStart(3, " ")}%` })
+  }
+  // 步长不能整除 100 时补上 0%，保证底线有标签。
+  if (labels.at(-1)?.text !== "  0%") {
+    const row = rows - 1
+    if (!seen.has(row)) labels.push({ row, text: "  0%" })
   }
   return {
     labels,

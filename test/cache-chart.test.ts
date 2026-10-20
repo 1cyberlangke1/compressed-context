@@ -109,11 +109,24 @@ describe("renderBrailleChart", () => {
 })
 
 describe("chartAxis", () => {
-  it("8 行给出 100/75/50/25/0 五个刻度", () => {
+  it("10 行给出 100/80/60/40/20/0 六个刻度", () => {
+    const axis = chartAxis(10)
+    expect(axis.labels.map((label) => label.text)).toEqual([
+      "100%",
+      " 80%",
+      " 60%",
+      " 40%",
+      " 20%",
+      "  0%",
+    ])
+    expect(axis.labels.map((label) => label.row)).toEqual([0, 2, 4, 5, 7, 9])
+    expect(axis.gridRows).toEqual([2, 4, 5, 7])
+  })
+
+  it("8 行时刻度自动落到可用行", () => {
     const axis = chartAxis(8)
-    expect(axis.labels.map((label) => label.text)).toEqual(["100%", " 75%", " 50%", " 25%", "  0%"])
-    expect(axis.labels.map((label) => label.row)).toEqual([0, 2, 4, 5, 7])
-    expect(axis.gridRows).toEqual([2, 4, 5])
+    expect(axis.labels.map((label) => label.row)).toEqual([0, 1, 3, 4, 6, 7])
+    expect(axis.gridRows).toEqual([1, 3, 4, 6])
   })
 })
 
