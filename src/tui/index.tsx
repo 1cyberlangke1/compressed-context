@@ -21,6 +21,8 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     summaryTotalPercent: settings.summaryTotalPercent,
     summaryLanguage: settings.summaryLanguage,
     autoCompress: settings.autoCompress,
+    enableCompressTool: settings.enableCompressTool,
+    enableDecompressTool: settings.enableDecompressTool,
     showTimeline: settings.showTimeline,
     showBlockTokens: settings.showBlockTokens,
     decompressInlineMax: settings.decompressInlineMax,
@@ -37,6 +39,8 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     settings.summaryTotalPercent === normalized.summaryTotalPercent &&
     settings.summaryLanguage === normalized.summaryLanguage &&
     settings.autoCompress === normalized.autoCompress &&
+    settings.enableCompressTool === normalized.enableCompressTool &&
+    settings.enableDecompressTool === normalized.enableDecompressTool &&
     settings.showTimeline === normalized.showTimeline &&
     settings.showBlockTokens === normalized.showBlockTokens &&
     settings.decompressInlineMax === normalized.decompressInlineMax &&

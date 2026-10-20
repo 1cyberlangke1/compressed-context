@@ -42,6 +42,8 @@ export const en: Messages = {
     windowUnknown: "Current window unknown (run one model request first)",
     summaryLanguage: "Summary language",
     autoCompress: "Auto compression",
+    enableCompressTool: "compress tool",
+    enableDecompressTool: "decompress tool",
     showTimeline: "Block timeline",
     showBlockTokens: "Block token estimate",
     decompressInlineMax: "Decompress inline limit",

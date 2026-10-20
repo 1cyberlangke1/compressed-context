@@ -75,8 +75,8 @@ export function planT1Phase(
 
 /**
  * 输入：一次蒸馏结果 + active 链 + 预算。
- * 输出：是否已经无法继续压缩（全 T3 / 没有候选 / 仍超预算）。
- * 预期：只有成功但没合并、仍超预算、且没有任何合法候选时才判定终止。
+ * 输出：是否已经无法继续压缩（仍超预算，且没有任何合法合并候选）。
+ * 预期：与层级无关——全 T3 只要还有两块可合并，或链本身没超预算，都不算终止。
  */
 export function isTerminal(
   result: DistillOnceResult,
@@ -200,12 +200,11 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     sourceBlockIds: [chosen.left.id, chosen.right.id],
   }
   const summary = renderAll(working, merged, renderOptions)
+  const stillOver =
+    countText(summary) > input.budgetTokens || summary.length > totalChars
+  // 只要还超预算且还有合法候选就继续合并；T3+T3 产出仍是 T3，直到没有候选或压进预算。
   const nextPhase: CompactionPhase | undefined =
-    input.phase === "t2" &&
-    (countText(summary) > input.budgetTokens || summary.length > totalChars) &&
-    mergeCandidates(activeBlocks(working, merged)).length > 0
-      ? "t3"
-      : undefined
+    stillOver && mergeCandidates(activeBlocks(working, merged)).length > 0 ? "t3" : undefined
 
   return {
     blocks: working,

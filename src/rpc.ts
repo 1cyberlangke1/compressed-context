@@ -15,6 +15,8 @@ const SettingsProperties = {
   summaryTotalPercent: { type: "number" },
   summaryLanguage: { type: "string", enum: ["auto", "zh", "en"] },
   autoCompress: { type: "boolean" },
+  enableCompressTool: { type: "boolean" },
+  enableDecompressTool: { type: "boolean" },
   showTimeline: { type: "boolean" },
   showBlockTokens: { type: "boolean" },
   decompressInlineMax: { type: "number" },

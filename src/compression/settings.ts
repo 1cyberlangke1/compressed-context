@@ -5,6 +5,8 @@ import {
   DEFAULT_DECOMPRESS_INLINE_MAX,
   DEFAULT_DECOMPRESS_SHOW_TOKENS,
   DEFAULT_DECOMPRESS_TEMP_CAP,
+  DEFAULT_ENABLE_COMPRESS_TOOL,
+  DEFAULT_ENABLE_DECOMPRESS_TOOL,
   DEFAULT_SHOW_BLOCK_TOKENS,
   DEFAULT_SHOW_TIMELINE,
   DEFAULT_SUMMARY_BLOCK_PERCENT,
@@ -29,6 +31,8 @@ export interface ServerSettings {
   readonly summaryTotalPercent: number
   readonly summaryLanguage: SummaryLanguage
   readonly autoCompress: boolean
+  readonly enableCompressTool: boolean
+  readonly enableDecompressTool: boolean
   readonly showTimeline: boolean
   readonly showBlockTokens: boolean
   readonly decompressInlineMax: number
@@ -50,6 +54,8 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
   autoCompress: DEFAULT_AUTO_COMPRESS,
+  enableCompressTool: DEFAULT_ENABLE_COMPRESS_TOOL,
+  enableDecompressTool: DEFAULT_ENABLE_DECOMPRESS_TOOL,
   showTimeline: DEFAULT_SHOW_TIMELINE,
   showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
   decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
@@ -119,11 +125,15 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   }
   if (!isSummaryLanguage(language)) return undefined
   const autoCompress = readBoolean(record["autoCompress"], DEFAULT_AUTO_COMPRESS)
+  const enableCompressTool = readBoolean(record["enableCompressTool"], DEFAULT_ENABLE_COMPRESS_TOOL)
+  const enableDecompressTool = readBoolean(record["enableDecompressTool"], DEFAULT_ENABLE_DECOMPRESS_TOOL)
   const showTimeline = readBoolean(record["showTimeline"], DEFAULT_SHOW_TIMELINE)
   const showBlockTokens = readBoolean(record["showBlockTokens"], DEFAULT_SHOW_BLOCK_TOKENS)
   const decompressShowTokens = readBoolean(record["decompressShowTokens"], DEFAULT_DECOMPRESS_SHOW_TOKENS)
   if (
     autoCompress === undefined ||
+    enableCompressTool === undefined ||
+    enableDecompressTool === undefined ||
     showTimeline === undefined ||
     showBlockTokens === undefined ||
     decompressShowTokens === undefined
@@ -146,6 +156,8 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     summaryTotalPercent: Math.round(totalPercent * 10) / 10,
     summaryLanguage: language,
     autoCompress,
+    enableCompressTool,
+    enableDecompressTool,
     showTimeline,
     showBlockTokens,
     decompressInlineMax,

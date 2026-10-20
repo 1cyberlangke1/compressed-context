@@ -31,6 +31,8 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
         summaryTotalPercent: settings.summaryTotalPercent,
         summaryLanguage: settings.summaryLanguage,
         autoCompress: settings.autoCompress,
+        enableCompressTool: settings.enableCompressTool,
+        enableDecompressTool: settings.enableDecompressTool,
         showTimeline: settings.showTimeline,
         showBlockTokens: settings.showBlockTokens,
         decompressInlineMax: settings.decompressInlineMax,

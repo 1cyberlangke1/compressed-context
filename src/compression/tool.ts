@@ -64,6 +64,7 @@ export async function registerCompressTool(
         }
 
         const settings = await loadServerSettings(ctx.storage)
+        if (!settings.enableCompressTool) return failure("compress tool is disabled in settings")
         const resolved = await ctx.storage.get(RESOLVED_WINDOW_KEY)
         const windowTokens = typeof resolved === "number" && resolved > 0 ? resolved : undefined
         const limits = resolveSummaryLimits(settings, windowTokens)

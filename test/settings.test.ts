@@ -36,6 +36,8 @@ describe("initialSettings / normalizeSettings", () => {
       summaryTotalPercent: 50,
       summaryLanguage: "auto",
       autoCompress: true,
+      enableCompressTool: true,
+      enableDecompressTool: true,
       showTimeline: false,
       showBlockTokens: false,
       decompressInlineMax: 10_000,
@@ -122,6 +124,8 @@ describe("initialSettings / normalizeSettings", () => {
   it("新开关与 decompress 限制可配置，非法值回退", () => {
     const settings = initialSettings({
       autoCompress: false,
+      enableCompressTool: false,
+      enableDecompressTool: false,
       showTimeline: true,
       showBlockTokens: true,
       decompressInlineMax: 5_000,
@@ -129,6 +133,8 @@ describe("initialSettings / normalizeSettings", () => {
       decompressShowTokens: false,
     })
     expect(settings.autoCompress).toBe(false)
+    expect(settings.enableCompressTool).toBe(false)
+    expect(settings.enableDecompressTool).toBe(false)
     expect(settings.showTimeline).toBe(true)
     expect(settings.showBlockTokens).toBe(true)
     expect(settings.decompressInlineMax).toBe(5_000)
@@ -136,6 +142,8 @@ describe("initialSettings / normalizeSettings", () => {
     expect(settings.decompressShowTokens).toBe(false)
 
     expect(initialSettings({ autoCompress: "no" }).autoCompress).toBe(true)
+    expect(initialSettings({ enableCompressTool: "no" }).enableCompressTool).toBe(true)
+    expect(initialSettings({ enableDecompressTool: "no" }).enableDecompressTool).toBe(true)
     expect(initialSettings({ decompressInlineMax: 999 }).decompressInlineMax).toBe(10_000)
     expect(initialSettings({ decompressInlineMax: 2_000_000 }).decompressInlineMax).toBe(10_000)
     expect(initialSettings({ decompressTempCap: 0 }).decompressTempCap).toBe(50)

@@ -40,6 +40,13 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
       execute: async (input, toolCtx) => {
         const { resolveDecompress } = await import("./decompress.ts")
         const settings = await loadServerSettings(ctx.storage)
+        if (!settings.enableDecompressTool) {
+          return {
+            output: {},
+            content: "ERROR: decompress tool is disabled in settings",
+            metadata: { error: true },
+          }
+        }
         const result = await resolveDecompress(input, ctx, toolCtx.sessionID, {
           inlineMax: effectiveDecompressInlineMax(settings),
           tempCap: effectiveDecompressTempCap(settings),

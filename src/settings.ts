@@ -49,6 +49,10 @@ export const MAX_CONTEXT_LIMIT = 10_000_000
 /** 自动压缩总开关：关掉后只保留手动 /compact 和 compress 工具。 */
 export const DEFAULT_AUTO_COMPRESS = true
 
+/** 工具开关：关掉后工具仍注册，但调用会返回明确错误。 */
+export const DEFAULT_ENABLE_COMPRESS_TOOL = true
+export const DEFAULT_ENABLE_DECOMPRESS_TOOL = true
+
 /** 块头是否显示时间线 / 估算 token；默认关闭，避免多占 token。 */
 export const DEFAULT_SHOW_TIMELINE = false
 export const DEFAULT_SHOW_BLOCK_TOKENS = false
@@ -81,6 +85,10 @@ export interface Settings {
   summaryLanguage: SummaryLanguage
   /** 自动压缩总开关 */
   autoCompress: boolean
+  /** compress 工具开关 */
+  enableCompressTool: boolean
+  /** decompress 工具开关 */
+  enableDecompressTool: boolean
   /** 块头显示时间线 */
   showTimeline: boolean
   /** 块头显示估算 token */
@@ -103,6 +111,8 @@ export const DEFAULT_SETTINGS: Settings = {
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
   autoCompress: DEFAULT_AUTO_COMPRESS,
+  enableCompressTool: DEFAULT_ENABLE_COMPRESS_TOOL,
+  enableDecompressTool: DEFAULT_ENABLE_DECOMPRESS_TOOL,
   showTimeline: DEFAULT_SHOW_TIMELINE,
   showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
   decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
@@ -246,6 +256,10 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
     summaryTotalPercent: totalPercent,
     summaryLanguage: isSummaryLanguage(value["summaryLanguage"]) ? value["summaryLanguage"] : "auto",
     autoCompress: typeof value["autoCompress"] === "boolean" ? value["autoCompress"] : DEFAULT_AUTO_COMPRESS,
+    enableCompressTool:
+      typeof value["enableCompressTool"] === "boolean" ? value["enableCompressTool"] : DEFAULT_ENABLE_COMPRESS_TOOL,
+    enableDecompressTool:
+      typeof value["enableDecompressTool"] === "boolean" ? value["enableDecompressTool"] : DEFAULT_ENABLE_DECOMPRESS_TOOL,
     showTimeline: typeof value["showTimeline"] === "boolean" ? value["showTimeline"] : DEFAULT_SHOW_TIMELINE,
     showBlockTokens: typeof value["showBlockTokens"] === "boolean" ? value["showBlockTokens"] : DEFAULT_SHOW_BLOCK_TOKENS,
     decompressInlineMax: readInt(

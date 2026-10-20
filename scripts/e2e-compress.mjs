@@ -930,25 +930,37 @@ try {
   assert.equal(t2Blocks[0]?.sourceBlockIds?.length, 2, "T2 block merges two T1 sources")
   console.log("case passed: T2 merge runs on the next model request")
 
-  // 再下一次模型请求触发 T3；T3 封顶，phase 必须消失。
+  // 第一次 T3：T3+T1 → T3；仍超预算，phase 继续 t3。
   await promptSession(t3Session, "continue")
   t3State = await waitForState(
     t3Session,
-    (state) => state?.phase === undefined && (state?.blocks ?? []).some((block) => block.tier === 3),
-    "T3 merge after next model request",
+    (state) => state?.phase === "t3" && (state?.blocks ?? []).some((block) => block.tier === 3),
+    "first T3 merge",
+  )
+  assert.equal(t3State.blocks.length, 6, "first T3 merges exactly one pair")
+  const firstT3 = t3State.blocks.filter((block) => block.tier === 3)
+  assert.equal(firstT3.length, 1, "first T3 produces one merged block")
+  assert.equal(firstT3[0]?.sourceBlockIds?.length, 2, "T3 block merges the T2 block with a T1 block")
+  console.log("case passed: first T3 merge keeps phase=t3 while over budget")
+
+  // 第二次 T3：T3+T1 → T3；链进预算，phase 消失。
+  await promptSession(t3Session, "continue")
+  t3State = await waitForState(
+    t3Session,
+    (state) => state?.phase === undefined && (state?.blocks ?? []).length === 7,
+    "second T3 merge",
   )
   const t3Blocks = t3State.blocks.filter((block) => block.tier === 3)
   assert.equal(t3State.pending, undefined, "T3 pending must be committed")
-  assert.equal(t3State.blocks.length, 6, "T3 merges exactly one pair")
-  assert.equal(t3Blocks.length, 1, "T3 produces exactly one merged block")
-  assert.equal(t3Blocks[0]?.sourceBlockIds?.length, 2, "T3 block merges the T2 block with a T1 block")
+  assert.equal(t3Blocks.length, 2, "two T3 merges produce two merged blocks")
   const consumed = new Set(t3State.blocks.flatMap((block) => block.sourceBlockIds ?? []))
   const activeTiers = t3State.blocks
     .filter((block) => !consumed.has(block.id))
     .sort((left, right) => left.order - right.order)
     .map((block) => block.tier)
-  assert.deepEqual(activeTiers, [3, 1], "active chain must stay tier-monotonic after T3")
-  console.log("case passed: T3 merge runs on the next model request and stops the chain")
+  assert.deepEqual(activeTiers, [3], "active chain collapses to one T3")
+  assert.equal(t3State.terminal, undefined, "under budget must not be terminal")
+  console.log("case passed: T3 keeps merging until the chain fits")
 
   // case: 长会话压测（大窗口 + 多轮，模拟真实尺寸）
   // 每轮：长消息 + continue → 手动 compact 产 T1 → 再发一条触发下一次模型请求；

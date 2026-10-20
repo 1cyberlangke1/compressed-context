@@ -253,6 +253,8 @@ describe("服务端设置", () => {
       summaryTotalPercent: 50,
       summaryLanguage: "auto",
       autoCompress: true,
+      enableCompressTool: true,
+      enableDecompressTool: true,
       showTimeline: false,
       showBlockTokens: false,
       decompressInlineMax: 10_000,
@@ -274,6 +276,8 @@ describe("服务端设置", () => {
       summaryTotalPercent: 60,
       summaryLanguage: "zh",
       autoCompress: true,
+      enableCompressTool: true,
+      enableDecompressTool: true,
       showTimeline: false,
       showBlockTokens: false,
       decompressInlineMax: 10_000,
@@ -1225,6 +1229,16 @@ describe("compress 工具只做 T1", () => {
     expect(result.content).toContain("summary too long")
   })
 
+  it("compress 工具关闭时返回明确错误", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 80, enableCompressTool: false },
+    })
+    const { ctx, tool } = toolCtx(storage)
+    await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    expect(result.content).toContain("disabled")
+  })
+
   it("compact 失败时记录 lastError 并返回失败", async () => {
     const storage = memoryStorage()
     const { ctx, tool } = toolCtx(storage, () => Promise.reject(new Error("boom")))
@@ -1335,6 +1349,28 @@ describe("摘要单层合并", () => {
       pending: tierBlock("b4", 1, 4),
       budgetTokens: 5_000,
       phase: "t2",
+    })
+    expect(result.merged).toBe(true)
+    expect(result.nextPhase).toBe("t3")
+  })
+
+  it("T3 后仍超预算且有候选时继续返回 nextPhase=t3", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    const result = await distillOnce({
+      ctx,
+      sessionID: "ses_test",
+      state: {
+        v: 1,
+        blocks: [longBlock("b1", 3, 1), longBlock("b2", 3, 2), longBlock("b3", 3, 3)],
+        attempts: 0,
+      },
+      pending: undefined,
+      budgetTokens: 5_000,
+      phase: "t3",
     })
     expect(result.merged).toBe(true)
     expect(result.nextPhase).toBe("t3")

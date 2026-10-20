@@ -38,6 +38,8 @@ export interface Messages {
     readonly windowUnknown: string
     readonly summaryLanguage: string
     readonly autoCompress: string
+    readonly enableCompressTool: string
+    readonly enableDecompressTool: string
     readonly showTimeline: string
     readonly showBlockTokens: string
     readonly decompressInlineMax: string

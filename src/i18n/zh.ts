@@ -42,6 +42,8 @@ export const zh: Messages = {
     windowUnknown: "当前窗口未知（先跑一次模型请求）",
     summaryLanguage: "摘要语言",
     autoCompress: "自动压缩",
+    enableCompressTool: "compress 工具",
+    enableDecompressTool: "decompress 工具",
     showTimeline: "块头时间线",
     showBlockTokens: "块头 token 估算",
     decompressInlineMax: "解压内联上限",

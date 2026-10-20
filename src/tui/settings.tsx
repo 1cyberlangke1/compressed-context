@@ -365,6 +365,8 @@ export function SettingsCommand(props: {
       summaryTotalPercent: effectiveSummaryTotalPercent(props.settings),
       summaryLanguage: effectiveSummaryLanguage(props.settings),
       autoCompress: props.settings.autoCompress,
+      enableCompressTool: props.settings.enableCompressTool,
+      enableDecompressTool: props.settings.enableDecompressTool,
       showTimeline: props.settings.showTimeline,
       showBlockTokens: props.settings.showBlockTokens,
       decompressInlineMax: effectiveDecompressInlineMax(props.settings),
@@ -381,6 +383,8 @@ export function SettingsCommand(props: {
           summaryTotalPercent: number
           summaryLanguage: SummaryLanguage
           autoCompress: boolean
+          enableCompressTool: boolean
+          enableDecompressTool: boolean
           showTimeline: boolean
           showBlockTokens: boolean
           decompressInlineMax: number
@@ -508,7 +512,13 @@ export function SettingsCommand(props: {
 
   /** 输入：布尔设置键；输出：无；预期：翻转后重开菜单。 */
   const toggleSetting = async (
-    key: "autoCompress" | "showTimeline" | "showBlockTokens" | "decompressShowTokens",
+    key:
+      | "autoCompress"
+      | "enableCompressTool"
+      | "enableDecompressTool"
+      | "showTimeline"
+      | "showBlockTokens"
+      | "decompressShowTokens",
   ): Promise<void> => {
     await props.updateSettings((draft) => {
       draft[key] = !draft[key]
@@ -616,6 +626,16 @@ export function SettingsCommand(props: {
           footer: props.settings.autoCompress ? copy().settings.on : copy().settings.off,
         },
         {
+          title: copy().settings.enableCompressTool,
+          value: "enableCompressTool",
+          footer: props.settings.enableCompressTool ? copy().settings.on : copy().settings.off,
+        },
+        {
+          title: copy().settings.enableDecompressTool,
+          value: "enableDecompressTool",
+          footer: props.settings.enableDecompressTool ? copy().settings.on : copy().settings.off,
+        },
+        {
           title: copy().settings.showTimeline,
           value: "showTimeline",
           footer: props.settings.showTimeline ? copy().settings.on : copy().settings.off,
@@ -676,6 +696,8 @@ export function SettingsCommand(props: {
     }
     if (
       picked === "autoCompress" ||
+      picked === "enableCompressTool" ||
+      picked === "enableDecompressTool" ||
       picked === "showTimeline" ||
       picked === "showBlockTokens" ||
       picked === "decompressShowTokens"
