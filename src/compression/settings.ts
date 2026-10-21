@@ -7,9 +7,11 @@ import {
   DEFAULT_DECOMPRESS_TEMP_CAP,
   DEFAULT_ENABLE_COMPRESS_TOOL,
   DEFAULT_ENABLE_DECOMPRESS_TOOL,
+  DEFAULT_NUDGE_GROWTH_TOKENS,
   DEFAULT_SHOW_BLOCK_TOKENS,
   DEFAULT_SHOW_TIMELINE,
   DEFAULT_SUMMARY_BLOCK_PERCENT,
+  DEFAULT_SUMMARY_FORMAT,
   DEFAULT_SUMMARY_TOTAL_PERCENT,
   MAX_DECOMPRESS_INLINE_MAX,
   MAX_DECOMPRESS_TEMP_CAP,
@@ -22,6 +24,7 @@ import {
   MIN_SUMMARY_PERCENT,
   MIN_TRIGGER_PERCENT,
   isSummaryLanguage,
+  isSummaryFormat,
   type CompressionSettings,
 } from "../shared/settings.ts"
 import { readOptionalInt, readStrictBoolean } from "../shared/parse.ts"
@@ -42,9 +45,11 @@ export function windowKey(providerID: string, modelID: string): string {
 export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   contextLimit: "auto",
   triggerPercent: 80,
+  nudgeGrowthTokens: DEFAULT_NUDGE_GROWTH_TOKENS,
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
+  summaryFormat: DEFAULT_SUMMARY_FORMAT,
   autoCompress: DEFAULT_AUTO_COMPRESS,
   enableCompressTool: DEFAULT_ENABLE_COMPRESS_TOOL,
   enableDecompressTool: DEFAULT_ENABLE_DECOMPRESS_TOOL,
@@ -65,9 +70,11 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   const record = value as Record<string, unknown>
   const limit = record["contextLimit"]
   const percent = record["triggerPercent"]
+  const nudge = record["nudgeGrowthTokens"] ?? DEFAULT_NUDGE_GROWTH_TOKENS
   const blockPercent = record["summaryBlockPercent"] ?? DEFAULT_SUMMARY_BLOCK_PERCENT
   const totalPercent = record["summaryTotalPercent"] ?? DEFAULT_SUMMARY_TOTAL_PERCENT
   const language = record["summaryLanguage"] ?? "auto"
+  const summaryFormat = record["summaryFormat"] ?? DEFAULT_SUMMARY_FORMAT
   if (
     limit !== "auto" &&
     (typeof limit !== "number" ||
@@ -82,6 +89,13 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     !Number.isFinite(percent) ||
     percent < MIN_TRIGGER_PERCENT ||
     percent > MAX_TRIGGER_PERCENT
+  ) {
+    return undefined
+  }
+  if (
+    typeof nudge !== "number" ||
+    !Number.isFinite(nudge) ||
+    (nudge !== 0 && (nudge < 1_000 || nudge > 200_000))
   ) {
     return undefined
   }
@@ -102,6 +116,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     return undefined
   }
   if (!isSummaryLanguage(language)) return undefined
+  if (!isSummaryFormat(summaryFormat)) return undefined
   const autoCompress = readStrictBoolean(record["autoCompress"], DEFAULT_AUTO_COMPRESS)
   const enableCompressTool = readStrictBoolean(record["enableCompressTool"], DEFAULT_ENABLE_COMPRESS_TOOL)
   const enableDecompressTool = readStrictBoolean(record["enableDecompressTool"], DEFAULT_ENABLE_DECOMPRESS_TOOL)
@@ -130,9 +145,11 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   return {
     contextLimit: limit,
     triggerPercent: Math.round(percent),
+    nudgeGrowthTokens: Math.round(nudge),
     summaryBlockPercent: Math.round(blockPercent * 10) / 10,
     summaryTotalPercent: Math.round(totalPercent * 10) / 10,
     summaryLanguage: language,
+    summaryFormat,
     autoCompress,
     enableCompressTool,
     enableDecompressTool,

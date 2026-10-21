@@ -105,7 +105,7 @@ describe("blocksGet", () => {
     const b1 = block("b1", 1, 1)
     const b2 = block("b2", 1, 2)
     const merged = block("b3", 2, 1, ["b1", "b2"])
-    await saveState(storage, "ses_a", { v: 1, blocks: [b1, b2, merged], attempts: 0 })
+    await saveState(storage, "ses_a", { blocks: [b1, b2, merged], attempts: 0 })
     const handlers = await createHandlers(storage, new Map())
     const result = (await handlers["blocksGet"]?.({ sessionID: "ses_a" })) as {
       blocks: readonly { id: string; tier: number; sourceBlockIds?: readonly string[]; body: string }[]

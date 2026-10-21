@@ -51,6 +51,7 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
       return {
         contextLimit: settings.contextLimit,
         triggerPercent: settings.triggerPercent,
+        nudgeGrowthTokens: settings.nudgeGrowthTokens,
         summaryBlockPercent: settings.summaryBlockPercent,
         summaryTotalPercent: settings.summaryTotalPercent,
         summaryLanguage: settings.summaryLanguage,

@@ -1,3 +1,14 @@
+/** 媒体 source 的最小结构；bytes/base64 可落盘，url/ref 只保留引用。 */
+export interface MediaSourceLike {
+  readonly type: string
+  readonly data?: string | Uint8Array | undefined
+  readonly mediaType?: string | undefined
+  readonly url?: string | undefined
+  readonly provider?: string | undefined
+  readonly id?: string | undefined
+  readonly expiresAt?: number | undefined
+}
+
 /** 单条内容 part 的最小结构，避免绑定 @opencode/ai 的具体类。 */
 export interface ContentPartLike {
   readonly type: string
@@ -5,7 +16,15 @@ export interface ContentPartLike {
   readonly name?: string | undefined
   readonly input?: unknown
   readonly result?: unknown
-  readonly media?: { readonly mediaType?: string | undefined } | undefined
+  readonly filename?: string | undefined
+  readonly media?:
+    | {
+        readonly source?: MediaSourceLike | undefined
+        readonly mediaType?: string | undefined
+        readonly info?: unknown
+        readonly providerMetadata?: unknown
+      }
+    | undefined
 }
 
 /** 单条消息的最小结构。 */

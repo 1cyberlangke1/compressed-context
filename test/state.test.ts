@@ -5,6 +5,7 @@ import {
   commitPending,
   dropPending,
   parseState,
+  retryPending,
   withPending,
   type Block,
 } from "../src/compression/state.ts"
@@ -42,7 +43,6 @@ describe("state transitions", () => {
   it("commitPending 转正 pending，清 lastError/terminal，保留 phase", () => {
     const pending = block("b2", 2)
     const next = commitPending({
-      v: 1,
       blocks: [block("b1", 1)],
       pending,
       phase: "t2",
@@ -59,14 +59,13 @@ describe("state transitions", () => {
   })
 
   it("commitPending 没有 pending 时原样返回", () => {
-    const state = { v: 1 as const, blocks: [block("b1", 1)], attempts: 2, lastError: "x" }
+    const state = { blocks: [block("b1", 1)], attempts: 2, lastError: "x" }
     expect(commitPending(state)).toBe(state)
   })
 
   it("dropPending 清 pending/phase，保留 terminal，attempts+1", () => {
     const next = dropPending(
       {
-        v: 1,
         blocks: [block("b1", 1)],
         pending: block("b2", 2),
         phase: "t3",
@@ -83,9 +82,22 @@ describe("state transitions", () => {
     expect(next.terminal).toBe("stop")
   })
 
+  it("retryPending 保留 phase 到上限，第 3 次失败后清掉", () => {
+    const first = retryPending({ blocks: [block("b1", 1)], phase: "t2", attempts: 0 }, "bad")
+    expect(first.pending).toBeUndefined()
+    expect(first.phase).toBe("t2")
+    expect(first.attempts).toBe(1)
+    const second = retryPending({ ...first, phase: "t2" }, "bad")
+    expect(second.phase).toBe("t2")
+    expect(second.attempts).toBe(2)
+    const third = retryPending({ ...second, phase: "t2" }, "bad")
+    expect(third.phase).toBeUndefined()
+    expect(third.attempts).toBe(3)
+  })
+
   it("withPending 保留其他字段", () => {
     const next = withPending(
-      { v: 1, blocks: [block("b1", 1)], attempts: 2, phase: "t2", lastError: "x", terminal: "stop" },
+      { blocks: [block("b1", 1)], attempts: 2, phase: "t2", lastError: "x", terminal: "stop" },
       block("b2", 2),
     )
     expect(next.blocks.map((item) => item.id)).toEqual(["b1"])
@@ -97,8 +109,7 @@ describe("state transitions", () => {
   })
 
   it("parseState 忽略旧 autoInFlight 字段", () => {
-    expect(parseState({ v: 1, blocks: [], attempts: 0, autoInFlight: true })).toEqual({
-      v: 1,
+    expect(parseState({ blocks: [], attempts: 0, autoInFlight: true })).toEqual({
       blocks: [],
       attempts: 0,
     })

@@ -1,16 +1,20 @@
-import { Schema } from "effect"
 import { jsonrepair } from "jsonrepair"
 
-import type { SummaryLanguage } from "../shared/settings.ts"
-import { SummaryFields, type SummaryFields as Summary } from "./schema.ts"
+import type { SummaryFormat, SummaryLanguage } from "../shared/settings.ts"
+import { toSummary } from "./normalize.ts"
+import type { Summary } from "./schema.ts"
 import type { Tier } from "./state.ts"
 import { MAX_SUMMARY_CHARS, MIN_SUMMARY_CHARS, minSummaryChars, validateSummary } from "./validate.ts"
+
+/** 摘要/合并调用遇到坏格式时的尝试次数；真实模型偶尔会漏 candidate 或 goal。 */
+const SUMMARY_ATTEMPTS = 3
 
 /** 摘要提示词的可调部分；只改尾部指令，不改会话前缀。 */
 export interface SummaryPromptOptions {
   readonly maxChars?: number
   readonly totalChars?: number
   readonly language?: SummaryLanguage
+  readonly format?: SummaryFormat
 }
 
 /** 输入：摘要语言；输出：只用于提示词的语言约束。 */
@@ -20,10 +24,25 @@ function languageLine(language: SummaryLanguage | undefined): string {
   return "Write in the source conversation's primary language."
 }
 
-/** 输入：选项；输出：长度和语言提示行。 */
+/** 输入：选项；输出：长度、语言和格式规则提示行。 */
 function promptRules(options: SummaryPromptOptions | undefined): string[] {
   const maxChars = options?.maxChars ?? MAX_SUMMARY_CHARS
-  const lines = [`- Keep this summary under ${maxChars.toString()} characters.`]
+  const lines =
+    options?.format === "markdown"
+      ? [
+          "- Return ONLY markdown, no JSON, no code fences.",
+          "- Start with a short `# Title` line.",
+          "- Only include sections with real content; never invent entries to fill a section.",
+          "- Use real file paths in `## Files`; put config keys and function names in `## Facts`.",
+          "- Put work in `### Completed` only when it was actually finished; plans go in `### Active` or `## Open Items`.",
+          `- Keep this summary under ${maxChars.toString()} characters.`,
+        ]
+      : [
+          "- Only \"goal\" is required. Omit any optional field that has no real content; never invent entries to fill it.",
+          "- Use \"files\" only for real file paths; put config keys and function names in \"facts\".",
+          "- Put work in \"progress.completed\" only when the source shows it was finished; plans go in \"progress.active\" or \"open_items\".",
+          `- Keep this summary under ${maxChars.toString()} characters.`,
+        ]
   if (options?.totalChars !== undefined) {
     lines.push(`- The whole active checkpoint chain must stay under ${options.totalChars.toString()} characters.`)
   }
@@ -62,19 +81,58 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
 }
 
 const SHAPE = `{
-  "title": "short label for this block",
-  "goal": "the objective and any pivots it went through",
-  "constraints": ["hard limits and user preferences"],
-  "decisions": ["what was decided — why"],
+  "title": "optional short label for this block",
+  "goal": "required: the objective and any pivots it went through",
+  "constraints": ["optional: hard limits and user preferences"],
+  "decisions": ["optional: what was decided — why"],
   "progress": {
-    "completed": ["finished work"],
-    "active": ["work in progress, including what the user still expects"],
-    "blocked": ["what is blocked — why"]
+    "completed": ["optional: work actually finished"],
+    "active": ["optional: work in progress, including what the user still expects"],
+    "blocked": ["optional: what is blocked — why"]
   },
-  "open_items": ["unanswered questions, TODOs, next actions"],
-  "files": ["full/path.ext:line — role in the work"],
-  "facts": ["exact errors, signatures, versions, config keys, thresholds, measured values"]
+  "open_items": ["optional: unanswered questions, TODOs, next actions"],
+  "files": ["optional: real file paths only, full/path.ext:line — role in the work"],
+  "facts": ["optional: exact errors, signatures, versions, config keys, thresholds, measured values"]
 }`
+
+const MARKDOWN_SHAPE = `# Short title
+## Goal
+...
+## Constraints
+- ...
+## Decisions
+- ...
+## Progress
+### Completed
+- ...
+### Active
+- ...
+### Blocked
+- ...
+## Open Items
+- ...
+## Files
+- ...
+## Facts
+- ...`
+
+/** 输入：格式 + 是否要 candidate 行；输出：格式说明行。 */
+function shapeLines(format: SummaryFormat | undefined, withCandidate: boolean): string[] {
+  if (format === "markdown") {
+    return [
+      withCandidate
+        ? "Return ONLY markdown. First line must be `candidate: N`, then a self-contained markdown checkpoint."
+        : "Return ONLY markdown. Do not return JSON. Do not wrap in code fences.",
+      MARKDOWN_SHAPE,
+    ]
+  }
+  return [
+    withCandidate
+      ? "Return ONLY a JSON object with the normal summary shape PLUS a top-level `candidate` number:"
+      : "Return ONLY a JSON object with this exact shape (no markdown fences, no commentary):",
+    SHAPE,
+  ]
+}
 
 const TIER1_RULES = `Guidance:
 - This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own.
@@ -119,8 +177,7 @@ function buildPrompt(transcript: string, tier: Tier, options?: SummaryPromptOpti
     openingFor(tier),
     "The checkpoint and the messages after it are all the next reader will see; make it self-contained.",
     "",
-    "Return ONLY a JSON object with this exact shape (no markdown fences, no commentary):",
-    SHAPE,
+    ...shapeLines(options?.format, false),
     "",
     rulesFor(tier),
     ...promptRules(options),
@@ -137,8 +194,7 @@ export function buildT1Instruction(options?: SummaryPromptOptions): string {
     "Summarize only the messages before the final user message; ignore the final user message and anything after it.",
     "The checkpoint replaces those older messages; make it self-contained.",
     "",
-    "Return ONLY a JSON object with this exact shape (no markdown fences, no commentary):",
-    SHAPE,
+    ...shapeLines(options?.format, false),
     "",
     rulesFor(1),
     ...promptRules(options),
@@ -156,10 +212,9 @@ export function buildMergeInstruction(
     "Merge ONLY the chosen pair from the candidate list below; ignore every message after the checkpoint.",
     "The messages after the checkpoint describe the current task; use them only to judge what is least needed, never include them in the merged summary.",
     "",
-    "Return ONLY a JSON object with the normal summary shape PLUS a top-level `candidate` number:",
-    SHAPE,
+    ...shapeLines(options?.format, true),
     "",
-    CHOICE_RULES,
+    options?.format === "markdown" ? MARKDOWN_CHOICE_RULES : CHOICE_RULES,
     ...promptRules(options),
     "",
     "Candidates (oldest first):",
@@ -186,6 +241,15 @@ const CHOICE_RULES = `Guidance for choosing and merging:
 - If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts. Write in the source conversation's primary language.`
 
+const MARKDOWN_CHOICE_RULES = `Guidance for choosing and merging:
+- Exactly one adjacent pair may be merged. Pick one candidate from the list below and merge ONLY that pair; every other block is context for the decision, not part of the merge.
+- First line must be \`candidate: N\`, where N is the chosen candidate number.
+- After that line, write a self-contained markdown checkpoint starting with a short \`# Title\`.
+- Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items and blocked work, and exact facts that still matter.
+- Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
+- Do not invent facts. Write in the source conversation's primary language.`
+
 function buildChoicePrompt(
   context: string,
   task: string,
@@ -197,10 +261,9 @@ function buildChoicePrompt(
     "You are merging existing checkpoint blocks into one denser checkpoint.",
     "The checkpoint chain is over its token budget. The algorithm has listed every legal adjacent merge below.",
     "",
-    "Return ONLY a JSON object with the normal summary shape PLUS a top-level `candidate` number:",
-    SHAPE,
+    ...shapeLines(options?.format, true),
     "",
-    CHOICE_RULES,
+    options?.format === "markdown" ? MARKDOWN_CHOICE_RULES : CHOICE_RULES,
     ...promptRules(options),
     "",
     "Current task:",
@@ -236,69 +299,18 @@ function parseJsonSafe(text: string): unknown {
   }
 }
 
-/** 输入：任意模型字段；输出：字符串数组；预期：字符串包成单元素数组，其他丢弃。 */
-function stringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-  }
-  if (typeof value === "string" && value.trim().length > 0) return [value]
-  return []
-}
-
-/**
- * 输入：模型返回的原始 JSON 对象。
- * 输出：补齐缺失字段后的对象。
- * 预期：真实模型常漏 progress/files 或把数组写成字符串；先规范化再交给 schema。
- */
-function normalizeSummary(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value
-  const record = value as Record<string, unknown>
-  const goal = typeof record["goal"] === "string" ? record["goal"] : ""
-  const title = (
-    typeof record["title"] === "string" && record["title"].trim().length > 0
-      ? record["title"]
-      : goal.trim() || "untitled"
-  ).slice(0, 80)
-  const progress =
-    typeof record["progress"] === "object" && record["progress"] !== null
-      ? (record["progress"] as Record<string, unknown>)
-      : {}
-  return {
-    ...record,
-    title,
-    goal,
-    constraints: stringArray(record["constraints"]),
-    decisions: stringArray(record["decisions"]),
-    progress: {
-      completed: stringArray(progress["completed"]),
-      active: stringArray(progress["active"]),
-      blocked: stringArray(progress["blocked"]),
-    },
-    open_items: stringArray(record["open_items"]),
-    files: stringArray(record["files"]),
-    facts: stringArray(record["facts"]),
-  }
-}
-
-function decode(value: unknown): Summary | undefined {
-  try {
-    return Schema.decodeUnknownSync(SummaryFields)(normalizeSummary(value))
-  } catch {
-    return undefined
-  }
-}
-
 async function runSummaryPrompt(
   base: string,
   sourceChars: number,
   generate: GenerateLike,
   model: ModelRefLike | undefined,
   maxChars: number | undefined,
+  format: SummaryFormat,
   onFailure?: (reason: string) => void,
 ): Promise<Summary | undefined> {
   let prompt = base
   let reason = "summary rejected"
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < SUMMARY_ATTEMPTS; attempt += 1) {
     let text: string
     try {
       const response = await generate.text(model ? { prompt, model } : { prompt })
@@ -308,16 +320,16 @@ async function runSummaryPrompt(
       throw error
     }
 
-    const decoded = decode(parseJsonSafe(text))
+    const decoded = format === "markdown" ? toSummary(text, "markdown") : toSummary(parseJsonSafe(text), "json")
     if (decoded) {
       const result = validateSummary(decoded, sourceChars, MIN_SUMMARY_CHARS, maxChars)
       if (result.ok) return decoded
       reason = result.message
-      prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
+      prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected ${format === "markdown" ? "markdown" : "JSON"} only.`
       continue
     }
-    reason = "reply was not valid JSON matching the shape"
-    prompt = `${base}\n\nYour previous reply was not valid JSON matching the shape. Return the corrected JSON only.`
+    reason = format === "markdown" ? "reply was not valid markdown" : "reply was not valid JSON matching the shape"
+    prompt = `${base}\n\nYour previous reply was not valid ${format === "markdown" ? "markdown" : "JSON"}. Return the corrected ${format === "markdown" ? "markdown" : "JSON"} only.`
   }
   onFailure?.(reason)
   throw new Error(reason)
@@ -337,14 +349,17 @@ export async function summarize(input: {
   readonly maxChars?: number
   readonly totalChars?: number
   readonly language?: SummaryLanguage
+  readonly format?: SummaryFormat
 }): Promise<Summary | undefined> {
   const tier = input.tier ?? 1
+  const format = input.format ?? "json"
   return runSummaryPrompt(
     buildPrompt(input.transcript, tier, input),
     input.sourceChars,
     input.generate,
     input.model,
     input.maxChars,
+    format,
   )
 }
 
@@ -355,6 +370,7 @@ export async function summarizeInstruction(input: {
   readonly generate: GenerateLike
   readonly model?: ModelRefLike
   readonly maxChars?: number
+  readonly format?: SummaryFormat
   readonly onFailure?: (reason: string) => void
 }): Promise<Summary | undefined> {
   return runSummaryPrompt(
@@ -363,6 +379,7 @@ export async function summarizeInstruction(input: {
     input.generate,
     input.model,
     input.maxChars,
+    input.format ?? "json",
     input.onFailure,
   )
 }
@@ -376,17 +393,25 @@ function splitCandidate(value: unknown): { readonly candidate: unknown; readonly
   return { candidate, summary }
 }
 
+/** 输入：Markdown 回复；输出：candidate 行 + 剩余正文。 */
+function splitMarkdownCandidate(text: string): { readonly candidate: unknown; readonly summary: unknown } | undefined {
+  const match = /^\s*candidate:\s*(\d+)\s*$/m.exec(text)
+  if (match === null) return undefined
+  return { candidate: Number(match[1]), summary: text.replace(match[0], "").trim() }
+}
+
 async function runChoicePrompt(
   base: string,
   candidates: readonly SummaryChoiceCandidate[],
   generate: GenerateLike,
   model: ModelRefLike | undefined,
   maxChars: number | undefined,
+  format: SummaryFormat,
   onFailure?: (reason: string) => void,
 ): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
   let prompt = base
   let reason = "choice rejected"
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < SUMMARY_ATTEMPTS; attempt += 1) {
     let text: string
     try {
       const response = await generate.text(model ? { prompt, model } : { prompt })
@@ -396,11 +421,11 @@ async function runChoicePrompt(
       throw error
     }
 
-    const split = splitCandidate(parseJsonSafe(text))
+    const split = format === "markdown" ? splitMarkdownCandidate(text) : splitCandidate(parseJsonSafe(text))
     if (split !== undefined && typeof split.candidate === "number" && Number.isInteger(split.candidate)) {
       const candidate = candidates[split.candidate - 1]
       if (candidate !== undefined) {
-        const decoded = decode(split.summary)
+        const decoded = toSummary(split.summary, format)
         if (decoded) {
           const result = validateSummary(
             decoded,
@@ -410,13 +435,16 @@ async function runChoicePrompt(
           )
           if (result.ok) return { summary: decoded, candidate }
           reason = result.message
-          prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected JSON only.`
+          prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected ${format === "markdown" ? "markdown" : "JSON"} only.`
           continue
         }
       }
     }
-    reason = "reply was not valid JSON with a valid candidate and summary"
-    prompt = `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only.`
+    reason = format === "markdown" ? "reply was not valid markdown with a valid candidate" : "reply was not valid JSON with a valid candidate and summary"
+    prompt =
+      format === "markdown"
+        ? `${base}\n\nYour previous reply was not valid markdown. Return the corrected markdown only. First line must be \`candidate: N\` with N from 1 to ${candidates.length.toString()}.`
+        : `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only. The top-level "candidate" must be an integer from 1 to ${candidates.length.toString()}; "goal" must be non-empty.`
   }
   onFailure?.(reason)
   throw new Error(reason)
@@ -436,6 +464,7 @@ export async function summarizeWithChoice(input: {
   readonly maxChars?: number
   readonly totalChars?: number
   readonly language?: SummaryLanguage
+  readonly format?: SummaryFormat
   readonly onFailure?: (reason: string) => void
 }): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
   return runChoicePrompt(
@@ -444,6 +473,7 @@ export async function summarizeWithChoice(input: {
     input.generate,
     input.model,
     input.maxChars,
+    input.format ?? "json",
     input.onFailure,
   )
 }
@@ -455,6 +485,7 @@ export async function summarizeChoiceInstruction(input: {
   readonly generate: GenerateLike
   readonly model?: ModelRefLike
   readonly maxChars?: number
+  readonly format?: SummaryFormat
   readonly onFailure?: (reason: string) => void
 }): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
   return runChoicePrompt(
@@ -463,6 +494,7 @@ export async function summarizeChoiceInstruction(input: {
     input.generate,
     input.model,
     input.maxChars,
+    input.format ?? "json",
     input.onFailure,
   )
 }

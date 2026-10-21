@@ -124,6 +124,7 @@ export function TokenDialog(props: {
   readonly initial: string
   readonly min: number
   readonly max: number
+  readonly allowZero?: boolean
   readonly onConfirm: (value: number) => void
 }) {
   return (
@@ -135,7 +136,10 @@ export function TokenDialog(props: {
       invalid={props.invalid}
       placeholder={props.placeholder}
       initial={props.initial}
-      parse={(text) => parseTokenCount(text, props.min, props.max)}
+      parse={(text) => {
+        if (props.allowZero === true && text.trim() === "0") return 0
+        return parseTokenCount(text, props.min, props.max)
+      }}
       preview={(value) => props.copy.settings.limitPreview(formatTokens(value))}
       onConfirm={props.onConfirm}
     />

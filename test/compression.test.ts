@@ -5,9 +5,10 @@ import type { Plugin } from "@opencode/plugin"
 import { markCompactionInFlight, maybeAutoCompress } from "../src/compression/auto.ts"
 import { distillOnce, isTerminal, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
 import { handleCompactionEvent } from "../src/compression/events.ts"
+import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
 import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
-import type { SummaryFields } from "../src/compression/schema.ts"
+import { isMarkdownSummary, type Summary, type SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
 import { commitPending, dropPending, loadState, parseState, saveState, stateKey, withPending, type Block, type CompactionPhase, type State, type StorageLike } from "../src/compression/state.ts"
 import {
@@ -22,10 +23,14 @@ import { registerCompressTool } from "../src/compression/tool.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
 import { minSummaryChars, validateSummary } from "../src/compression/validate.ts"
 
+/** 输入：摘要；输出：JSON 字段；Markdown 摘要返回 undefined。 */
+function jsonSummary(summary: Summary | undefined): SummaryFields | undefined {
+  return summary !== undefined && !isMarkdownSummary(summary) ? summary : undefined
+}
+
 /** 测试辅助：显式设置/清空 phase；生产代码不再使用 withPhase。 */
 function withPhase(state: State, phase: CompactionPhase | undefined): State {
   return {
-    v: state.v,
     blocks: state.blocks,
     attempts: state.attempts,
     ...(state.pending === undefined ? {} : { pending: state.pending }),
@@ -143,7 +148,7 @@ describe("选区", () => {
 
 describe("状态", () => {
   it("pending 转正与丢弃", () => {
-    const state = withPending({ v: 1, blocks: [], attempts: 0 }, block)
+    const state = withPending({ blocks: [], attempts: 0 }, block)
     expect(commitPending(state).blocks).toHaveLength(1)
     expect(commitPending(state).pending).toBeUndefined()
     expect(dropPending(state, "boom")).toMatchObject({ attempts: 1, lastError: "boom" })
@@ -151,12 +156,12 @@ describe("状态", () => {
   })
 
   it("损坏的状态回退为空", () => {
-    expect(parseState(undefined)).toEqual({ v: 1, blocks: [], attempts: 0 })
-    expect(parseState({ v: 2 })).toEqual({ v: 1, blocks: [], attempts: 0 })
-    expect(parseState({ v: 1, blocks: [{}] }).blocks).toEqual([])
+    expect(parseState(undefined)).toEqual({ blocks: [], attempts: 0 })
+    expect(parseState({ v: 2 })).toEqual({ blocks: [], attempts: 0 })
+    expect(parseState({ blocks: [{}] }).blocks).toEqual([])
   })
 
-  it("旧块缺少标题时用 goal 补", () => {
+  it("缺 title 的旧块直接丢弃，不做迁移", () => {
     const legacy = {
       ...block,
       summary: {
@@ -169,15 +174,15 @@ describe("状态", () => {
         facts: summary.facts,
       },
     }
-    expect(parseState({ v: 1, blocks: [legacy], attempts: 0 }).blocks[0]?.summary.title).toBe("implement compression")
+    expect(parseState({ blocks: [legacy], attempts: 0 }).blocks).toEqual([])
   })
 
   it("phase 在提交时保留、失败时清掉", () => {
-    const pending = withPending({ v: 1, blocks: [], attempts: 0, phase: "t2" }, block)
+    const pending = withPending({ blocks: [], attempts: 0, phase: "t2" }, block)
     expect(commitPending(pending).phase).toBe("t2")
     expect(dropPending(pending, "boom").phase).toBeUndefined()
     expect(withPhase(pending, undefined).phase).toBeUndefined()
-    expect(parseState({ v: 1, blocks: [], attempts: 0, phase: "t3" }).phase).toBe("t3")
+    expect(parseState({ blocks: [], attempts: 0, phase: "t3" }).phase).toBe("t3")
   })
 })
 
@@ -262,9 +267,11 @@ describe("服务端设置", () => {
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 80 })).toEqual({
       contextLimit: "auto",
       triggerPercent: 80,
+      nudgeGrowthTokens: 50_000,
       summaryBlockPercent: 10,
       summaryTotalPercent: 50,
       summaryLanguage: "auto",
+      summaryFormat: "markdown",
       autoCompress: true,
       enableCompressTool: true,
       enableDecompressTool: true,
@@ -285,9 +292,11 @@ describe("服务端设置", () => {
     ).toEqual({
       contextLimit: 200_000,
       triggerPercent: 95,
+      nudgeGrowthTokens: 50_000,
       summaryBlockPercent: 30,
       summaryTotalPercent: 60,
       summaryLanguage: "zh",
+      summaryFormat: "markdown",
       autoCompress: true,
       enableCompressTool: true,
       enableDecompressTool: true,
@@ -337,7 +346,7 @@ describe("侧调用摘要", () => {
       sourceChars: 10_000,
       generate: { text: () => Promise.resolve({ text: "```json\n" + JSON.stringify(summary) + "\n```" }) },
     })
-    expect(result?.goal).toBe(summary.goal)
+    expect(jsonSummary(result)?.goal).toBe(summary.goal)
   })
 
   it("第一次坏 JSON 时重试一次", async () => {
@@ -353,7 +362,7 @@ describe("侧调用摘要", () => {
       },
     })
     expect(calls).toBe(2)
-    expect(result?.goal).toBe(summary.goal)
+    expect(jsonSummary(result)?.goal).toBe(summary.goal)
   })
 
   it("两次都失败时抛出解析原因", async () => {
@@ -406,7 +415,7 @@ describe("侧调用摘要", () => {
       },
     })
     expect(result?.candidate.index).toBe(1)
-    expect(result?.summary.goal).toBe(summary.goal)
+    expect(jsonSummary(result?.summary)?.goal).toBe(summary.goal)
   })
 
   it("多候选返回非法 candidate 时抛出原因", async () => {
@@ -420,6 +429,26 @@ describe("侧调用摘要", () => {
     ).rejects.toThrow("valid candidate")
   })
 
+  it("T2 连续两次坏 JSON 后第三次成功", async () => {
+    let calls = 0
+    const result = await summarizeWithChoice({
+      context: "b1 + b2",
+      task: "continue",
+      candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
+      generate: {
+        text: () => {
+          calls += 1
+          return Promise.resolve({
+            text: calls < 3 ? "not json" : JSON.stringify({ candidate: 1, ...summary }),
+          })
+        },
+      },
+    })
+    expect(calls).toBe(3)
+    expect(result?.candidate.index).toBe(1)
+    expect(jsonSummary(result?.summary)?.goal).toBe(summary.goal)
+  })
+
   it("解析前后带说明的 JSON", async () => {
     const result = await summarize({
       transcript: "x",
@@ -431,7 +460,7 @@ describe("侧调用摘要", () => {
           }),
       },
     })
-    expect(result?.goal).toBe(summary.goal)
+    expect(jsonSummary(result)?.goal).toBe(summary.goal)
   })
 
   it("补齐缺失字段和字符串数组", async () => {
@@ -449,9 +478,9 @@ describe("侧调用摘要", () => {
           }),
       },
     })
-    expect(result?.facts).toHaveLength(1)
-    expect(result?.progress).toEqual({ completed: [], active: [], blocked: [] })
-    expect(result?.constraints).toEqual([])
+    expect(jsonSummary(result)?.facts).toHaveLength(1)
+    expect(jsonSummary(result)?.progress).toEqual({ completed: [], active: [], blocked: [] })
+    expect(jsonSummary(result)?.constraints).toEqual([])
   })
 
   it("解析双编码 JSON", async () => {
@@ -460,7 +489,7 @@ describe("侧调用摘要", () => {
       sourceChars: 10_000,
       generate: { text: () => Promise.resolve({ text: JSON.stringify(JSON.stringify(summary)) }) },
     })
-    expect(result?.goal).toBe(summary.goal)
+    expect(jsonSummary(result)?.goal).toBe(summary.goal)
   })
 
   it("修复截断 JSON", async () => {
@@ -470,7 +499,7 @@ describe("侧调用摘要", () => {
       sourceChars: 10_000,
       generate: { text: () => Promise.resolve({ text: JSON.stringify(large).slice(0, -1) }) },
     })
-    expect(result?.goal).toHaveLength(300)
+    expect(jsonSummary(result)?.goal).toHaveLength(300)
   })
 
   it("超长 title 自动截断", async () => {
@@ -548,7 +577,7 @@ describe("侧调用摘要", () => {
     )
     const prompt = buildT1Instruction()
     const result = await summarizeInstruction({ prompt, sourceChars: 10_000, generate })
-    expect(result?.goal).toBe(summary.goal)
+    expect(jsonSummary(result)?.goal).toBe(summary.goal)
     expect(calls).toHaveLength(1)
     expect(calls[0]?.sessionID).toBe("ses_test")
     expect(calls[0]?.prompt).toBe(prompt)
@@ -636,7 +665,7 @@ describe("自动压缩", () => {
   it("已有块时只入队 compaction，不改 pending", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
-      [stateKey("ses_test")]: { v: 1, blocks: [block], attempts: 0 },
+      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -715,7 +744,7 @@ describe("自动压缩", () => {
   it("失败次数达到上限后不再自动入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
-      [stateKey("ses_test")]: { v: 1, blocks: [], attempts: 3 },
+      [stateKey("ses_test")]: { blocks: [], attempts: 3 },
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -740,7 +769,7 @@ describe("自动压缩", () => {
   it("pending 非空时不再入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
-      [stateKey("ses_test")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+      [stateKey("ses_test")]: withPending({ blocks: [], attempts: 0 }, block),
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -765,7 +794,7 @@ describe("自动压缩", () => {
   it("phase 非空时下一次模型请求入队合并，不等阈值", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
-      [stateKey("ses_test")]: withPhase({ v: 1, blocks: [], attempts: 0 }, "t2"),
+      [stateKey("ses_test")]: withPhase({ blocks: [], attempts: 0 }, "t2"),
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -815,7 +844,7 @@ describe("自动压缩", () => {
   it("terminal 状态不再自动入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 },
-      [stateKey("ses_test")]: { v: 1, blocks: [], attempts: 0, terminal: "cannot reduce" },
+      [stateKey("ses_test")]: { blocks: [], attempts: 0, terminal: "cannot reduce" },
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -950,13 +979,11 @@ describe("会话隔离", () => {
   it("不同 session 的 blocks 和 phase 不串", async () => {
     const storage = memoryStorage()
     await saveState(storage, "ses_a", {
-      v: 1,
       blocks: [tierBlock("b1", 1, 1)],
       attempts: 0,
       phase: "t2",
     })
     await saveState(storage, "ses_b", {
-      v: 1,
       blocks: [tierBlock("b1", 2, 1)],
       attempts: 0,
     })
@@ -983,7 +1010,7 @@ describe("compaction 事件", () => {
 
   it("最新 checkpoint 包含 pending 才转正", async () => {
     const storage = memoryStorage({
-      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+      [stateKey("ses_event")]: withPending({ blocks: [], attempts: 0 }, block),
     })
     await handleCompactionEvent(eventCtx(storage, blockMarker("b1")), "ended", "ses_event")
     const state = await loadState(storage, "ses_event")
@@ -993,7 +1020,7 @@ describe("compaction 事件", () => {
 
   it("晚到事件不提交不属于它的 pending", async () => {
     const storage = memoryStorage({
-      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+      [stateKey("ses_event")]: withPending({ blocks: [], attempts: 0 }, block),
     })
     await handleCompactionEvent(eventCtx(storage, "another checkpoint"), "ended", "ses_event")
     const state = await loadState(storage, "ses_event")
@@ -1001,25 +1028,25 @@ describe("compaction 事件", () => {
     expect(state.pending?.id).toBe("b1")
   })
 
-  it("失败事件丢弃 pending 并记录真实错误，不自动重试", async () => {
+  it("失败事件保留 phase 并记录错误，下一次请求重试", async () => {
     const storage = memoryStorage({
       // 钩子跑过并失败时，catch 已经写过 lastError；这里模拟同样的状态。
       [stateKey("ses_event")]: {
-        ...withPhase(withPending({ v: 1, blocks: [], attempts: 0 }, block), "t2"),
+        ...withPhase(withPending({ blocks: [], attempts: 0 }, block), "t2"),
         lastError: "network down",
       },
     })
     await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "network down")
     const state = await loadState(storage, "ses_event")
     expect(state.pending).toBeUndefined()
-    expect(state.phase).toBeUndefined()
+    expect(state.phase).toBe("t2")
     expect(state.attempts).toBe(1)
     expect(state.lastError).toContain("network down")
   })
 
   it("事件 error 优先于 state.lastError（钩子没跑过的失败也能拿到真实原因）", async () => {
     const storage = memoryStorage({
-      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+      [stateKey("ses_event")]: withPending({ blocks: [], attempts: 0 }, block),
     })
     await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "nothing to compress")
     const state = await loadState(storage, "ses_event")
@@ -1030,7 +1057,7 @@ describe("compaction 事件", () => {
 
   it("钩子没跑过的空压缩失败 + 已排 phase：保留 phase 不计失败", async () => {
     const storage = memoryStorage({
-      [stateKey("ses_event")]: { v: 1, blocks: [block], attempts: 0, phase: "t2" },
+      [stateKey("ses_event")]: { blocks: [block], attempts: 0, phase: "t2" },
     })
     await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "Nothing to compact yet")
     const state = await loadState(storage, "ses_event")
@@ -1041,7 +1068,7 @@ describe("compaction 事件", () => {
 
   it("读取最新 checkpoint 失败时保留 pending", async () => {
     const storage = memoryStorage({
-      [stateKey("ses_event")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+      [stateKey("ses_event")]: withPending({ blocks: [], attempts: 0 }, block),
     })
     const ctx = {
       storage,
@@ -1136,7 +1163,7 @@ describe("compress 工具只做 T1", () => {
 
   it("pending 或 phase 非空时拒绝，不改状态", async () => {
     const pendingStorage = memoryStorage({
-      [stateKey("ses_test")]: withPending({ v: 1, blocks: [], attempts: 0 }, block),
+      [stateKey("ses_test")]: withPending({ blocks: [], attempts: 0 }, block),
     })
     const pending = toolCtx(pendingStorage)
     await registerCompressTool(pending.ctx, new Map([["ses_test", toolMessages()]]))
@@ -1144,7 +1171,7 @@ describe("compress 工具只做 T1", () => {
     expect(pendingResult.content).toContain("compression already in progress")
 
     const phaseStorage = memoryStorage({
-      [stateKey("ses_test")]: withPhase({ v: 1, blocks: [], attempts: 0 }, "t2"),
+      [stateKey("ses_test")]: withPhase({ blocks: [], attempts: 0 }, "t2"),
     })
     const phase = toolCtx(phaseStorage)
     await registerCompressTool(phase.ctx, new Map([["ses_test", toolMessages()]]))
@@ -1262,6 +1289,41 @@ describe("compress 工具只做 T1", () => {
   })
 })
 describe("摘要单层合并", () => {
+  it("phase=t2 时新消息很短也合并块，不报 nothing to compress", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_short_t2", {
+      blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3)],
+      attempts: 0,
+      phase: "t2",
+    })
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_short_t2",
+      model: { providerID: "fake", id: "model" },
+      messages: [
+        message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
+        message("user", "continue", "m1"),
+        message("assistant", "ok", "m2"),
+      ],
+    }
+    await handleCompaction(ctx, event)
+    const state = await loadState(storage, "ses_short_t2")
+    expect(activeBlocks(state.blocks, state.pending).some((item) => item.tier === 2)).toBe(true)
+    expect(state.lastError).toBeUndefined()
+    expect(event.result?.summary).toContain("T2")
+  })
+
   it("预算内不合并", async () => {
     let calls = 0
     const ctx = fakeCtx(
@@ -1275,7 +1337,7 @@ describe("摘要单层合并", () => {
     const result = await distillOnce({
       ctx,
       sessionID: "ses_test",
-      state: { v: 1, blocks: [block], attempts: 0 },
+      state: { blocks: [block], attempts: 0 },
       pending: { ...block, id: "b2", order: 2 },
       budgetTokens: 50_000,
       phase: "t2",
@@ -1298,7 +1360,7 @@ describe("摘要单层合并", () => {
     const result = await distillOnce({
       ctx,
       sessionID: "ses_test",
-      state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+      state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
       pending: longBlock("b2", 1, 2),
       budgetTokens: 5_000,
       phase: "t2",
@@ -1325,7 +1387,6 @@ describe("摘要单层合并", () => {
       ctx,
       sessionID: "ses_test",
       state: {
-        v: 1,
         blocks: [longBlock("b1", 2, 1), tierBlock("b2", 2, 2), tierBlock("b3", 1, 3)],
         attempts: 0,
       },
@@ -1355,7 +1416,6 @@ describe("摘要单层合并", () => {
       ctx,
       sessionID: "ses_test",
       state: {
-        v: 1,
         blocks: [longBlock("b1", 2, 1), tierBlock("b2", 2, 2), longBlock("b3", 1, 3)],
         attempts: 0,
       },
@@ -1377,7 +1437,6 @@ describe("摘要单层合并", () => {
       ctx,
       sessionID: "ses_test",
       state: {
-        v: 1,
         blocks: [longBlock("b1", 3, 1), longBlock("b2", 3, 2), longBlock("b3", 3, 3)],
         attempts: 0,
       },
@@ -1399,7 +1458,7 @@ describe("摘要单层合并", () => {
       distillOnce({
         ctx,
         sessionID: "ses_test",
-        state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
         pending: longBlock("b2", 1, 2),
         budgetTokens: 5_000,
         phase: "t2",
@@ -1416,7 +1475,7 @@ describe("摘要单层合并", () => {
     const result = await distillOnce({
       ctx,
       sessionID: "ses_test",
-      state: { v: 1, blocks: [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], attempts: 0 },
+      state: { blocks: [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], attempts: 0 },
       pending: undefined,
       budgetTokens: 999_999,
       summaryTotalChars: 10,
@@ -1436,7 +1495,7 @@ describe("摘要单层合并", () => {
       distillOnce({
         ctx,
         sessionID: "ses_test",
-        state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
         pending: longBlock("b2", 1, 2),
         budgetTokens: 5_000,
         phase: "t2",
@@ -1454,7 +1513,7 @@ describe("摘要单层合并", () => {
       distillOnce({
         ctx,
         sessionID: "ses_test",
-        state: { v: 1, blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
         pending: longBlock("b2", 1, 2),
         budgetTokens: 5_000,
         phase: "t2",

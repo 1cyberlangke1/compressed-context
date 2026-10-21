@@ -23,6 +23,7 @@
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:tui",
     "test": "vitest run",
     "test:tui": "cd tui-test && bun test",
+    "test:e2e:nudge": "bun scripts/e2e-nudge.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {

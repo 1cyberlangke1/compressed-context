@@ -3,21 +3,28 @@ import { Schema } from "effect"
 
 import { resolveSummaryLimits } from "../shared/settings.ts"
 import { createT1Block } from "./block.ts"
-import { SummaryFields } from "./schema.ts"
+import { toSummary } from "./normalize.ts"
+import { SummaryInput } from "./schema.ts"
 import { RESOLVED_WINDOW_KEY, loadServerSettings, windowKey } from "./settings.ts"
-import { messageRange, type MessageLike } from "./select.ts"
+import { eligibleMessages, messageRange, type MessageLike } from "./select.ts"
+import { sessionMessagesToMessageLikes } from "./session-message.ts"
 import { loadState, saveState, withPending } from "./state.ts"
 import type { Disposable } from "./settings-rpc.ts"
 import { buildTranscript } from "./transcript.ts"
+import { saveTranscript } from "./transcript-store.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
 
 const DESCRIPTION =
   "Compress the conversation so far into a structured checkpoint. Call this when the context is getting full. " +
   "It covers every message since the last compressed block, up to the current user message, and replaces them with " +
-  "one block. All fields are required; do not call while a compression is already pending. " +
-  "Add a short title for the block. " +
+  "one block. In JSON mode provide `goal` plus the optional fields; in Markdown mode provide `markdown`. Omit any " +
+  "optional field that has no real content instead of inventing entries. Do not call while a compression is already " +
+  "pending. " +
+  "Add a short title if useful. " +
   "The block is the only remaining record of those messages, so copy exact paths with line numbers, signatures, the " +
   "code lines that carry the logic, error text, versions, config keys, thresholds, and measured values. " +
+  "Use `files` only for real file paths; put config keys and function names in `facts`. " +
+  "Put work in `progress.completed` only when it was actually finished; plans go in `progress.active` or `open_items`. " +
   "Give the reason for each decision, keep the objective and any pivots, why important actions were taken, unanswered " +
   "questions, and work the user still expects. Describe the past as past, not as a new instruction. " +
   "Leave out logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why), and " +
@@ -33,20 +40,20 @@ function failure(message: string) {
 }
 
 /**
- * 输入：服务端上下文 + 每个会话最近一次请求的可压消息缓存。
+ * 输入：服务端上下文。
  * 输出：注册 compress 工具。
- * 预期：校验字段与内容量；通过后挂 pending 块并触发 compaction。
+ * 预期：执行时从会话上下文按需取消息，不再把整段历史常驻内存。
  */
 export async function registerCompressTool(
   ctx: Plugin.Context,
-  cache: ReadonlyMap<string, readonly MessageLike[]>,
+  legacyCache?: ReadonlyMap<string, readonly MessageLike[]>,
 ): Promise<Disposable> {
   const registration = await ctx.tool.transform((tools) => {
     tools.add({
       name: "compress",
       options: { codemode: false },
       description: DESCRIPTION,
-      input: SummaryFields,
+      input: SummaryInput,
       output: Schema.Struct({ block: Schema.String, status: Schema.String }),
       execute: async (input, toolCtx) => {
         const sessionID = toolCtx.sessionID
@@ -54,8 +61,15 @@ export async function registerCompressTool(
         if (state.terminal !== undefined) return failure(state.terminal)
         if (state.pending || state.phase !== undefined) return failure("compression already in progress")
 
-        // context 钩子缓存的就是 eligible 消息，这里不能再筛一次。
-        const eligible = cache.get(sessionID) ?? []
+        let eligible: readonly MessageLike[] | undefined
+        try {
+          const raw = await ctx.session.context({ sessionID })
+          eligible = eligibleMessages(sessionMessagesToMessageLikes(raw))
+        } catch {
+          // 兼容旧测试替身；生产路径不传 legacyCache。
+          eligible = legacyCache === undefined ? undefined : (legacyCache.get(sessionID) ?? [])
+        }
+        if (eligible === undefined) return failure("failed to read session context")
         const transcript = buildTranscript(eligible)
         const sourceChars = transcript.length
         if (eligible.length === 0) return failure("nothing to compress")
@@ -83,7 +97,9 @@ export async function registerCompressTool(
           if (typeof resolved === "number" && resolved > 0) windowTokens = resolved
         }
         const limits = resolveSummaryLimits(settings, windowTokens)
-        const validation = validateSummary(input, sourceChars, undefined, limits.blockChars)
+        const summary = toSummary(input, settings.summaryFormat)
+        if (summary === undefined) return failure("invalid summary shape")
+        const validation = validateSummary(summary, sourceChars, undefined, limits.blockChars)
         if (!validation.ok) return failure(validation.message)
 
         const range = messageRange(eligible)
@@ -93,11 +109,18 @@ export async function registerCompressTool(
 
         const block = createT1Block({
           blocks: state.blocks,
-          summary: input,
+          summary,
           fromId: range.fromId,
           toId: range.toId,
           sourceChars,
         })
+
+        // transcript 落盘失败不应阻断摘要；解压时会降级为占位符。
+        try {
+          await saveTranscript(ctx.storage, sessionID, block, eligible)
+        } catch {
+          // best effort
+        }
 
         await saveState(ctx.storage, sessionID, withPending(state, block))
         try {

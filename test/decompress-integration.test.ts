@@ -33,7 +33,6 @@ const storage = {
   get: (key: string) => {
     if (key.endsWith("ses_x")) {
       return Promise.resolve({
-        v: 1,
         blocks: [
           block("b3", 3, 3, ["b5", "b6"]),
           block("b5", 2, 1, ["b1", "b2"]),

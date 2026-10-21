@@ -15,6 +15,7 @@ const SettingsProperties = {
     anyOf: [{ type: "string", enum: ["auto"] }, { type: "number" }],
   },
   triggerPercent: { type: "number" },
+  nudgeGrowthTokens: { type: "number" },
   summaryBlockPercent: { type: "number" },
   summaryTotalPercent: { type: "number" },
   summaryLanguage: { type: "string", enum: ["auto", "zh", "en"] },

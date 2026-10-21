@@ -2,17 +2,19 @@ import type { Plugin } from "@opencode/plugin"
 
 import { resolveSummaryLimits } from "../shared/settings.ts"
 import { mergeTerminalMetadata } from "../shared/stats.ts"
+import { renderActiveSummary } from "./active-summary-cache.ts"
 import { markCompactionInFlight, resolveLimit } from "./auto.ts"
 import { createT1Block } from "./block.ts"
 import { distillOnce, isTerminal, planT1Phase } from "./distill.ts"
 import { TERMINAL_MESSAGE } from "./events.ts"
-import { activeBlocks, renderAll } from "./render.ts"
-import { messageRange, olderMessages, type MessageLike } from "./select.ts"
+import { activeBlocks } from "./render.ts"
+import { messageRange, olderMessages, textChars, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
 import { loadState, saveState, type Block, type CompactionPhase, type State } from "./state.ts"
 import { buildT1Instruction, sessionGenerator, summarizeInstruction } from "./summarize.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
+import { saveTranscript } from "./transcript-store.ts"
 import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
 
 /** compaction 钩子需要的最小事件形状。 */
@@ -50,7 +52,6 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       error: string | undefined,
     ): Promise<void> => {
       const base: State = {
-        v: 1,
         blocks,
         attempts: state.attempts,
         ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
@@ -64,10 +65,12 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       )
     }
 
-    // 第二阶段：T2/T3。只在 older 里没有真实消息时合并——此时新对话由 OpenCode
-    // 原样保留在 checkpoint 的 recent 里，合并只处理块，不会丢内容。
-    // 有真实消息时走下面的 T1：先总结新内容，phase 留到下一次压缩再合并。
-    if (state.phase !== undefined && olderMessages(event.messages).length === 0) {
+    // 第二阶段：T2/T3。older 里没有真实消息，或新消息不足以单独做 T1 时合并块。
+    // 短消息仍由 OpenCode 原样保留在 recent 里，不会丢内容。
+    // 有足够新内容时走下面的 T1：先总结新内容，phase 留到下一次压缩再合并。
+    const older = olderMessages(event.messages)
+    const olderChars = textChars(older)
+    if (state.phase !== undefined && (older.length === 0 || olderChars < MIN_SOURCE_CHARS)) {
       const result = await distillOnce({
         ctx,
         sessionID: event.sessionID,
@@ -77,6 +80,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         summaryBlockChars: limits.blockChars,
         summaryTotalChars: limits.totalChars,
         summaryLanguage: settings.summaryLanguage,
+        summaryFormat: settings.summaryFormat,
         phase: state.phase,
         showTimeline: settings.showTimeline,
         showBlockTokens: settings.showBlockTokens,
@@ -93,7 +97,6 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         )
       ) {
         await saveState(ctx.storage, event.sessionID, {
-          v: 1,
           blocks: result.blocks,
           attempts: 0,
           lastError: TERMINAL_MESSAGE,
@@ -117,7 +120,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
     // 否则用 session 前缀 + 尾部指令生成，保持前缀缓存。
     let pending = state.pending
     if (pending === undefined) {
-      const eligible = olderMessages(event.messages)
+      const eligible = older
       const transcript = buildTranscript(eligible)
       const sourceChars = transcript.length
       if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) {
@@ -129,10 +132,12 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
           maxChars: limits.blockChars,
           totalChars: limits.totalChars,
           language: settings.summaryLanguage,
+          format: settings.summaryFormat,
         }),
         sourceChars,
         maxChars: limits.blockChars,
         generate: sessionGenerator(ctx.session, event.sessionID),
+        format: settings.summaryFormat,
         onFailure: (reason) => {
           failure = reason
         },
@@ -151,11 +156,22 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         toId: range.toId,
         sourceChars,
       })
+
+      // 原文与摘要同生命周期；写盘失败时摘要仍然可用，解压降级为占位符。
+      try {
+        await saveTranscript(ctx.storage, event.sessionID, pending, eligible)
+      } catch {
+        // best effort
+      }
     }
 
     // T1 之后再检查预算；没超就不排 T2。
     const active = activeBlocks(state.blocks, pending)
-    const summary = renderAll(state.blocks, pending, renderOptions)
+    const summary = renderActiveSummary(
+      event.sessionID,
+      { ...state, pending },
+      renderOptions,
+    )
     const nextPhase = planT1Phase(summary, active, limits.budgetTokens, limits.totalChars)
     await save(state.blocks, pending, nextPhase, undefined)
     event.result = { summary }

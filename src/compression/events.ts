@@ -1,14 +1,19 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { cacheHistoryKey } from "../shared/cache.ts"
+import { clearActiveSummary } from "./active-summary-cache.ts"
 import { recordCacheHistory } from "./cache-history.ts"
+import { deleteSessionTempFiles } from "./decompress.ts"
+import { markSessionDeleted } from "./deleted-sessions.ts"
 import { blockMarker } from "./render.ts"
+import { deleteTranscriptsForSession } from "./transcript-store.ts"
 import {
   STATE_PREFIX,
   commitPending,
   dropPending,
   loadState,
   parseState,
+  retryPending,
   saveState,
   stateKey,
   type State,
@@ -46,8 +51,8 @@ export const TERMINAL_MESSAGE =
 /**
  * 输入：服务端上下文 + 事件类型 + sessionID + 事件自带错误（仅 failed 有）。
  * 输出：无。
- * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败丢弃 pending 和 phase，
- *       记录真实原因，不自动重试（网络与 JSON 重试已由 OpenCode / runSummaryPrompt 覆盖）。
+ * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败时保留 phase 让下一次请求重试，
+ *       达到 MAX_COMPRESSION_ATTEMPTS 后清除 phase，记录真实原因。
  *       事件 error 优先于 state.lastError——钩子没跑过的失败（如 OpenCode 在钩子前判定
  *       「无可压缩内容」）state 里没有任何错误记录，只能从事件拿真实原因。
  */
@@ -79,7 +84,12 @@ export async function handleCompactionEvent(
     await saveState(ctx.storage, sessionID, { ...state, attempts: 0 })
     return
   }
-  // 不自动重试：丢弃 pending/phase，记录真实原因，交给下一次触发。
+  // 本层失败：保留 phase，下一次请求由 auto 重新入队；达到上限后 retryPending 会清掉 phase。
+  if (state.phase !== undefined) {
+    await saveState(ctx.storage, sessionID, retryPending(state, detail))
+    return
+  }
+  // T1 没有下一层可重试：丢弃 pending，记录真实原因。
   await saveState(ctx.storage, sessionID, dropPending(state, detail))
 }
 
@@ -88,12 +98,20 @@ export interface SessionEventOptions {
   readonly onSessionDeleted?: (sessionID: string) => void
 }
 
-/** 输入：插件上下文 + sessionID；输出：无；预期：删除该会话的压缩状态与缓存历史。 */
-async function forgetSession(ctx: Plugin.Context, sessionID: string): Promise<void> {
+/**
+ * 输入：插件上下文 + sessionID。
+ * 输出：无。
+ * 预期：先打墓碑阻止迟到写入，再删 state、cache history、transcript 与临时文件。
+ */
+export async function forgetSession(ctx: Plugin.Context, sessionID: string): Promise<void> {
+  markSessionDeleted(sessionID)
+  clearActiveSummary(sessionID)
+  deleteSessionTempFiles(sessionID)
   try {
     await Promise.all([
       ctx.storage.remove(stateKey(sessionID)),
       ctx.storage.remove(cacheHistoryKey(sessionID)),
+      deleteTranscriptsForSession(ctx.storage, sessionID),
     ])
   } catch {
     // best effort：删不掉也不影响当前进程
@@ -148,9 +166,49 @@ export function startSessionEvents(
   }
 }
 
-/** 输入：服务端上下文；输出：无；预期：启动时对账所有 pending 状态。 */
+/** 输入：任意错误；输出：是否明确的“会话不存在”。 */
+function isSessionMissing(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return /not found|404/i.test(String(error))
+  }
+  const record = error as Record<string, unknown>
+  const status = record["status"] ?? record["statusCode"] ?? record["code"]
+  if (status === 404 || status === "404" || status === "not_found") return true
+  const message = typeof record["message"] === "string" ? record["message"] : ""
+  return /not found|404/i.test(message)
+}
+
+/**
+ * 输入：服务端上下文。
+ * 输出：无。
+ * 预期：启动时只清理“明确不存在”会话的孤儿 state；瞬时错误不删数据。
+ */
+async function cleanupOrphanStates(ctx: Plugin.Context): Promise<void> {
+  let after: string | undefined
+  for (;;) {
+    const page = await ctx.storage.scan({
+      prefix: STATE_PREFIX,
+      limit: 100,
+      ...(after === undefined ? {} : { after }),
+    })
+    for (const entry of page.entries) {
+      const sessionID = entry.key.slice(STATE_PREFIX.length)
+      if (sessionID.length === 0) continue
+      try {
+        await ctx.session.get({ sessionID })
+      } catch (error) {
+        if (isSessionMissing(error)) await forgetSession(ctx, sessionID)
+      }
+    }
+    if (page.next === undefined) return
+    after = page.next
+  }
+}
+
+/** 输入：服务端上下文；输出：无；预期：启动时对账所有 pending 状态并清理孤儿。 */
 export async function reconcileAll(ctx: Plugin.Context): Promise<void> {
   try {
+    await cleanupOrphanStates(ctx)
     let after: string | undefined
     for (;;) {
       const options = after === undefined ? { prefix: STATE_PREFIX, limit: 100 } : { prefix: STATE_PREFIX, after, limit: 100 }

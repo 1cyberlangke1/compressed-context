@@ -1,9 +1,9 @@
 import { Plugin } from "@opencode/plugin"
 
-import { maybeAutoCompress } from "./compression/auto.ts"
+import { maybeAutoCompress, maybeNudge } from "./compression/auto.ts"
+import { adoptNativeCheckpoint } from "./compression/adopt.ts"
 import { handleCompaction } from "./compression/compaction.ts"
 import { reconcileAll, startSessionEvents } from "./compression/events.ts"
-import { eligibleMessages, type MessageLike } from "./compression/select.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
 import { loadState } from "./compression/state.ts"
 import { registerCompressTool } from "./compression/tool.ts"
@@ -20,26 +20,11 @@ export default Plugin.define({
    * 预期：块链通过 compaction 落盘；失败不破坏历史。
    */
   async setup(ctx) {
-    const cache = new Map<string, readonly MessageLike[]>()
     const published = new Map<string, ContextStats>()
     const disposables: Disposable[] = []
-    /** 内存里最多保留多少个会话的 eligible 消息；超出丢最旧。 */
-    const CACHE_LIMIT = 32
 
-    /** 输入：sessionID + eligible；输出：无；预期：刷新插入顺序并限制 Map 大小。 */
-    const rememberEligible = (sessionID: string, eligible: readonly MessageLike[]): void => {
-      cache.delete(sessionID)
-      cache.set(sessionID, eligible)
-      while (cache.size > CACHE_LIMIT) {
-        const oldest = cache.keys().next().value
-        if (oldest === undefined) break
-        cache.delete(oldest)
-      }
-    }
-
-    /** 输入：sessionID；输出：无；预期：会话空闲/删除时清掉进程内缓存。 */
+    /** 输入：sessionID；输出：无；预期：会话空闲/删除时清掉进程内统计缓存。 */
     const forgetMemory = (sessionID: string): void => {
-      cache.delete(sessionID)
       published.delete(sessionID)
     }
 
@@ -51,7 +36,7 @@ export default Plugin.define({
       })
     }
 
-    disposables.push(await registerCompressTool(ctx, cache))
+    disposables.push(await registerCompressTool(ctx))
     disposables.push(await registerDecompressTool(ctx))
     disposables.push(await registerSettingsRpc(ctx))
     const stopEvents = startSessionEvents(ctx, {
@@ -61,9 +46,17 @@ export default Plugin.define({
     void reconcileAll(ctx)
 
     disposables.push(
-      await ctx.session.hook("context", (event) => {
-        const eligible = eligibleMessages(event.messages)
-        rememberEligible(event.sessionID, eligible)
+      await ctx.session.hook("context", async (event) => {
+        await adoptNativeCheckpoint(ctx, event.sessionID, event.messages)
+
+        await maybeNudge({
+          ctx,
+          sessionID: event.sessionID,
+          messages: event.messages,
+          system: event.system,
+          tools: event.tools,
+          model: event.model,
+        })
 
         const stats = createStats(
           estimateCategories({

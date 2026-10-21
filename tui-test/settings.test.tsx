@@ -79,6 +79,7 @@ describe("SettingsCommand", () => {
       expect(options.map((option) => option.value)).toContain("showCacheChart")
       expect(options.map((option) => option.value)).toContain("showCacheLog")
       expect(options.map((option) => option.value)).toContain("showSummaries")
+      expect(options.map((option) => option.value)).toContain("summaryFormat")
       expect([...new Set(options.map((option) => option.category))]).toEqual([
         "压缩",
         "摘要",
@@ -97,6 +98,17 @@ describe("SettingsCommand", () => {
       captured.run?.()
       await app.waitFor(() => settings().showCacheChart === false)
       expect(settings().showCacheChart).toBe(false)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("选择 summaryFormat 会切到 json", async () => {
+    const { app, captured, settings } = await mount(["summaryFormat", "json", undefined])
+    try {
+      captured.run?.()
+      await app.waitFor(() => settings().summaryFormat === "json")
+      expect(settings().summaryFormat).toBe("json")
     } finally {
       app.renderer.destroy()
     }

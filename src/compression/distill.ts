@@ -1,9 +1,10 @@
 import type { Plugin } from "@opencode/plugin"
 
-import type { SummaryLanguage } from "../shared/settings.ts"
+import type { SummaryFormat, SummaryLanguage } from "../shared/settings.ts"
 import { countText } from "../shared/tokens.ts"
 import { activeBlocks, renderAll, renderBlock } from "./render.ts"
 import { nextBlockId, type Block, type CompactionPhase, type State, type Tier } from "./state.ts"
+import { summaryChars, summaryGoal, summaryTitle } from "./summary.ts"
 import {
   buildMergeInstruction,
   sessionGenerator,
@@ -29,6 +30,7 @@ export interface DistillOnceInput {
   readonly summaryBlockChars?: number
   readonly summaryTotalChars?: number
   readonly summaryLanguage?: SummaryLanguage
+  readonly summaryFormat?: SummaryFormat
   readonly phase: Exclude<CompactionPhase, undefined>
   readonly showTimeline?: boolean
   readonly showBlockTokens?: boolean
@@ -91,8 +93,8 @@ export function isTerminal(
 
 /** 输入：块；输出：候选列表里的简短描述。 */
 function describe(block: Block): string {
-  const goal = block.summary.goal.replace(/\s+/g, " ").slice(0, 160)
-  return `${block.id} T${block.tier.toString()} "${block.summary.title}" — ${goal}`
+  const goal = summaryGoal(block.summary).replace(/\s+/g, " ").slice(0, 160)
+  return `${block.id} T${block.tier.toString()} "${summaryTitle(block.summary)}" — ${goal}`
 }
 
 /** 输入：候选；输出：这两块的完整 transcript（只用于本地校验，不发给模型）。 */
@@ -138,12 +140,14 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     ...(input.summaryBlockChars === undefined ? {} : { maxChars: input.summaryBlockChars }),
     ...(input.summaryTotalChars === undefined ? {} : { totalChars: input.summaryTotalChars }),
     ...(input.summaryLanguage === undefined ? {} : { language: input.summaryLanguage }),
+    format: input.summaryFormat ?? "json",
   }
   const picked = await summarizeChoiceInstruction({
     prompt: buildMergeInstruction(choices, promptOptions),
     candidates: choices,
     generate: generator,
     ...(input.summaryBlockChars === undefined ? {} : { maxChars: input.summaryBlockChars }),
+    format: input.summaryFormat ?? "json",
     onFailure: (reason) => {
       failure = `distill summary failed: ${reason}`
     },
@@ -194,7 +198,7 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     fromId: chosen.left.fromId,
     toId: chosen.right.toId,
     tokensBefore: chosen.left.tokensAfter + chosen.right.tokensAfter,
-    tokensAfter: Math.ceil(JSON.stringify(picked.summary).length / 4),
+    tokensAfter: Math.ceil(summaryChars(picked.summary) / 4),
     at: Math.max(chosen.left.at, chosen.right.at),
     order: chosen.left.order,
     sourceBlockIds: [chosen.left.id, chosen.right.id],

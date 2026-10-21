@@ -2,7 +2,7 @@ import type { Plugin } from "@opencode/plugin"
 import type { Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
-import type { SummaryFields } from "../src/compression/schema.ts"
+import type { SummaryFields, SummaryInput } from "../src/compression/schema.ts"
 import { saveState, type StorageLike } from "../src/compression/state.ts"
 import { registerCompressTool } from "../src/compression/tool.ts"
 import type { MessageLike } from "../src/compression/select.ts"
@@ -48,7 +48,7 @@ function summary(): SummaryFields {
 }
 
 type ToolExecute = (
-  input: SummaryFields,
+  input: SummaryInput,
   toolCtx: { sessionID: string },
 ) => Promise<{ output: { block: string; status: string }; content: string }>
 
@@ -72,7 +72,6 @@ async function setup(input: {
     },
   } as unknown as Plugin.Context
   await saveState(input.storage, "ses_a", {
-    v: 1,
     blocks: [],
     attempts: 0,
     ...(input.terminal === undefined ? {} : { terminal: input.terminal }),
@@ -96,6 +95,14 @@ describe("compress tool", () => {
     expect(result.output.status).toBe("queued")
     expect(reads).toContain("window:fake/model")
     expect(reads).not.toContain("window:last")
+  })
+
+  it("允许省略可选字段，只给 goal", async () => {
+    const storage = createStorage()
+    await storage.set("window:fake/model", 100_000)
+    const { execute } = await setup({ storage })
+    const result = await execute({ goal: "x".repeat(260) }, { sessionID: "ses_a" })
+    expect(result.output.status).toBe("queued")
   })
 
   it("终止态拒绝压缩", async () => {

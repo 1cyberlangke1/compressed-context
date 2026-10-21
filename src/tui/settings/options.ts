@@ -48,16 +48,30 @@ export function percentLabel(percent: number, window: number | undefined): strin
     : `${percent.toString()}% ≈ ${formatTokens(chars)}`
 }
 
+/** 输入：设置；输出：主动压缩提醒间隔标签；0 显示为关闭。 */
+export function nudgeLabel(settings: Settings, copy: Messages): string {
+  return settings.nudgeGrowthTokens === 0 ? copy.settings.off : formatTokens(settings.nudgeGrowthTokens)
+}
+
+/** 输入：设置；输出：当前摘要格式标签。 */
+export function summaryFormatLabel(settings: Settings, copy: Messages): string {
+  return settings.summaryFormat === "markdown"
+    ? copy.settings.summaryFormatMarkdown
+    : copy.settings.summaryFormatJson
+}
+
 /** 设置菜单里所有可选 action；options.ts 与 settings.tsx 共用。 */
 export const SETTINGS_ACTIONS = [
   "limit",
   "threshold",
+  "nudge",
   "autoCompress",
   "enableCompressTool",
   "enableDecompressTool",
   "blockPercent",
   "totalPercent",
   "summaryLanguage",
+  "summaryFormat",
   "showTimeline",
   "showBlockTokens",
   "show",
@@ -113,6 +127,12 @@ export function buildSettingsOptions(input: {
       category: copy.settings.categories.compress,
     },
     {
+      title: copy.settings.nudgeGrowth,
+      value: "nudge",
+      footer: nudgeLabel(settings, copy),
+      category: copy.settings.categories.compress,
+    },
+    {
       title: copy.settings.autoCompress,
       value: "autoCompress",
       footer: onOff(settings.autoCompress),
@@ -146,6 +166,12 @@ export function buildSettingsOptions(input: {
       title: copy.settings.summaryLanguage,
       value: "summaryLanguage",
       footer: summaryLanguageLabel(settings, copy),
+      category: copy.settings.categories.summary,
+    },
+    {
+      title: copy.settings.summaryFormat,
+      value: "summaryFormat",
+      footer: summaryFormatLabel(settings, copy),
       category: copy.settings.categories.summary,
     },
     {

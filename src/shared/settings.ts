@@ -18,6 +18,18 @@ export const SUMMARY_LANGUAGES = ["auto", "zh", "en"] as const
 
 export type SummaryLanguage = (typeof SUMMARY_LANGUAGES)[number]
 
+/** 摘要格式：JSON 结构化，或自由 Markdown。 */
+export const SUMMARY_FORMATS = ["json", "markdown"] as const
+
+export type SummaryFormat = (typeof SUMMARY_FORMATS)[number]
+
+export const DEFAULT_SUMMARY_FORMAT: SummaryFormat = "markdown"
+
+/** 输入：任意值；输出：是否是合法摘要格式。 */
+export function isSummaryFormat(value: unknown): value is SummaryFormat {
+  return typeof value === "string" && (SUMMARY_FORMATS as readonly string[]).includes(value)
+}
+
 /** 单条摘要的最小字符数；只用于把绝对值输入换算成百分比时的下界。 */
 export const MIN_SUMMARY_BLOCK_CHARS = 500
 
@@ -43,6 +55,11 @@ export type ContextLimit = "auto" | number
 export const MIN_TRIGGER_PERCENT = 60
 export const MAX_TRIGGER_PERCENT = 95
 export const DEFAULT_TRIGGER_PERCENT = 80
+
+/** 主动压缩提醒的默认增长量；0 表示关闭。 */
+export const DEFAULT_NUDGE_GROWTH_TOKENS = 50_000
+export const MIN_NUDGE_GROWTH_TOKENS = 0
+export const MAX_NUDGE_GROWTH_TOKENS = 200_000
 
 /** 可用窗口下限：低于它连最小摘要都放不下。 */
 export const MIN_CONTEXT_LIMIT = 50_000
@@ -83,12 +100,16 @@ export interface CompressionSettings {
   contextLimit: ContextLimit
   /** 强制压缩阈值（占用百分比） */
   triggerPercent: number
+  /** 每增长多少 token 提醒模型可以主动压缩；0 关闭 */
+  nudgeGrowthTokens: number
   /** 单条摘要最多占窗口的百分比 */
   summaryBlockPercent: number
   /** 全部摘要加起来最多占窗口的百分比 */
   summaryTotalPercent: number
   /** 摘要语言；只影响提示词 */
   summaryLanguage: SummaryLanguage
+  /** 摘要格式：JSON 结构化 / Markdown 自然语言 */
+  summaryFormat: SummaryFormat
   /** 自动压缩总开关 */
   autoCompress: boolean
   /** compress 工具开关 */
@@ -138,9 +159,11 @@ export const DEFAULT_SETTINGS: Settings = {
   locale: "auto",
   contextLimit: "auto",
   triggerPercent: DEFAULT_TRIGGER_PERCENT,
+  nudgeGrowthTokens: DEFAULT_NUDGE_GROWTH_TOKENS,
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
   summaryLanguage: "auto",
+  summaryFormat: DEFAULT_SUMMARY_FORMAT,
   autoCompress: DEFAULT_AUTO_COMPRESS,
   enableCompressTool: DEFAULT_ENABLE_COMPRESS_TOOL,
   enableDecompressTool: DEFAULT_ENABLE_DECOMPRESS_TOOL,
@@ -166,6 +189,15 @@ export function isLocaleSetting(value: unknown): value is LocaleSetting {
 /** 输入：任意值；输出：是否是合法摘要语言。 */
 export function isSummaryLanguage(value: unknown): value is SummaryLanguage {
   return typeof value === "string" && (SUMMARY_LANGUAGES as readonly string[]).includes(value)
+}
+
+/** 输入：任意值；输出：合法的主动压缩提醒增长量；0 表示关闭。 */
+export function readNudgeGrowthTokens(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  const rounded = Math.round(value)
+  if (rounded === 0) return 0
+  if (rounded < 1_000 || rounded > MAX_NUDGE_GROWTH_TOKENS) return fallback
+  return rounded
 }
 
 /** 输入：任意值；输出：合法的窗口百分比（保留一位小数）。 */
@@ -282,9 +314,11 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
       typeof percent === "number" && Number.isFinite(percent) && percent >= MIN_TRIGGER_PERCENT && percent <= MAX_TRIGGER_PERCENT
         ? Math.round(percent)
         : DEFAULT_SETTINGS.triggerPercent,
+    nudgeGrowthTokens: readNudgeGrowthTokens(value["nudgeGrowthTokens"], DEFAULT_NUDGE_GROWTH_TOKENS),
     summaryBlockPercent: blockPercent,
     summaryTotalPercent: totalPercent,
     summaryLanguage: isSummaryLanguage(value["summaryLanguage"]) ? value["summaryLanguage"] : "auto",
+    summaryFormat: isSummaryFormat(value["summaryFormat"]) ? value["summaryFormat"] : DEFAULT_SUMMARY_FORMAT,
     autoCompress: typeof value["autoCompress"] === "boolean" ? value["autoCompress"] : DEFAULT_AUTO_COMPRESS,
     enableCompressTool:
       typeof value["enableCompressTool"] === "boolean" ? value["enableCompressTool"] : DEFAULT_ENABLE_COMPRESS_TOOL,
@@ -371,9 +405,11 @@ export function serverSettingsPayload(settings: Settings): CompressionSettings {
   return {
     contextLimit: settings.contextLimit,
     triggerPercent: settings.triggerPercent,
+    nudgeGrowthTokens: settings.nudgeGrowthTokens,
     summaryBlockPercent: effectiveSummaryBlockPercent(settings),
     summaryTotalPercent: effectiveSummaryTotalPercent(settings),
     summaryLanguage: effectiveSummaryLanguage(settings),
+    summaryFormat: settings.summaryFormat,
     autoCompress: settings.autoCompress,
     enableCompressTool: settings.enableCompressTool,
     enableDecompressTool: settings.enableDecompressTool,

@@ -1,16 +1,15 @@
 import type { Plugin } from "@opencode/plugin"
 
+import { formatTokens } from "../shared/format.ts"
 import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/settings.ts"
 import { estimateCategories, totalCategories } from "../shared/tokens.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
 import { RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
-import { loadState, saveState } from "./state.ts"
+import { MAX_COMPRESSION_ATTEMPTS, loadState, saveState } from "./state.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS } from "./validate.ts"
 
-/** 连续失败达到这个次数后暂停本会话的自动压缩。 */
-const MAX_ATTEMPTS = 3
 /** 模型窗口缓存时长。 */
 const LIMIT_TTL = 60_000
 
@@ -126,7 +125,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
 
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (state.pending) return
-    if (state.attempts >= MAX_ATTEMPTS) return
+    if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return
     if (state.terminal !== undefined) return
 
     const settings = await loadServerSettings(input.ctx.storage)
@@ -161,5 +160,70 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     } catch {
       // best effort
     }
+  }
+}
+
+/** 输入：本次增长量 + 是否已有压缩块 + 自动压缩开关；输出：追加到请求尾部的提醒文本。 */
+export function buildNudgeText(growthTokens: number, hasCompressed: boolean, autoCompress: boolean): string {
+  const scope = hasCompressed ? "since the last compressed block" : "since the session started"
+  const fallback = autoCompress
+    ? "If you are busy, ignore this; automatic compression will run later."
+    : "If you are busy, ignore this; call compress when convenient."
+  return (
+    `[context-reminder] Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
+    `You may call compress to checkpoint the entire current conversation flow ${scope}. ` +
+    fallback
+  )
+}
+
+/** 主动压缩提醒的输入；messages 必须可追加，和只读的自动压缩输入区分开。 */
+export type NudgeInput = Omit<AutoInput, "messages"> & {
+  readonly messages: MessageLike[]
+}
+
+/**
+ * 输入：服务端上下文 + 可追加消息。
+ * 输出：无。
+ * 预期：按 nudgeGrowthTokens 增长量在请求尾部追加一次提醒；压缩中、终止、失败上限或
+ *       没有可压缩内容时跳过。
+ */
+export async function maybeNudge(input: NudgeInput): Promise<void> {
+  try {
+    if (isCompactionInFlight(input.sessionID)) return
+    if (isCompressionInstruction(input.messages)) return
+
+    const state = await loadState(input.ctx.storage, input.sessionID)
+    if (state.pending || state.phase !== undefined) return
+    if (state.terminal !== undefined) return
+    if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return
+
+    const settings = await loadServerSettings(input.ctx.storage)
+    if (settings.nudgeGrowthTokens <= 0) return
+
+    const total = estimateTotal(input)
+    if (state.nudgeBaselineTokens === undefined || state.nudgeBaselineTokens > total) {
+      await saveState(input.ctx.storage, input.sessionID, { ...state, nudgeBaselineTokens: total })
+      return
+    }
+
+    const growth = total - state.nudgeBaselineTokens
+    if (growth < settings.nudgeGrowthTokens) return
+
+    const eligible = eligibleMessages(input.messages)
+    const sourceChars = buildTranscript(eligible).length
+    if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
+
+    const hasCompressed = state.blocks.length > 0
+    input.messages.push({
+      role: "user",
+      content: [{ type: "text", text: buildNudgeText(growth, hasCompressed, settings.autoCompress) }],
+    })
+    await saveState(input.ctx.storage, input.sessionID, {
+      ...state,
+      nudgeBaselineTokens: total,
+      nudgeCount: (state.nudgeCount ?? 0) + 1,
+    })
+  } catch {
+    // 提醒是 best effort，不能影响模型请求。
   }
 }

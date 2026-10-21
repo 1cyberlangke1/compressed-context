@@ -1,5 +1,6 @@
 import type { Block } from "./state.ts"
-import type { SummaryFields } from "./schema.ts"
+import type { Summary } from "./schema.ts"
+import { summaryBody, summaryTitle } from "./summary.ts"
 import { formatTimestamp } from "../shared/format.ts"
 import { countText } from "../shared/tokens.ts"
 
@@ -14,40 +15,9 @@ export interface RenderOptions {
   readonly showBlockTokens?: boolean
 }
 
-function bullets(items: readonly string[]): string {
-  if (items.length === 0) return "- (none)"
-  return items.map((item) => `- ${item}`).join("\n")
-}
-
 /** 输入：结构化字段；输出：Markdown 摘要正文。 */
-export function renderSummary(summary: SummaryFields): string {
-  return [
-    "## Goal",
-    summary.goal,
-    "",
-    "## Constraints",
-    bullets(summary.constraints),
-    "",
-    "## Decisions",
-    bullets(summary.decisions),
-    "",
-    "## Progress",
-    "### Completed",
-    bullets(summary.progress.completed),
-    "### Active",
-    bullets(summary.progress.active),
-    "### Blocked",
-    bullets(summary.progress.blocked),
-    "",
-    "## Open Items",
-    bullets(summary.open_items),
-    "",
-    "## Files",
-    bullets(summary.files),
-    "",
-    "## Facts",
-    bullets(summary.facts),
-  ].join("\n")
+export function renderSummary(summary: Summary): string {
+  return summaryBody(summary)
 }
 
 /**
@@ -67,7 +37,7 @@ export function renderBlock(block: Block, options: RenderOptions = {}): string {
   if (options.showTimeline === true) {
     meta.push(formatTimestamp(block.at))
   }
-  const title = block.summary.title.trim()
+  const title = summaryTitle(block.summary).trim()
   const header = `${blockMarker(block.id)} [${meta.join(" · ")}]${title ? ` ${title}` : ""}`
   return `${header}\n\n${body}`
 }

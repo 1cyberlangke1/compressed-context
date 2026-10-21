@@ -8,6 +8,7 @@ import {
   localeArgument,
   MAX_CONTEXT_LIMIT,
   MAX_DECOMPRESS_INLINE_MAX,
+  MAX_NUDGE_GROWTH_TOKENS,
   MAX_DECOMPRESS_TEMP_CAP,
   MIN_CONTEXT_LIMIT,
   MIN_DECOMPRESS_INLINE_MAX,
@@ -22,6 +23,7 @@ import {
   type ContextLimit,
   type LocaleSetting,
   type Settings,
+  type SummaryFormat,
   type SummaryLanguage,
 } from "../shared/settings.ts"
 import { PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
@@ -98,6 +100,28 @@ export function SettingsCommand(props: {
       // server plugin not loaded
     }
   })
+
+  const openNudge = (): void => {
+    props.context.ui.dialog.show(() => (
+      <TokenDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.nudgeGrowth}
+        hint={copy().settings.nudgeGrowthHint}
+        invalid={copy().settings.nudgeGrowthInvalid}
+        placeholder="50k"
+        initial={formatTokens(props.settings.nudgeGrowthTokens)}
+        min={0}
+        max={MAX_NUDGE_GROWTH_TOKENS}
+        allowZero
+        onConfirm={(value) => {
+          void props.updateSettings((draft) => {
+            draft.nudgeGrowthTokens = value
+          })
+        }}
+      />
+    ))
+  }
 
   const openThreshold = (): void => {
     props.context.ui.dialog.show(() => (
@@ -211,6 +235,21 @@ export function SettingsCommand(props: {
     })
   }
 
+  const openSummaryFormat = async (): Promise<void> => {
+    const picked = await props.context.ui.dialog.select<SummaryFormat>({
+      title: copy().settings.summaryFormat,
+      current: props.settings.summaryFormat,
+      options: [
+        { title: copy().settings.summaryFormatJson, value: "json" },
+        { title: copy().settings.summaryFormatMarkdown, value: "markdown" },
+      ],
+    })
+    if (picked === undefined) return
+    await props.updateSettings((draft) => {
+      draft.summaryFormat = picked
+    })
+  }
+
   /** 输入：布尔设置键；输出：无；预期：翻转后重开菜单。 */
   const toggleSetting = async (key: ToggleSetting): Promise<void> => {
     await props.updateSettings((draft) => {
@@ -307,6 +346,10 @@ export function SettingsCommand(props: {
       openThreshold()
       return
     }
+    if (picked === "nudge") {
+      openNudge()
+      return
+    }
     if (picked === "blockPercent") {
       openSummaryBlock()
       return
@@ -317,6 +360,11 @@ export function SettingsCommand(props: {
     }
     if (picked === "summaryLanguage") {
       await openSummaryLanguage()
+      void openSettings()
+      return
+    }
+    if (picked === "summaryFormat") {
+      await openSummaryFormat()
       void openSettings()
       return
     }

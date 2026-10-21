@@ -38,6 +38,9 @@ export interface Messages {
     readonly thresholdHint: string
     readonly thresholdInvalid: string
     readonly thresholdPreview: (value: string) => string
+    readonly nudgeGrowth: string
+    readonly nudgeGrowthHint: string
+    readonly nudgeGrowthInvalid: string
     readonly summaryBlockPercent: string
     readonly summaryBlockPercentHint: string
     readonly summaryTotalPercent: string
@@ -46,6 +49,9 @@ export interface Messages {
     readonly windowKnown: (value: string) => string
     readonly windowUnknown: string
     readonly summaryLanguage: string
+    readonly summaryFormat: string
+    readonly summaryFormatJson: string
+    readonly summaryFormatMarkdown: string
     readonly autoCompress: string
     readonly enableCompressTool: string
     readonly enableDecompressTool: string
