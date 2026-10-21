@@ -79,7 +79,6 @@ export interface Messages {
     readonly auto: string
     readonly on: string
     readonly off: string
-    readonly close: string
   }
   readonly languages: {
     readonly zh: string

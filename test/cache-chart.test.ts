@@ -60,6 +60,20 @@ describe("renderBrailleChart", () => {
     expect(hasDots(rows[2] ?? [])).toBe(false)
   })
 
+  it("100% 和 0% 都不贴上下边", () => {
+    const top = renderBrailleChart([100], 1, 1)[0]?.[0]?.char ?? "\u2800"
+    const topBits = top.charCodeAt(0) - 0x2800
+    expect(topBits & 0x01).toBe(0)
+    expect(topBits & 0x08).toBe(0)
+    expect(topBits & 0x02).toBe(0x02)
+
+    const bottom = renderBrailleChart([0], 1, 1)[0]?.[0]?.char ?? "\u2800"
+    const bottomBits = bottom.charCodeAt(0) - 0x2800
+    expect(bottomBits & 0x40).toBe(0)
+    expect(bottomBits & 0x80).toBe(0)
+    expect(bottomBits & 0x04).toBe(0x04)
+  })
+
   it("单值画水平线", () => {
     const rows = renderBrailleChart([50], 10, 3)
     const middle = rows[1] ?? []

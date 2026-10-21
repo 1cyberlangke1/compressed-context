@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test"
 import type { Context, DialogSelectOptions } from "@opencode/plugin/tui/context"
 import { createSignal } from "solid-js"
 
+import { resolveMessages } from "../src/i18n/index.ts"
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
 import { SettingsCommand } from "../src/tui/settings.tsx"
+import { TokenDialog } from "../src/tui/settings/dialogs.tsx"
 
 interface Captured {
   options?: DialogSelectOptions<string>
@@ -109,6 +111,37 @@ describe("SettingsCommand", () => {
       captured.run?.()
       await app.waitFor(() => settings().summaryFormat === "json")
       expect(settings().summaryFormat).toBe("json")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("nudge 间隔 0 是合法值，不显示 invalid", async () => {
+    const captured: Captured = { answers: [] }
+    const context = fakeContext(captured)
+    const copy = resolveMessages("zh")
+    const app = await testRender(
+      () => (
+        <TokenDialog
+          context={context}
+          copy={copy}
+          title={copy.settings.nudgeGrowth}
+          hint={copy.settings.nudgeGrowthHint}
+          invalid={copy.settings.nudgeGrowthInvalid}
+          placeholder="50k"
+          initial="0"
+          min={0}
+          max={200_000}
+          allowZero
+          onConfirm={() => {}}
+        />
+      ),
+      { width: 60, height: 20 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.settings.nudgeGrowth))
+      expect(frame).not.toContain(copy.settings.nudgeGrowthInvalid)
     } finally {
       app.renderer.destroy()
     }

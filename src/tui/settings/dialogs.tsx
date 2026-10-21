@@ -98,12 +98,10 @@ function DialogInput(props: {
         }}
       />
       <Show
-        when={parsed()}
+        when={parsed() !== undefined}
         fallback={<text fg={theme.text.feedback.error.base}>{props.invalid}</text>}
       >
-        {(value: () => number) => (
-          <text fg={theme.text.muted}>{props.preview(value())}</text>
-        )}
+        <text fg={theme.text.muted}>{props.preview(parsed() ?? 0)}</text>
       </Show>
       <Show when={props.extra !== undefined}>
         <text fg={theme.text.muted}>{props.extra}</text>
@@ -140,7 +138,9 @@ export function TokenDialog(props: {
         if (props.allowZero === true && text.trim() === "0") return 0
         return parseTokenCount(text, props.min, props.max)
       }}
-      preview={(value) => props.copy.settings.limitPreview(formatTokens(value))}
+      preview={(value) =>
+        value === 0 ? props.copy.settings.off : props.copy.settings.limitPreview(formatTokens(value))
+      }
       onConfirm={props.onConfirm}
     />
   )

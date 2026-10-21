@@ -83,7 +83,6 @@ export const zh: Messages = {
     auto: "自动",
     on: "开",
     off: "关",
-    close: "关闭",
   },
   languages: {
     zh: "中文",

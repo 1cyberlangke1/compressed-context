@@ -155,6 +155,8 @@ describe("Panel", () => {
     try {
       const frame = await app.waitForFrame((value) => value.includes("缓存记录"))
       expect(frame).toContain("上下文构成")
+      expect(frame).toContain("缓存记录 (100.00%)")
+      expect(frame).toContain("摘要块 (2)")
       expect(frame).toContain("折线图")
       expect(frame).toContain("100%")
       expect(frame).toContain("90%")

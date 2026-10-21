@@ -35,7 +35,6 @@ describe("buildSettingsOptions", () => {
       "decompressTempCap",
       "decompressShowTokens",
       "language",
-      "close",
     ])
     expect([...new Set(options.map((option) => option.category))]).toEqual([
       "压缩",

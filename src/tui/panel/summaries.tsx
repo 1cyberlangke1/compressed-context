@@ -51,19 +51,14 @@ export function SummarySection(props: {
   return (
     <Show when={props.settings.showSummaries}>
       <box width="100%" flexDirection="column">
-        <box
-          flexDirection="row"
-          height={1}
-          justifyContent="space-between"
-          onMouseDown={toggleFold}
-        >
+        <box flexDirection="row" height={1} onMouseDown={toggleFold}>
           <box flexDirection="row" gap={1}>
             <text fg={props.theme.text.base}>{props.settings.summariesExpanded ? "▼" : "▶"}</text>
             <text fg={props.theme.text.base}>
               <b>{props.copy.summariesTitle}</b>
             </text>
+            <text fg={props.theme.text.muted}>{`(${props.blocks.length.toString()})`}</text>
           </box>
-          <text fg={props.theme.text.muted}>{props.blocks.length.toString()}</text>
         </box>
         <Show when={props.settings.summariesExpanded}>
           <Show

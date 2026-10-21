@@ -71,7 +71,6 @@ export function CacheSection(props: {
         <box
           flexDirection="row"
           height={1}
-          justifyContent="space-between"
           onMouseDown={() => {
             toggleFold("cacheExpanded")
           }}
@@ -81,12 +80,15 @@ export function CacheSection(props: {
             <text fg={props.theme.text.base}>
               <b>{props.copy.cacheTitle}</b>
             </text>
+            <Show
+              when={latestHit() !== undefined}
+              fallback={<text fg={props.theme.text.muted}>{"(--)"}</text>}
+            >
+              <text fg={hitRateColor(latestHit() ?? 0, chartColors())}>
+                {`(${formatHitRate(latestHit() ?? 0)}%)`}
+              </text>
+            </Show>
           </box>
-          <Show when={latestHit() !== undefined}>
-            <text fg={hitRateColor(latestHit() ?? 0, chartColors())}>
-              {`${formatHitRate(latestHit() ?? 0)}%`}
-            </text>
-          </Show>
         </box>
         <Show when={props.settings.cacheExpanded}>
           <box paddingLeft={2} flexDirection="column" width="100%">

@@ -82,7 +82,6 @@ export const SETTINGS_ACTIONS = [
   "decompressTempCap",
   "decompressShowTokens",
   "language",
-  "close",
 ] as const
 
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number]
@@ -232,11 +231,6 @@ export function buildSettingsOptions(input: {
       title: copy.settings.language,
       value: "language",
       footer: localeLabel(settings, copy),
-      category: copy.settings.categories.interface,
-    },
-    {
-      title: copy.settings.close,
-      value: "close",
       category: copy.settings.categories.interface,
     },
   ]

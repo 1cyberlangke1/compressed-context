@@ -110,7 +110,7 @@ export function SettingsCommand(props: {
         hint={copy().settings.nudgeGrowthHint}
         invalid={copy().settings.nudgeGrowthInvalid}
         placeholder="50k"
-        initial={formatTokens(props.settings.nudgeGrowthTokens)}
+        initial={props.settings.nudgeGrowthTokens === 0 ? "0" : formatTokens(props.settings.nudgeGrowthTokens)}
         min={0}
         max={MAX_NUDGE_GROWTH_TOKENS}
         allowZero

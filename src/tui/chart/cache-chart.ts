@@ -184,8 +184,14 @@ export function renderBrailleChart(
   const dotWidth = columns * 2
   const dotHeight = rows * 4
   const points = new Set<number>()
+  // 上下各留 1 个点阵行，避免 0%/100% 贴边看起来越过刻度。
+  const top = 1
+  const bottom = Math.max(top, dotHeight - 2)
   const yOf = (value: number): number =>
-    Math.min(dotHeight - 1, Math.round((1 - clampPercent(value) / 100) * dotHeight))
+    Math.min(
+      bottom,
+      Math.max(top, Math.round(top + (1 - clampPercent(value) / 100) * (bottom - top))),
+    )
 
   if (values.length === 1) {
     const value = values[0] ?? 0
