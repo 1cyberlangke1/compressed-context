@@ -679,7 +679,8 @@ try {
   const invalidState = stateFor(invalid)
   assert.equal(invalidState?.pending, undefined, "failed T1 must not leave pending")
   assert.equal(invalidState?.phase, undefined, "failed T1 must not leave phase")
-  assert.match(String(invalidState?.lastError ?? ""), /not valid JSON/)
+  // 默认 summaryFormat=markdown，短回复会先被长度校验拒绝，不一定是 JSON 解析错误。
+  assert.match(String(invalidState?.lastError ?? ""), /not valid JSON|summary too short/)
   console.log("case passed: invalid T1 fails cleanly")
 
   // case: T1 结构非法（goal 为空）→ failed，state 不残留

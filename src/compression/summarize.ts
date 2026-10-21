@@ -299,6 +299,20 @@ function parseJsonSafe(text: string): unknown {
   }
 }
 
+/**
+ * 输入：模型返回的 Markdown 文本。
+ * 输出：优先按 JSON 解析，失败再按 Markdown 原文解析。
+ * 预期：模型无视格式要求直接回 JSON 时，不把原始 JSON 当成摘要正文。
+ */
+function decodeMarkdownSummary(text: string): Summary | undefined {
+  const parsed = parseJsonSafe(text)
+  if (parsed !== undefined) {
+    const fromJson = toSummary(parsed, "markdown")
+    if (fromJson !== undefined) return fromJson
+  }
+  return toSummary(text, "markdown")
+}
+
 async function runSummaryPrompt(
   base: string,
   sourceChars: number,
@@ -320,7 +334,7 @@ async function runSummaryPrompt(
       throw error
     }
 
-    const decoded = format === "markdown" ? toSummary(text, "markdown") : toSummary(parseJsonSafe(text), "json")
+    const decoded = format === "markdown" ? decodeMarkdownSummary(text) : toSummary(parseJsonSafe(text), "json")
     if (decoded) {
       const result = validateSummary(decoded, sourceChars, MIN_SUMMARY_CHARS, maxChars)
       if (result.ok) return decoded
@@ -393,11 +407,17 @@ function splitCandidate(value: unknown): { readonly candidate: unknown; readonly
   return { candidate, summary }
 }
 
-/** 输入：Markdown 回复；输出：candidate 行 + 剩余正文。 */
+/**
+ * 输入：Markdown 回复；输出：candidate + 剩余正文。
+ * 预期：接受 `candidate: N`（可带标题/加粗/中文冒号），也接受模型直接返回 JSON；
+ *       两种形状都解析失败才返回 undefined。
+ */
 function splitMarkdownCandidate(text: string): { readonly candidate: unknown; readonly summary: unknown } | undefined {
-  const match = /^\s*candidate:\s*(\d+)\s*$/m.exec(text)
-  if (match === null) return undefined
-  return { candidate: Number(match[1]), summary: text.replace(match[0], "").trim() }
+  const match = /^\s*(?:#{1,6}\s*)?(?:\*\*)?candidate(?:\*\*)?\s*[:：]\s*(\d+)\s*$/im.exec(text)
+  if (match !== null) {
+    return { candidate: Number(match[1]), summary: text.replace(match[0], "").trim() }
+  }
+  return splitCandidate(parseJsonSafe(text))
 }
 
 async function runChoicePrompt(

@@ -109,6 +109,28 @@ describe("Markdown 摘要", () => {
     }
   })
 
+  it("markdown 模式优先解析 JSON，不把原始 JSON 当正文", async () => {
+    const json = {
+      title: "E2E T1",
+      goal: "verify JSON fallback in markdown mode",
+      constraints: [],
+      decisions: [],
+      progress: { completed: [], active: [], blocked: [] },
+      open_items: [],
+      files: [],
+      facts: ["中".repeat(200)],
+    }
+    const result = await summarize({
+      transcript: "x",
+      sourceChars: 10_000,
+      format: "markdown",
+      generate: { text: () => Promise.resolve({ text: JSON.stringify(json) }) },
+    })
+    expect(result).toBeDefined()
+    expect(result !== undefined && isMarkdownSummary(result)).toBe(false)
+    if (result !== undefined && !isMarkdownSummary(result)) expect(result.title).toBe("E2E T1")
+  })
+
   it("T2 支持 candidate 行 + markdown 正文", async () => {
     const result = await summarizeWithChoice({
       context: markdown,
@@ -117,6 +139,45 @@ describe("Markdown 摘要", () => {
       format: "markdown",
       generate: {
         text: () => Promise.resolve({ text: `candidate: 1\n${markdown}` }),
+      },
+    })
+    expect(result?.candidate.index).toBe(1)
+    expect(result?.summary !== undefined && isMarkdownSummary(result.summary)).toBe(true)
+  })
+
+  it("T2 markdown 模式兼容模型直接返回 JSON", async () => {
+    const jsonSummary = {
+      candidate: 1,
+      title: "E2E T2",
+      goal: "verify JSON fallback in markdown mode",
+      constraints: [],
+      decisions: [],
+      progress: { completed: [], active: [], blocked: [] },
+      open_items: [],
+      files: [],
+      facts: ["中".repeat(200)],
+    }
+    const result = await summarizeWithChoice({
+      context: markdown,
+      task: "continue",
+      candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
+      format: "markdown",
+      generate: {
+        text: () => Promise.resolve({ text: JSON.stringify(jsonSummary) }),
+      },
+    })
+    expect(result?.candidate.index).toBe(1)
+    expect(result?.summary).toBeDefined()
+  })
+
+  it("T2 markdown 模式接受代码围栏里的 candidate 行", async () => {
+    const result = await summarizeWithChoice({
+      context: markdown,
+      task: "continue",
+      candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
+      format: "markdown",
+      generate: {
+        text: () => Promise.resolve({ text: `\`\`\`markdown\ncandidate: 1\n${markdown}\`\`\`` }),
       },
     })
     expect(result?.candidate.index).toBe(1)
