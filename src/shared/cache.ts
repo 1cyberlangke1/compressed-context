@@ -12,7 +12,7 @@ export const CACHE_HISTORY_PREFIX = "cache:history:"
 /** 只保留最近 10 次请求。 */
 export const CACHE_HISTORY_LIMIT = 10
 
-/** 一条缓存命中样本；hitRate 是 0..100 的整数。 */
+/** 一条缓存命中样本；hitRate 是 0..100，向下截断到两位小数。 */
 export interface CacheSample {
   readonly messageID: string
   readonly at: number
@@ -29,6 +29,21 @@ export interface CacheHistory {
 }
 
 export const EMPTY_CACHE_HISTORY: CacheHistory = { v: 1, samples: [] }
+
+/**
+ * 输入：总输入 token + 命中 token。
+ * 输出：0..100 的百分比，向下截断到两位小数。
+ * 预期：不四舍五入；99.999% 显示 99.99，不会变成 100.00。
+ */
+export function hitRatePercent(input: number, cached: number): number {
+  if (input <= 0) return 0
+  return Math.floor(Math.min(1, cached / input) * 10_000) / 100
+}
+
+/** 输入：命中率；输出：固定两位小数的百分比文本（不含 `%`）。 */
+export function formatHitRate(hitRate: number): string {
+  return hitRate.toFixed(2)
+}
 
 /** 输入：sessionID；输出：该会话的 storage key。 */
 export function cacheHistoryKey(sessionID: string): string {
@@ -65,7 +80,7 @@ export function sampleFromMessage(message: CacheMessage, fallbackAt: number): Ca
     input,
     output,
     cached,
-    hitRate: input > 0 ? Math.round((cached / input) * 100) : 0,
+    hitRate: hitRatePercent(input, cached),
   }
 }
 
@@ -140,7 +155,7 @@ export function parseCacheHistory(value: unknown): CacheHistory {
       input,
       output,
       cached,
-      hitRate: input > 0 ? Math.round((cached / input) * 100) : 0,
+      hitRate: hitRatePercent(input, cached),
     })
   }
   return { v: 1, samples: normalizeSamples(samples) }

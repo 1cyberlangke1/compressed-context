@@ -5,6 +5,8 @@ import {
   appendCacheSamples,
   cacheHistoryEquals,
   cacheHistoryKey,
+  formatHitRate,
+  hitRatePercent,
   parseCacheHistory,
   sampleFromMessage,
   type CacheMessage,
@@ -59,6 +61,13 @@ describe("sampleFromMessage", () => {
       cached: 70,
       hitRate: 70,
     })
+  })
+
+  it("命中率向下截断到两位小数，不四舍五入", () => {
+    expect(hitRatePercent(3, 2)).toBe(66.66)
+    expect(hitRatePercent(100_000, 99_999)).toBe(99.99)
+    expect(formatHitRate(66.66)).toBe("66.66")
+    expect(formatHitRate(100)).toBe("100.00")
   })
 
   it("输入为 0 时命中率为 0", () => {

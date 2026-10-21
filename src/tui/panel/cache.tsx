@@ -2,7 +2,7 @@ import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, For, Show } from "solid-js"
 
 import type { Messages } from "../../i18n/index.ts"
-import type { CacheSample } from "../../shared/cache.ts"
+import { formatHitRate, type CacheSample } from "../../shared/cache.ts"
 import { formatTokens } from "../../shared/format.ts"
 import type { Settings } from "../../shared/settings.ts"
 import {
@@ -84,7 +84,7 @@ export function CacheSection(props: {
           </box>
           <Show when={latestHit() !== undefined}>
             <text fg={hitRateColor(latestHit() ?? 0, chartColors())}>
-              {`${(latestHit() ?? 0).toString()}%`}
+              {`${formatHitRate(latestHit() ?? 0)}%`}
             </text>
           </Show>
         </box>
@@ -161,7 +161,7 @@ export function CacheSection(props: {
                       <text width={5} textAlign="right" fg={props.theme.text.muted}>
                         {props.copy.cacheCached}
                       </text>
-                      <text width={5} textAlign="right" fg={props.theme.text.muted}>
+                      <text width={7} textAlign="right" fg={props.theme.text.muted}>
                         {props.copy.cacheHit}
                       </text>
                     </box>
@@ -178,11 +178,11 @@ export function CacheSection(props: {
                             {formatTokens(sample.cached)}
                           </text>
                           <text
-                            width={5}
+                            width={7}
                             textAlign="right"
                             fg={hitRateColor(sample.hitRate, chartColors())}
                           >
-                            {`${sample.hitRate.toString()}%`}
+                            {`${formatHitRate(sample.hitRate)}%`}
                           </text>
                         </box>
                       )}
