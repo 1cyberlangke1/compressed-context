@@ -113,6 +113,37 @@ function estimateTotal(input: AutoInput): number {
   )
 }
 
+/** 单个 assistant 的真实 prompt 大小；output/reasoning 不属于本轮输入。 */
+function promptTokens(tokens: {
+  readonly input: number
+  readonly cache: { readonly read: number; readonly write: number }
+}): number {
+  return tokens.input + tokens.cache.read + tokens.cache.write
+}
+
+/**
+ * 输入：服务端上下文 + sessionID。
+ * 输出：最后一个 assistant 的真实 prompt token；没有 usage 时 undefined。
+ * 预期：优先使用 provider 返回的 usage；失败时让调用方回退到估算。
+ */
+async function measuredPromptTokens(
+  ctx: Plugin.Context,
+  sessionID: string,
+): Promise<number | undefined> {
+  try {
+    const messages = await ctx.session.context({ sessionID })
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message?.type !== "assistant" || message.tokens === undefined) continue
+      const total = promptTokens(message.tokens)
+      if (total > 0) return total
+    }
+  } catch {
+    // 没有 session.context 或 provider 没返回 usage：调用方回退到估算
+  }
+  return undefined
+}
+
 /**
  * 输入：服务端上下文 + 当前请求。
  * 输出：无。
@@ -142,7 +173,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
       return
     }
 
-    const total = estimateTotal(input)
+    const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
     if (total < limit * (settings.triggerPercent / 100)) return
     const eligible = eligibleMessages(input.messages)
     const sourceChars = buildTranscript(eligible).length
@@ -200,7 +231,7 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     const settings = await loadServerSettings(input.ctx.storage)
     if (settings.nudgeGrowthTokens <= 0) return
 
-    const total = estimateTotal(input)
+    const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
     if (state.nudgeBaselineTokens === undefined || state.nudgeBaselineTokens > total) {
       await saveState(input.ctx.storage, input.sessionID, { ...state, nudgeBaselineTokens: total })
       return

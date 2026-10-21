@@ -153,42 +153,44 @@ export function CacheSection(props: {
                     when={props.samples.length > 0}
                     fallback={<text fg={props.theme.text.muted}>{props.copy.noData}</text>}
                   >
-                    <box flexDirection="row" gap={1}>
-                      <text width={5} textAlign="right" fg={props.theme.text.muted}>
-                        {props.copy.cacheInput}
-                      </text>
-                      <text width={5} textAlign="right" fg={props.theme.text.muted}>
-                        {props.copy.cacheOutput}
-                      </text>
-                      <text width={5} textAlign="right" fg={props.theme.text.muted}>
-                        {props.copy.cacheCached}
-                      </text>
-                      <text width={7} textAlign="right" fg={props.theme.text.muted}>
-                        {props.copy.cacheHit}
-                      </text>
+                    <box flexDirection="column" width="100%" paddingLeft={2}>
+                      <box flexDirection="row" gap={1}>
+                        <text width={5} textAlign="left" fg={props.theme.text.muted}>
+                          {props.copy.cacheInput}
+                        </text>
+                        <text width={5} textAlign="left" fg={props.theme.text.muted}>
+                          {props.copy.cacheOutput}
+                        </text>
+                        <text width={5} textAlign="left" fg={props.theme.text.muted}>
+                          {props.copy.cacheCached}
+                        </text>
+                        <text width={7} textAlign="left" fg={props.theme.text.muted}>
+                          {props.copy.cacheHit}
+                        </text>
+                      </box>
+                      <For each={props.samples}>
+                        {(sample) => (
+                          <box flexDirection="row" gap={1}>
+                            <text width={5} textAlign="left" fg={props.theme.text.muted}>
+                              {formatTokens(sample.input)}
+                            </text>
+                            <text width={5} textAlign="left" fg={props.theme.text.muted}>
+                              {formatTokens(sample.output)}
+                            </text>
+                            <text width={5} textAlign="left" fg={props.theme.text.muted}>
+                              {formatTokens(sample.cached)}
+                            </text>
+                            <text
+                              width={7}
+                              textAlign="left"
+                              fg={hitRateColor(sample.hitRate, chartColors())}
+                            >
+                              {`${formatHitRate(sample.hitRate)}%`}
+                            </text>
+                          </box>
+                        )}
+                      </For>
                     </box>
-                    <For each={props.samples}>
-                      {(sample) => (
-                        <box flexDirection="row" gap={1}>
-                          <text width={5} textAlign="right" fg={props.theme.text.muted}>
-                            {formatTokens(sample.input)}
-                          </text>
-                          <text width={5} textAlign="right" fg={props.theme.text.muted}>
-                            {formatTokens(sample.output)}
-                          </text>
-                          <text width={5} textAlign="right" fg={props.theme.text.muted}>
-                            {formatTokens(sample.cached)}
-                          </text>
-                          <text
-                            width={7}
-                            textAlign="right"
-                            fg={hitRateColor(sample.hitRate, chartColors())}
-                          >
-                            {`${formatHitRate(sample.hitRate)}%`}
-                          </text>
-                        </box>
-                      )}
-                    </For>
                   </Show>
                 </Show>
               </box>

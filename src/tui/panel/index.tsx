@@ -109,16 +109,18 @@ export function Panel(props: {
   return (
     <Show when={props.settings.enabled}>
       <box width="100%" flexDirection="column">
-        <box flexDirection="row" height={1} justifyContent="space-between" onMouseDown={toggleExpanded}>
+        <box flexDirection="row" height={1} onMouseDown={toggleExpanded}>
           <box flexDirection="row" gap={1}>
             <text fg={theme.text.base}>{props.settings.expanded ? "▼" : "▶"}</text>
             <text fg={theme.text.base}>
               <b>{copy().title}</b>
             </text>
+            <Show when={props.settings.contextLimit !== "auto" && percent() !== undefined}>
+              <text fg={occupancyColor(percent() ?? 0, theme)}>
+                {`(${(percent() ?? 0).toString()}%)`}
+              </text>
+            </Show>
           </box>
-          <Show when={props.settings.contextLimit !== "auto" && percent() !== undefined}>
-            <text fg={theme.text.muted}>{`${(percent() ?? 0).toString()}%`}</text>
-          </Show>
         </box>
         <Show when={data.terminal()}>
           <text fg={theme.text.feedback.error.base} wrapMode="word">
@@ -144,22 +146,23 @@ export function Panel(props: {
               </box>
             )}
           </For>
-
-          <CacheSection
-            theme={theme}
-            copy={copy()}
-            settings={props.settings}
-            updateSettings={props.updateSettings}
-            samples={data.cache()}
-          />
-          <SummarySection
-            theme={theme}
-            copy={copy()}
-            settings={props.settings}
-            updateSettings={props.updateSettings}
-            blocks={data.blocks()}
-          />
         </Show>
+
+        <CacheSection
+          theme={theme}
+          copy={copy()}
+          settings={props.settings}
+          updateSettings={props.updateSettings}
+          samples={data.cache()}
+        />
+        <SummarySection
+          context={props.context}
+          theme={theme}
+          copy={copy()}
+          settings={props.settings}
+          updateSettings={props.updateSettings}
+          blocks={data.blocks()}
+        />
       </box>
     </Show>
   )

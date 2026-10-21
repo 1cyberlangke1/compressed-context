@@ -1,3 +1,5 @@
+import { stringify, toolInput, toolResult, toolResultText } from "../shared/parts.ts"
+
 /** 媒体 source 的最小结构；bytes/base64 可落盘，url/ref 只保留引用。 */
 export interface MediaSourceLike {
   readonly type: string
@@ -16,6 +18,13 @@ export interface ContentPartLike {
   readonly name?: string | undefined
   readonly input?: unknown
   readonly result?: unknown
+  readonly state?:
+    | {
+        readonly input?: unknown
+        readonly content?: unknown
+        readonly output?: unknown
+      }
+    | undefined
   readonly filename?: string | undefined
   readonly media?:
     | {
@@ -32,16 +41,23 @@ export interface MessageLike {
   readonly id?: string | undefined
   readonly role: string
   readonly content: readonly ContentPartLike[]
+  /** v2 用户消息把正文放在 text，而不是 content 数组。 */
+  readonly text?: string | null | undefined
 }
 
 export const CHECKPOINT_PREFIX = "<conversation-checkpoint>"
 
 /** 输入：消息；输出：纯文本（只拼 text part）。 */
 export function messageText(message: MessageLike): string {
-  return message.content
+  const direct = typeof message.text === "string" ? message.text : ""
+  const content: readonly ContentPartLike[] = Array.isArray(message.content)
+    ? message.content
+    : []
+  const parts = content
     .filter((part) => part.type === "text")
     .map((part) => part.text ?? "")
     .join("\n")
+  return [direct, parts].filter((text) => text.length > 0).join("\n")
 }
 
 /** 输入：消息；输出：是否是 checkpoint 消息。 */
@@ -83,8 +99,18 @@ export function messageRange(
 export function textChars(messages: readonly MessageLike[]): number {
   let total = 0
   for (const message of messages) {
-    for (const part of message.content) {
-      if (part.type === "text") total += (part.text ?? "").length
+    if (typeof message.text === "string") total += message.text.length
+    const content: readonly ContentPartLike[] = Array.isArray(message.content)
+      ? message.content
+      : []
+    for (const part of content) {
+      if (part.type === "text") {
+        total += (part.text ?? "").length
+        continue
+      }
+      if (part.type === "tool" || part.type === "tool-call" || part.type === "tool-result") {
+        total += `${stringify(toolInput(part))}${toolResultText(toolResult(part))}`.length
+      }
     }
   }
   return total

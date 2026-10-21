@@ -1,6 +1,6 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { SyntaxStyle, type RGBA } from "@opentui/core"
-import { For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 
 import type { Messages } from "../../i18n/index.ts"
 import type { SummaryBlock } from "../../shared/blocks.ts"
@@ -23,17 +23,72 @@ function getSyntaxStyle(): SyntaxStyle {
 }
 
 /**
+ * 输入：TUI 上下文 + 主题 + 块。
+ * 输出：占满可用高度的 markdown 阅读弹窗。
+ * 预期：标题保持 `[T1] b1 : title`，正文交给 markdown 渲染器，esc 关闭。
+ */
+export function SummaryDialog(props: {
+  readonly context: Context
+  readonly theme: Context["theme"]
+  readonly block: SummaryBlock
+}) {
+  const height = createMemo(() => Math.max(8, Math.min(30, props.context.renderer.height - 8)))
+  return (
+    <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text fg={props.theme.text.base} wrapMode="word">
+          <b>{`[T${props.block.tier.toString()}] ${props.block.id} : ${props.block.title}`}</b>
+        </text>
+        <text
+          fg={props.theme.text.muted}
+          onMouseUp={() => {
+            props.context.ui.dialog.clear()
+          }}
+        >
+          esc
+        </text>
+      </box>
+      <scrollbox height={height()} scrollY={true} focused={true} width="100%">
+        <markdown
+          content={props.block.body}
+          syntaxStyle={getSyntaxStyle()}
+          fg={props.theme.text.base}
+          conceal={true}
+          tableOptions={{ widthMode: "full", style: "columns" }}
+        />
+      </scrollbox>
+    </box>
+  )
+}
+
+/**
  * 输入：主题 + 文案 + 设置 + 写入函数 + 摘要块。
- * 输出：可折叠的摘要块列表；展开后固定 8 行 markdown 滚动区。
- * 预期：只展示服务端返回的 active 链；同时只展开一个块。
+ * 输出：可折叠的摘要块列表；点击标题打开 markdown 阅读弹窗。
+ * 预期：只展示服务端返回的 active 链；hover 只让箭头动，标题和背景保持稳定。
  */
 export function SummarySection(props: {
+  readonly context: Context
   readonly theme: Context["theme"]
   readonly copy: Messages
   readonly settings: Settings
   readonly updateSettings: UpdateSettings
   readonly blocks: readonly SummaryBlock[]
 }) {
+  const [hovered, setHovered] = createSignal<string | undefined>(undefined)
+  const [frame, setFrame] = createSignal(0)
+
+  // 只有 hover 时跑两帧；鼠标移出或销毁时清理，避免后台定时器。
+  createEffect(() => {
+    if (hovered() === undefined) {
+      setFrame(0)
+      return
+    }
+    const timer = setInterval(() => setFrame((value) => (value + 1) % 2), 180)
+    onCleanup(() => {
+      clearInterval(timer)
+    })
+  })
+
   /** 输入：无；输出：无；预期：翻转摘要区折叠状态。 */
   const toggleFold = (): void => {
     void props.updateSettings((draft) => {
@@ -41,11 +96,12 @@ export function SummarySection(props: {
     })
   }
 
-  /** 输入：块 id；输出：无；预期：同时只展开一个块，再点一次收起。 */
-  const toggleBlock = (id: string): void => {
-    void props.updateSettings((draft) => {
-      draft.expandedBlockId = draft.expandedBlockId === id ? "" : id
-    })
+  /** 输入：块；输出：无；预期：打开该块的 markdown 阅读弹窗。 */
+  const openSummary = (block: SummaryBlock): void => {
+    props.context.ui.dialog.show(() => (
+      <SummaryDialog context={props.context} theme={props.theme} block={block} />
+    ))
+    props.context.ui.dialog.set({ size: "large", centered: true })
   }
 
   return (
@@ -80,35 +136,39 @@ export function SummarySection(props: {
                     <box flexDirection="column" width="100%">
                       <box
                         flexDirection="row"
-                        onMouseDown={() => {
-                          toggleBlock(block.id)
+                        gap={1}
+                        onMouseOver={() => {
+                          setHovered(block.id)
+                        }}
+                        onMouseOut={() => {
+                          setHovered((current) => (current === block.id ? undefined : current))
+                        }}
+                        onMouseUp={() => {
+                          openSummary(block)
                         }}
                       >
-                        <text wrapMode="word" flexGrow={1}>
-                          <span style={{ fg: props.theme.text.base }}>
-                            {props.settings.expandedBlockId === block.id ? "▼" : "▶"}
-                          </span>
+                        <text width={2} fg={tierColor(block.tier, props.theme)}>
+                          {hovered() === block.id ? (frame() === 0 ? "▸ " : " ▸") : "  "}
+                        </text>
+                        <text fg={props.theme.text.base} wrapMode="word" flexGrow={1}>
                           <span style={{ fg: tierColor(block.tier, props.theme) }}>
-                            {` ${block.id}: ${block.title}`}
+                            <b>{`[T${block.tier.toString()}]`}</b>
                           </span>
                           <span style={{ fg: props.theme.text.muted }}>
-                            {`  [T${block.tier.toString()}]${
-                              props.settings.showBlockTokens
-                                ? `  ≈${formatTokens(block.tokensAfter)}`
-                                : ""
-                            }`}
+                            {` ${block.id} : `}
                           </span>
+                          <span style={{ fg: props.theme.text.base }}>{block.title}</span>
+                          <Show when={props.settings.showBlockTokens}>
+                            <span style={{ fg: props.theme.text.muted }}>
+                              {`  ≈${formatTokens(block.tokensAfter)}`}
+                            </span>
+                          </Show>
                         </text>
                       </box>
                       <Show when={meta() !== ""}>
                         <text fg={props.theme.text.muted} wrapMode="word">
                           {`  ${meta()}`}
                         </text>
-                      </Show>
-                      <Show when={props.settings.expandedBlockId === block.id}>
-                        <scrollbox height={8} scrollY={true} width="100%">
-                          <markdown content={block.body} syntaxStyle={getSyntaxStyle()} />
-                        </scrollbox>
                       </Show>
                     </box>
                   )

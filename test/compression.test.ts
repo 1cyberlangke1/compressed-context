@@ -104,7 +104,25 @@ function fakeCtx(
   storage: StorageLike,
   text: (input: { prompt: string }) => Promise<{ text: string }>,
   compact: () => Promise<void>,
+  usage?: number,
 ): Plugin.Context {
+  const measured =
+    usage === undefined
+      ? {}
+      : {
+          context: () =>
+            Promise.resolve([
+              {
+                type: "assistant",
+                tokens: {
+                  input: usage,
+                  output: 0,
+                  reasoning: 0,
+                  cache: { read: 0, write: 0 },
+                },
+              },
+            ]),
+        }
   return {
     storage,
     model: { list: () => Promise.resolve({ data: [] }) },
@@ -112,6 +130,7 @@ function fakeCtx(
     session: {
       compact,
       generate: (input: { sessionID: string; prompt: string }) => text({ prompt: input.prompt }),
+      ...measured,
     },
   } as unknown as Plugin.Context
 }
@@ -626,6 +645,37 @@ describe("自动压缩", () => {
     const state = await loadState(storage, "ses_test")
     expect(compacts).toBe(1)
     expect(state.pending).toBeUndefined()
+  })
+
+  it("真实 usage 达到阈值时触发，即使文本估算很小", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      40_000,
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: [
+        message("user", "hi", "m1"),
+        {
+          id: "m2",
+          role: "assistant",
+          content: [{ type: "text", text: "x".repeat(6_000) }],
+        },
+        message("user", "continue", "m3"),
+      ],
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
   })
 
   it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {

@@ -2,6 +2,7 @@ import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createSignal } from "solid-js"
+import type { JSX } from "solid-js"
 
 import type { SummaryBlock } from "../src/shared/blocks.ts"
 import type { CacheSample } from "../src/shared/cache.ts"
@@ -77,12 +78,26 @@ function fakeBlocks(): SummaryBlock[] {
   ]
 }
 
+let capturedDialog: (() => JSX.Element) | undefined
+
 /** 输入：无；输出：Panel 需要的最小上下文。 */
 function fakeContext(): Context {
   const samples = fakeSamples()
   const blocks = fakeBlocks()
   return {
     theme: fakeTheme(),
+    renderer: { height: 40 },
+    ui: {
+      dialog: {
+        show: (render: () => JSX.Element) => {
+          capturedDialog = render
+        },
+        set: () => {},
+        clear: () => {
+          capturedDialog = undefined
+        },
+      },
+    },
     data: {
       session: {
         get: () => ({ location: {} }),
@@ -166,9 +181,9 @@ describe("Panel", () => {
       expect(frame).toContain("输出")
       expect(frame).toContain("缓存")
       expect(frame).toContain("命中")
-      expect(frame).toContain("摘要块")
-      expect(frame).toContain("b1: first")
-      expect(frame).toContain("[T1]")
+      expect(frame).toContain("摘要块 (2)")
+      expect(frame).toContain("[T1] b1 : first")
+      expect(frame).toContain("[T2] b2 : merged")
       expect(frame).toContain("≈10")
       expect(frame).toContain("merged #b1")
     } finally {
@@ -190,15 +205,53 @@ describe("Panel", () => {
     }
   })
 
-  test("点击摘要块展开 markdown，再点击收起", async () => {
+  test("hover 显示浮动箭头，移出后消失", async () => {
     const app = await testRender(() => <Fixture />, { width: 42, height: 80 })
     app.renderer.start()
     try {
-      await app.waitForFrame((value) => value.includes("b1: first"))
-      await app.mockMouse.click(2, rowOf(app, "b1: first"))
-      await app.waitForFrame((value) => value.includes("BODY_MARKER"))
-      await app.mockMouse.click(2, rowOf(app, "b1: first"))
-      await app.waitForFrame((value) => !value.includes("BODY_MARKER"))
+      const frame = await app.waitForFrame((value) => value.includes("[T1] b1 : first"))
+      expect(frame).not.toContain("▸")
+      const row = rowOf(app, "[T1] b1 : first")
+      await app.mockMouse.moveTo(2, row)
+      await app.waitForFrame((value) => value.includes("▸"))
+      await app.mockMouse.moveTo(2, 0)
+      await app.waitForFrame((value) => !value.includes("▸"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("点击摘要块打开 markdown 弹窗", async () => {
+    capturedDialog = undefined
+    const app = await testRender(() => <Fixture />, { width: 42, height: 80 })
+    app.renderer.start()
+    try {
+      await app.waitForFrame((value) => value.includes("[T1] b1 : first"))
+      await app.mockMouse.click(2, rowOf(app, "[T1] b1 : first"))
+      expect(capturedDialog).toBeDefined()
+      const dialog = await testRender(capturedDialog!, { width: 50, height: 24 })
+      dialog.renderer.start()
+      try {
+        const frame = await dialog.waitForFrame((value) => value.includes("BODY_MARKER"))
+        expect(frame).toContain("[T1] b1 : first")
+      } finally {
+        dialog.renderer.destroy()
+      }
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("折叠上下文构成时缓存与摘要仍然可见", async () => {
+    const app = await testRender(() => <Fixture initial={{ expanded: false }} />, {
+      width: 42,
+      height: 60,
+    })
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes("上下文构成"))
+      expect(frame).toContain("缓存记录")
+      expect(frame).toContain("摘要块")
     } finally {
       app.renderer.destroy()
     }

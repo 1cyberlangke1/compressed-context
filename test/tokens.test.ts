@@ -70,6 +70,30 @@ describe("estimateCategories", () => {
     expect(result.tool).toBe(2)
   })
 
+  it("v2 tool part 的 state.input / state.content 都计入 tool", () => {
+    const result = estimateCategories({
+      system: [],
+      tools: {},
+      messages: [
+        {
+          text: "abcd",
+          content: [
+            {
+              type: "tool",
+              name: "shell",
+              state: {
+                input: "abcd",
+                content: [{ type: "text", text: "efgh" }],
+              },
+            },
+          ],
+        },
+      ],
+    })
+    expect(result.text).toBe(1)
+    expect(result.tool).toBe(4)
+  })
+
   it("checkpoint 的 summary 与 recent 分开计数", () => {
     const result = estimateCategories({
       system: [],

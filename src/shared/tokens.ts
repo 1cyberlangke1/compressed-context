@@ -1,3 +1,5 @@
+import { stringify, toolInput, toolResult, toolResultText } from "./parts.ts"
+
 /**
  * 上下文分类 token 估算。
  *
@@ -14,12 +16,21 @@ export interface ContentPartLike {
   readonly name?: string | undefined
   readonly input?: unknown
   readonly result?: unknown
+  readonly state?:
+    | {
+        readonly input?: unknown
+        readonly content?: unknown
+        readonly output?: unknown
+      }
+    | undefined
   readonly media?: { readonly mediaType?: string | undefined } | undefined
 }
 
 export interface MessageLike {
   readonly role?: string
   readonly content: readonly ContentPartLike[]
+  /** v2 用户消息把正文放在 text，而不是 content 数组。 */
+  readonly text?: string | null | undefined
 }
 
 export interface SystemPartLike {
@@ -54,18 +65,6 @@ export function countText(text: string): number {
   return cjkCount + Math.ceil((text.length - cjkCount) / 4)
 }
 
-/** 把任意工具输入 / 结果转成可计数文本；不可序列化时按空串处理。 */
-function stringify(value: unknown): string {
-  if (typeof value === "string") return value
-  if (value === undefined) return ""
-  try {
-    const encoded: unknown = JSON.stringify(value)
-    return typeof encoded === "string" ? encoded : ""
-  } catch {
-    return ""
-  }
-}
-
 /** 输入：媒体类型（可能缺失）；输出：token 估算；预期：非图片/PDF 返回 0。 */
 function countMedia(mediaType: string | undefined): number {
   if (mediaType === undefined) return 0
@@ -75,24 +74,28 @@ function countMedia(mediaType: string | undefined): number {
   return 0
 }
 
-/** 输入：tool-result 里的单个 content 项；输出：token 估算。 */
+/** 输入：工具结果里的单个 content 项；输出：token 估算。 */
 function countToolResultItem(item: unknown): number {
   if (typeof item === "object" && item !== null) {
     const typed = item as { readonly type?: unknown; readonly text?: unknown; readonly media?: { readonly mediaType?: string } }
     if (typed.type === "text" && typeof typed.text === "string") return countText(typed.text)
     if (typed.type === "media") return countMedia(typed.media?.mediaType)
   }
-  return countText(stringify(item))
+  return countText(toolResultText(item))
 }
 
-/** 输入：tool-result 的 result 值；输出：token 估算。 */
+/** 输入：工具结果；输出：token 估算；预期：v2 的 content 数组和旧 result 都能计数。 */
 function countToolResult(result: unknown): number {
-  if (typeof result !== "object" || result === null) return countText(stringify(result))
-  const typed = result as { readonly value?: unknown }
-  if (Array.isArray(typed.value)) {
-    return typed.value.reduce<number>((sum, item) => sum + countToolResultItem(item), 0)
+  if (Array.isArray(result)) {
+    return result.reduce<number>((sum, item) => sum + countToolResultItem(item), 0)
   }
-  return countText(stringify(typed.value))
+  if (typeof result === "object" && result !== null) {
+    const typed = result as { readonly content?: unknown; readonly value?: unknown; readonly output?: unknown }
+    if (Array.isArray(typed.content)) return countToolResult(typed.content)
+    if (Array.isArray(typed.value)) return countToolResult(typed.value)
+    if (typed.output !== undefined) return countToolResult(typed.output)
+  }
+  return countText(toolResultText(result))
 }
 
 const CHECKPOINT_PREFIX = "<conversation-checkpoint>"
@@ -141,7 +144,11 @@ export function estimateCategories(input: {
   let media = 0
 
   for (const message of input.messages) {
-    for (const part of message.content) {
+    if (typeof message.text === "string") text += countText(message.text)
+    const content: readonly ContentPartLike[] = Array.isArray(message.content)
+      ? message.content
+      : []
+    for (const part of content) {
       switch (part.type) {
         case "text": {
           const value = part.text ?? ""
@@ -157,11 +164,16 @@ export function estimateCategories(input: {
           break
         }
         case "tool-call": {
-          tool += countText(`${part.name ?? ""}${stringify(part.input)}`)
+          tool += countText(`${part.name ?? ""}${stringify(toolInput(part))}`)
           break
         }
         case "tool-result": {
-          tool += countToolResult(part.result)
+          tool += countToolResult(toolResult(part))
+          break
+        }
+        case "tool": {
+          tool += countText(`${part.name ?? ""}${stringify(toolInput(part))}`)
+          tool += countToolResult(toolResult(part))
           break
         }
         case "compaction": {
