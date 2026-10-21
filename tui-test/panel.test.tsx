@@ -165,7 +165,10 @@ function rowOf(app: Awaited<ReturnType<typeof testRender>>, text: string): numbe
 
 describe("Panel", () => {
   test("渲染缓存折线、日志和摘要块", async () => {
-    const app = await testRender(() => <Fixture />, { width: 42, height: 80 })
+    const app = await testRender(() => <Fixture initial={{ cacheLogExpanded: true }} />, {
+      width: 42,
+      height: 80,
+    })
     app.renderer.start()
     try {
       const frame = await app.waitForFrame((value) => value.includes("缓存记录"))
@@ -251,6 +254,19 @@ describe("Panel", () => {
     try {
       const frame = await app.waitForFrame((value) => value.includes("上下文构成"))
       expect(frame).toContain("上下文构成 (63%)")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("缓存日志默认折叠，点击日志后展开", async () => {
+    const app = await testRender(() => <Fixture />, { width: 42, height: 80 })
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes("日志"))
+      expect(frame).not.toContain("输入")
+      await app.mockMouse.click(2, rowOf(app, "日志"))
+      await app.waitForFrame((value) => value.includes("输入"))
     } finally {
       app.renderer.destroy()
     }
