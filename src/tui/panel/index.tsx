@@ -58,46 +58,51 @@ export function Panel(props: {
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const messages = createMemo(() => props.context.data.session.message.list(props.sessionID))
 
-  /** 最后一条带 usage 的 assistant 消息；口径与内置 Context 区块一致。 */
-  const usage = createMemo(() => {
+  /** 最后一条 assistant；模型上限和 usage 分开取，避免 provider 没给 usage 时连上限都丢。 */
+  const lastAssistant = createMemo(() => {
     const list = messages()
     for (let index = list.length - 1; index >= 0; index -= 1) {
       const message = list[index]
-      if (message?.type !== "assistant" || message.tokens === undefined) continue
-      const tokens =
-        message.tokens.input +
-        message.tokens.output +
-        message.tokens.reasoning +
-        message.tokens.cache.read +
-        message.tokens.cache.write
-      if (tokens <= 0) continue
-      const model = props.context.data.location.model
-        .list(session()?.location)
-        ?.find((item) => item.providerID === message.model.providerID && item.id === message.model.id)
-      return { used: tokens, nativeLimit: model?.limit.context ?? 0 }
+      if (message?.type === "assistant") return message
     }
     return undefined
   })
 
-  /** 实际生效的上下文上限：自定义优先，否则模型原生。 */
-  const limit = createMemo(() => {
-    const value = usage()
-    if (value === undefined) return undefined
-    return effectiveLimit(props.settings, value.nativeLimit)
+  /** 模型原生窗口：从最后一条 assistant 的模型解析。 */
+  const nativeLimit = createMemo(() => {
+    const message = lastAssistant()
+    if (message === undefined) return 0
+    const model = props.context.data.location.model
+      .list(session()?.location)
+      ?.find((item) => item.providerID === message.model.providerID && item.id === message.model.id)
+    return model?.limit.context ?? 0
   })
+
+  /** 真实 prompt token：只算 input + cache，output/reasoning 不属于本轮输入。 */
+  const realUsed = createMemo(() => {
+    const tokens = lastAssistant()?.tokens
+    if (tokens === undefined) return undefined
+    const used = tokens.input + tokens.cache.read + tokens.cache.write
+    return used > 0 ? used : undefined
+  })
+
+  /** 上下文占用：真实 usage 优先，缺失时才回退到服务端估算。 */
+  const contextTokens = createMemo(() => realUsed() ?? data.stats()?.estimatedTotal ?? 0)
+
+  /** 实际生效的上下文上限：自定义优先，否则模型原生。 */
+  const limit = createMemo(() => effectiveLimit(props.settings, nativeLimit()))
 
   /** 仅当用户自定义上限时展示百分比（auto 时内置区块已经显示了）。 */
   const percent = createMemo(() => {
-    const value = usage()
     const max = limit()
-    if (value === undefined || max === undefined || max <= 0) return undefined
-    return Math.round((value.used / max) * 100)
+    if (max === undefined || max <= 0) return undefined
+    return Math.round((contextTokens() / max) * 100)
   })
 
   const rows = createMemo(() => {
     const value = data.stats()
     if (value === undefined || value.estimatedTotal <= 0) return []
-    return scaleCategories(value, usage()?.used ?? 0).filter((row) => row.value > 0)
+    return scaleCategories(value, contextTokens()).filter((row) => row.value > 0)
   })
 
   const toggleExpanded = (): void => {
@@ -128,24 +133,26 @@ export function Panel(props: {
           </text>
         </Show>
         <Show when={props.settings.expanded}>
-          <For each={rows()}>
-            {(row) => (
-              <box flexDirection="row" height={1} gap={1}>
-                <text fg={theme.text.muted} width={10} flexShrink={0}>
-                  {copy().labels[row.key]}
-                </text>
-                <box flexGrow={1} height={1} backgroundColor={theme.background.raised.high}>
-                  <box height={1} width={percentWidth(row.pct)} backgroundColor={occupancyColor(row.pct, theme)} />
+          <box flexDirection="column" width="100%" paddingLeft={2}>
+            <For each={rows()}>
+              {(row) => (
+                <box flexDirection="row" height={1} gap={1}>
+                  <text fg={theme.text.muted} width={10} flexShrink={0}>
+                    {copy().labels[row.key]}
+                  </text>
+                  <box flexGrow={1} height={1} backgroundColor={theme.background.raised.high}>
+                    <box height={1} width={percentWidth(row.pct)} backgroundColor={occupancyColor(row.pct, theme)} />
+                  </box>
+                  <text fg={theme.text.muted} width={4} flexShrink={0} textAlign="right">
+                    {`${row.pct.toString()}%`}
+                  </text>
+                  <text fg={theme.text.muted} width={7} flexShrink={0} textAlign="right">
+                    {`${copy().approximate}${formatTokens(row.value)}`}
+                  </text>
                 </box>
-                <text fg={theme.text.muted} width={4} flexShrink={0} textAlign="right">
-                  {`${row.pct.toString()}%`}
-                </text>
-                <text fg={theme.text.muted} width={7} flexShrink={0} textAlign="right">
-                  {`${copy().approximate}${formatTokens(row.value)}`}
-                </text>
-              </box>
-            )}
-          </For>
+              )}
+            </For>
+          </box>
         </Show>
 
         <CacheSection
