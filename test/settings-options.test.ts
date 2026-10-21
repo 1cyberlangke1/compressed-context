@@ -74,7 +74,9 @@ describe("buildSettingsOptions", () => {
 
 describe("limitLabel / percentLabel", () => {
   it("数字上限被原生窗口压低时显示箭头", () => {
-    expect(limitLabel({ ...DEFAULT_SETTINGS, contextLimit: 200_000 }, copy, 32_000)).toBe("200k → 32k")
+    expect(limitLabel({ ...DEFAULT_SETTINGS, contextLimit: 200_000 }, copy, 32_000)).toBe(
+      "200k（模型上限 32k）",
+    )
     expect(limitLabel({ ...DEFAULT_SETTINGS, contextLimit: 100_000 }, copy, 200_000)).toBe("100k")
   })
 

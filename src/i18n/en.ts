@@ -38,6 +38,7 @@ export const en: Messages = {
     limitInvalid: "Enter a valid token count",
     limitPlaceholder: "200k",
     limitPreview: (value) => `= ${value} tokens`,
+    limitCapped: (requested, actual) => `${requested} (model max ${actual})`,
     threshold: "Compression threshold",
     thresholdHint: "Enter an integer between 60 and 95 (percent)",
     thresholdInvalid: "Threshold must be between 60 and 95",

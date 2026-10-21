@@ -38,6 +38,7 @@ export const zh: Messages = {
     limitInvalid: "请输入有效的 token 数",
     limitPlaceholder: "200k",
     limitPreview: (value) => `= ${value} tokens`,
+    limitCapped: (requested, actual) => `${requested}（模型上限 ${actual}）`,
     threshold: "压缩阈值",
     thresholdHint: "输入 60 ~ 95 之间的整数（百分比）",
     thresholdInvalid: "阈值必须在 60 ~ 95 之间",

@@ -35,7 +35,7 @@ export function limitLabel(settings: Settings, copy: Messages, window: number | 
     return window === undefined ? copy.settings.limitAuto : `${copy.settings.limitAuto} (${formatTokens(window)})`
   }
   if (window !== undefined && window < value) {
-    return `${formatTokens(value)} → ${formatTokens(window)}`
+    return copy.settings.limitCapped(formatTokens(value), formatTokens(window))
   }
   return formatTokens(value)
 }

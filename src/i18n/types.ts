@@ -34,6 +34,7 @@ export interface Messages {
     readonly limitInvalid: string
     readonly limitPlaceholder: string
     readonly limitPreview: (value: string) => string
+    readonly limitCapped: (requested: string, actual: string) => string
     readonly threshold: string
     readonly thresholdHint: string
     readonly thresholdInvalid: string
