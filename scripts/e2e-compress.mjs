@@ -42,25 +42,43 @@ function chatResponse(content) {
     created: Math.floor(Date.now() / 1000),
     model: "fake",
     choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    ...(usagePromptTokens === undefined
+      ? {}
+      : {
+          usage: {
+            prompt_tokens: usagePromptTokens,
+            completion_tokens: 1,
+            total_tokens: usagePromptTokens + 1,
+          },
+        }),
   }
 }
 
 /** 输入：content；输出：OpenAI 兼容的 SSE 响应。 */
 function chatStream(content) {
-  const chunk = (delta, finish) =>
+  const chunk = (delta, finish, usage) =>
     `data: ${JSON.stringify({
       id: "chatcmpl-e2e",
       object: "chat.completion.chunk",
       created: Math.floor(Date.now() / 1000),
       model: "fake",
       choices: [{ index: 0, delta, finish_reason: finish }],
+      ...(usage === undefined ? {} : { usage }),
     })}\n\n`
-  return `${chunk({ role: "assistant", content }, null)}${chunk({}, "stop")}data: [DONE]\n\n`
+  const usage =
+    usagePromptTokens === undefined
+      ? undefined
+      : {
+          prompt_tokens: usagePromptTokens,
+          completion_tokens: 1,
+          total_tokens: usagePromptTokens + 1,
+        }
+  return `${chunk({ role: "assistant", content }, null)}${chunk({}, "stop", usage)}data: [DONE]\n\n`
 }
 
 /** 输入：OpenAI 请求；输出：假 provider 的文本。 */
 let mode = "normal"
+let usagePromptTokens
 let t1Attempts = 0
 let t2Attempts = 0
 let toolPromptCount = 0
@@ -854,6 +872,30 @@ try {
   assert.equal(stateB?.blocks?.[0]?.tier, 1)
   assert.notEqual(stateA?.blocks?.[0]?.fromId, stateB?.blocks?.[0]?.fromId)
   console.log("case passed: auto T1 triggered by context hook, no manual compact")
+
+  // case: 真实 usage 达到阈值时触发，不依赖文本估算
+  mode = "normal"
+  usagePromptTokens = 90_000
+  setSettings(50, 100_000, 80)
+  const usageSession = await newSession("e2e-real-usage")
+  await promptSession(usageSession, "x".repeat(6_000))
+  const usageMessages = await messagesFor(usageSession)
+  console.log(
+    "usage messages",
+    usageMessages
+      .filter((item) => item.type === "assistant")
+      .slice(-2)
+      .map((item) => item.tokens),
+  )
+  await promptSession(usageSession, "continue")
+  const usageState = await waitForState(
+    usageSession,
+    (state) => (state?.blocks?.length ?? 0) > 0,
+    "real usage trigger",
+  )
+  assert.equal(usageState.blocks[0]?.tier, 1, "real usage should trigger T1")
+  console.log("case passed: real usage triggers auto compression")
+  usagePromptTokens = undefined
 
   // case: autoCompress 关闭时只保留手动压缩
   mode = "normal"

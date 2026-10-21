@@ -30,7 +30,13 @@ export interface ContentPartLike {
     | {
         readonly source?: MediaSourceLike | undefined
         readonly mediaType?: string | undefined
-        readonly info?: unknown
+        readonly info?:
+          | {
+              readonly width?: number | undefined
+              readonly height?: number | undefined
+              readonly durationSeconds?: number | undefined
+            }
+          | undefined
         readonly providerMetadata?: unknown
       }
     | undefined

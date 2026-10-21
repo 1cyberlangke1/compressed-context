@@ -26,14 +26,14 @@ function fakeTheme(): Context["theme"] {
   } as unknown as Context["theme"]
 }
 
-/** 输入：无；输出：10 条带 usage 的 assistant 消息。 */
-function fakeMessages() {
+/** 输入：最后一条输入的 token；输出：10 条带 usage 的 assistant 消息。 */
+function fakeMessages(input = 100) {
   return Array.from({ length: 10 }, (_, index) => ({
     type: "assistant",
     id: `m${index.toString()}`,
     model: { providerID: "fake", id: "model" },
     tokens: {
-      input: 100,
+      input,
       output: 10,
       reasoning: 0,
       cache: { read: 90 - index, write: 0 },
@@ -81,7 +81,7 @@ function fakeBlocks(): SummaryBlock[] {
 let capturedDialog: (() => JSX.Element) | undefined
 
 /** 输入：无；输出：Panel 需要的最小上下文。 */
-function fakeContext(): Context {
+function fakeContext(input = 100): Context {
   const samples = fakeSamples()
   const blocks = fakeBlocks()
   return {
@@ -101,7 +101,7 @@ function fakeContext(): Context {
     data: {
       session: {
         get: () => ({ location: {} }),
-        message: { list: () => fakeMessages() },
+        message: { list: () => fakeMessages(input) },
       },
       location: { model: { list: () => [{ providerID: "fake", id: "model", limit: { context: 200_000 } }] } },
       on: () => () => {},
@@ -134,7 +134,7 @@ function fakeContext(): Context {
 }
 
 /** 输入：可选初始设置；输出：带可写 settings 的 Panel 根组件。 */
-function Fixture(props: { readonly initial?: Partial<Settings> }) {
+function Fixture(props: { readonly initial?: Partial<Settings>; readonly used?: number }) {
   const [settings, setSettings] = createSignal<Settings>({
     ...DEFAULT_SETTINGS,
     showTimeline: true,
@@ -150,7 +150,7 @@ function Fixture(props: { readonly initial?: Partial<Settings> }) {
   }
   return (
     <Panel
-      context={fakeContext()}
+      context={fakeContext(props.used)}
       sessionID="ses_a"
       settings={settings()}
       updateSettings={updateSettings}
@@ -237,6 +237,20 @@ describe("Panel", () => {
       } finally {
         dialog.renderer.destroy()
       }
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("上下文构成使用真实 usage 计算百分比", async () => {
+    const app = await testRender(
+      () => <Fixture initial={{ contextLimit: 50_000 }} used={31_419} />,
+      { width: 42, height: 40 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes("上下文构成"))
+      expect(frame).toContain("上下文构成 (63%)")
     } finally {
       app.renderer.destroy()
     }

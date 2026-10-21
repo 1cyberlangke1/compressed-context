@@ -71,7 +71,7 @@ export default Plugin.define({
           void publishStats(event.sessionID, stats).catch(() => undefined)
         }
 
-        void maybeAutoCompress({
+        await maybeAutoCompress({
           ctx,
           sessionID: event.sessionID,
           messages: event.messages,

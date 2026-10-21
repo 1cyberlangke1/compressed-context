@@ -34,7 +34,7 @@ describe("estimateCategories", () => {
             { type: "tool-call", name: "tool", input: {} },
             { type: "tool-result", name: "tool", result: { type: "text", value: "abcdefgh" } },
             { type: "compaction", text: "abcd" },
-            { type: "media", media: { mediaType: "image/png" } },
+            { type: "media", media: { source: { type: "base64", mediaType: "image/png" } } },
           ],
         },
       ],
@@ -43,6 +43,27 @@ describe("estimateCategories", () => {
     expect(result.tool).toBe(4)
     expect(result.summaries).toBe(1)
     expect(result.media).toBe(1_500)
+  })
+
+  it("media.info 的宽高用通用图片公式", () => {
+    const result = estimateCategories({
+      system: [],
+      tools: {},
+      messages: [
+        {
+          content: [
+            {
+              type: "media",
+              media: {
+                source: { type: "base64", mediaType: "image/png" },
+                info: { width: 1000, height: 1000 },
+              },
+            },
+          ],
+        },
+      ],
+    })
+    expect(result.media).toBe(1334)
   })
 
   it("tool-result 的 content 数组逐项计数", () => {

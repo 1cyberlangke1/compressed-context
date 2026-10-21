@@ -1,3 +1,4 @@
+import { attachmentTokens } from "./media.ts"
 import { stringify, toolInput, toolResult, toolResultText } from "./parts.ts"
 
 /**
@@ -10,6 +11,14 @@ import { stringify, toolInput, toolResult, toolResultText } from "./parts.ts"
  */
 
 /** 单条消息内容的最小结构，避免绑定 @opencode/ai 的具体类。 */
+export interface FileAttachmentLike {
+  readonly mime?: string | undefined
+  readonly data?: string | Uint8Array | undefined
+  readonly name?: string | undefined
+  readonly uri?: string | undefined
+  readonly durationSeconds?: number | undefined
+}
+
 export interface ContentPartLike {
   readonly type: string
   readonly text?: string | null | undefined
@@ -23,13 +32,31 @@ export interface ContentPartLike {
         readonly output?: unknown
       }
     | undefined
-  readonly media?: { readonly mediaType?: string | undefined } | undefined
+  readonly file?: FileAttachmentLike | undefined
+  readonly media?:
+    | {
+        readonly source?:
+          | {
+              readonly type?: string | undefined
+              readonly data?: string | Uint8Array | undefined
+              readonly mediaType?: string | undefined
+            }
+          | undefined
+        readonly info?:
+          | {
+              readonly width?: number | undefined
+              readonly height?: number | undefined
+              readonly durationSeconds?: number | undefined
+            }
+          | undefined
+      }
+    | undefined
 }
 
 export interface MessageLike {
   readonly role?: string
   readonly content: readonly ContentPartLike[]
-  /** v2 用户消息把正文放在 text，而不是 content 数组。 */
+  /** @opencode/ai 的 Message 用 content；保留 text 兼容旧的扁平静态消息。 */
   readonly text?: string | null | undefined
 }
 
@@ -53,10 +80,6 @@ export interface TokenCategories {
   readonly media: number
 }
 
-/** 图片 / PDF 的固定估算值，与 OpenCode 压缩预算的口径一致。 */
-const IMAGE_TOKENS = 1_500
-const PDF_TOKENS = 2_000
-
 /** CJK 字符按 1 token 计，其余按 4 字符 1 token 向上取整。 */
 export function countText(text: string): number {
   if (text.length === 0) return 0
@@ -65,21 +88,34 @@ export function countText(text: string): number {
   return cjkCount + Math.ceil((text.length - cjkCount) / 4)
 }
 
-/** 输入：媒体类型（可能缺失）；输出：token 估算；预期：非图片/PDF 返回 0。 */
-function countMedia(mediaType: string | undefined): number {
-  if (mediaType === undefined) return 0
-  const type = mediaType.toLowerCase()
-  if (type.startsWith("image/")) return IMAGE_TOKENS
-  if (type === "application/pdf") return PDF_TOKENS
-  return 0
-}
-
 /** 输入：工具结果里的单个 content 项；输出：token 估算。 */
 function countToolResultItem(item: unknown): number {
   if (typeof item === "object" && item !== null) {
-    const typed = item as { readonly type?: unknown; readonly text?: unknown; readonly media?: { readonly mediaType?: string } }
+    const typed = item as {
+      readonly type?: unknown
+      readonly text?: unknown
+      readonly mime?: string
+      readonly uri?: string
+      readonly name?: string
+      readonly media?:
+        | {
+            readonly mediaType?: string
+            readonly durationSeconds?: number
+            readonly source?: { readonly data?: string | Uint8Array; readonly mediaType?: string }
+          }
+        | undefined
+    }
     if (typed.type === "text" && typeof typed.text === "string") return countText(typed.text)
-    if (typed.type === "media") return countMedia(typed.media?.mediaType)
+    if (typed.type === "file") {
+      return attachmentTokens({ mime: typed.mime })
+    }
+    if (typed.type === "media") {
+      return attachmentTokens({
+        mime: typed.media?.mediaType ?? typed.media?.source?.mediaType,
+        data: typed.media?.source?.data,
+        durationSeconds: typed.media?.durationSeconds,
+      })
+    }
   }
   return countText(toolResultText(item))
 }
@@ -144,10 +180,11 @@ export function estimateCategories(input: {
   let media = 0
 
   for (const message of input.messages) {
-    if (typeof message.text === "string") text += countText(message.text)
     const content: readonly ContentPartLike[] = Array.isArray(message.content)
       ? message.content
       : []
+    const contentHasText = content.some((part) => part.type === "text")
+    if (!contentHasText && typeof message.text === "string") text += countText(message.text)
     for (const part of content) {
       switch (part.type) {
         case "text": {
@@ -180,8 +217,22 @@ export function estimateCategories(input: {
           summaries += countText(part.text ?? "")
           break
         }
+        case "file": {
+          media += attachmentTokens({
+            mime: part.file?.mime,
+            data: part.file?.data,
+            durationSeconds: part.file?.durationSeconds,
+          })
+          break
+        }
         case "media": {
-          media += countMedia(part.media?.mediaType)
+          media += attachmentTokens({
+            mime: part.media?.source?.mediaType,
+            data: part.media?.source?.data,
+            width: part.media?.info?.width,
+            height: part.media?.info?.height,
+            durationSeconds: part.media?.info?.durationSeconds,
+          })
           break
         }
         default: {
