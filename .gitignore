@@ -34,6 +34,7 @@ hs_err_pid*
 *.zip
 *.7z
 *.rar
+*.tgz
 
 # 临时 clone / 临时目录
 tmp/
