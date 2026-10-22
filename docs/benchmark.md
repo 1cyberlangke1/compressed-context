@@ -11,8 +11,7 @@
 | 项 | 值 |
 |---|---|
 | 任务 | Terminal-Bench 2.1 · `schemelike-metacircular-eval` |
-| 任务内容 | 用 Scheme 写一个能解释自身和 `interp.py` 语言的元循环求值器，63 个用例判定 |
-| 模型 | `gemini-3.8-flash-high`（reasoning = high） |
+| 任务内容 | 用 Scheme 写一个能解释自身和 `interp.py` 语言的元循环求值器，63 个用例判定 || 模型 | `gemini-3.8-flash-high`（reasoning = high） |
 | agent 超时 | 2400 秒（任务自带，不可调） |
 | 运行器 | Harbor + Docker |
 | 组数 | 每组 1 次 |
@@ -64,3 +63,10 @@
 在 100k 窗口下，compressed-context 把单步上下文稳定压在窗口内（峰值 93,560）并让这次运行通过验证；
 billion-context 在同条件下没有完成产物。这只能说明「这次跑通了」，
 不足以说明哪个策略更好——要下结论需要多次重复取中位数。
+
+## 参考
+
+- Terminal-Bench：<https://github.com/harbor-framework/terminal-bench>
+- Terminal-Bench 2.1 任务集：<https://github.com/harbor-framework/terminal-bench-2-1>
+- Harbor 运行器：<https://github.com/harbor-framework/harbor>
+
