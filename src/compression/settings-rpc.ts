@@ -11,6 +11,7 @@ import {
   loadServerSettings,
   parseServerSettings,
   saveServerSettings,
+  type ServerSettings,
   windowKey,
 } from "./settings.ts"
 
@@ -19,13 +20,23 @@ export interface Disposable {
   dispose(): Promise<void>
 }
 
+/** 设置 RPC 的可选回调。 */
+export interface SettingsRpcOptions {
+  /** 输入：刚保存的设置；输出：无；预期：让 compress 工具的描述与参数跟着摘要格式切换。 */
+  readonly onSaved?: (settings: ServerSettings) => Promise<void>
+}
+
 /**
- * 输入：服务端插件上下文。
+ * 输入：服务端插件上下文 + 可选保存回调。
  * 输出：注册 settingsGet / settingsSet / blocksGet / cacheHistoryGet，并返回注销句柄。
  * 预期：TUI 推来的设置存进 ctx.storage；非法值返回 ok:false；读取时带上最近解析到的原生窗口；
- *       blocksGet 只返回 active 链，cacheHistoryGet 读取前先补写当前上下文。
+ *       blocksGet 只返回 active 链，cacheHistoryGet 读取前先补写当前上下文；
+ *       保存成功后调用 onSaved，让依赖设置的运行时（工具描述）立刻更新。
  */
-export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposable> {
+export async function registerSettingsRpc(
+  ctx: Plugin.Context,
+  options?: SettingsRpcOptions,
+): Promise<Disposable> {
   return ctx.rpc.register(ContextRpc, {
     settingsGet: async (input) => {
       const settings = await loadServerSettings(ctx.storage)
@@ -73,6 +84,7 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
       const parsed = parseServerSettings({ ...current, ...(input as Record<string, unknown>) })
       if (!parsed) return { ok: false }
       await saveServerSettings(ctx.storage, parsed)
+      if (options?.onSaved !== undefined) await options.onSaved(parsed)
       return { ok: true }
     },
     blocksGet: async (input) => {

@@ -7,6 +7,7 @@ import type { Block } from "../src/compression/state.ts"
 import { saveState } from "../src/compression/state.ts"
 import type { StorageLike } from "../src/compression/state.ts"
 import { registerSettingsRpc } from "../src/compression/settings-rpc.ts"
+import type { ServerSettings } from "../src/compression/settings.ts"
 import type { SummaryFields } from "../src/compression/schema.ts"
 
 /** 输入：无；输出：内存 storage 替身。 */
@@ -72,10 +73,11 @@ function message(id: string): CacheMessage {
   }
 }
 
-/** 输入：storage + 每个会话的消息；输出：捕获的 RPC 处理器。 */
+/** 输入：storage + 每个会话的消息 + 可选保存回调；输出：捕获的 RPC 处理器。 */
 async function createHandlers(
   storage: StorageLike,
   messagesBySession: ReadonlyMap<string, readonly CacheMessage[]>,
+  onSaved?: (settings: ServerSettings) => Promise<void>,
 ): Promise<Record<string, (input: unknown) => Promise<unknown>>> {
   const handlers: Record<string, (input: unknown) => Promise<unknown>> = {}
   const ctx = {
@@ -95,7 +97,7 @@ async function createHandlers(
       },
     },
   } as unknown as Plugin.Context
-  await registerSettingsRpc(ctx)
+  await registerSettingsRpc(ctx, onSaved === undefined ? undefined : { onSaved })
   return handlers
 }
 
@@ -151,5 +153,32 @@ describe("cacheHistoryGet", () => {
     }
     expect(other.samples).toHaveLength(1)
     expect(other.samples[0]?.messageID).toBe("m2")
+  })
+})
+
+describe("settingsSet", () => {
+  it("保存成功后回调新设置，供工具切换描述", async () => {
+    const storage = createStorage()
+    const saved: ServerSettings[] = []
+    const handlers = await createHandlers(storage, new Map(), (settings) => {
+      saved.push(settings)
+      return Promise.resolve()
+    })
+    const result = (await handlers["settingsSet"]?.({ summaryFormat: "babel" })) as { ok: boolean }
+    expect(result.ok).toBe(true)
+    expect(saved).toHaveLength(1)
+    expect(saved[0]?.summaryFormat).toBe("babel")
+  })
+
+  it("非法值不落盘也不回调", async () => {
+    const storage = createStorage()
+    const saved: ServerSettings[] = []
+    const handlers = await createHandlers(storage, new Map(), (settings) => {
+      saved.push(settings)
+      return Promise.resolve()
+    })
+    const result = (await handlers["settingsSet"]?.({ summaryFormat: "yaml" })) as { ok: boolean }
+    expect(result.ok).toBe(false)
+    expect(saved).toEqual([])
   })
 })

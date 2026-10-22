@@ -31,8 +31,10 @@ await Promise.all([
 
 const password = randomBytes(24).toString("base64url")
 const basic = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
-const longText = "context ".repeat(16_000)
-const assistantText = "assistant ".repeat(2_000)
+const longText = "context ".repeat(750)
+/** 第一个 case 用多条中等消息：单条超过 keep 容量会卡在 recent 里反复被压，T2 永远轮不到。 */
+const mediumText = "context ".repeat(750)
+const assistantText = "assistant ".repeat(200)
 
 /** 输入：content；输出：OpenAI 兼容的非流式响应。 */
 function chatResponse(content) {
@@ -166,6 +168,15 @@ function fakeToolCall(body) {
           : "",
     )
     .join("\n")
+  const allText = messages
+    .map((message) =>
+      typeof message?.content === "string"
+        ? message.content
+        : Array.isArray(message?.content)
+          ? message.content.map((part) => part?.text ?? "").join("\n")
+          : "",
+    )
+    .join("\n")
   // 防止 checkpoint 摘要轮被误判成工具轮
   if (allUserText.includes("You are writing a checkpoint")) return undefined
   const wantsDecompress = allUserText.includes("use decompress tool")
@@ -174,6 +185,8 @@ function fakeToolCall(body) {
 
   toolPromptCount += 1
   console.log("fakeToolCall", { toolPromptCount, lastUser: allUserText.slice(-80) })
+  // 保险：任何判断失效都不允许无限调用工具。
+  if (toolPromptCount > 8) return undefined
 
   // decompress 一次性：触发过一次（无论成败）就不再返回 decompress 调用，防死循环
   if (wantsDecompress && !decompressTriggered) {
@@ -185,19 +198,13 @@ function fakeToolCall(body) {
     }
   }
   // compress 只在用户明确要求且从未成功过时触发；排队成功后由 tool result 文本兜底
-  if (wantsCompress && !allUserText.includes("queued compression b1")) {
+  if (wantsCompress && !allText.includes("queued compression b1")) {
     console.log("fakeToolCall returning compress")
     return {
       name: "compress",
       arguments: JSON.stringify({
         title: "Tool T1",
-        goal: "verify compress tool",
-        constraints: ["no production interference"],
-        decisions: ["tool provides the summary"],
-        progress: { completed: ["tool"], active: [], blocked: [] },
-        open_items: [],
-        files: [],
-        facts: ["x".repeat(300)],
+        markdown: `# Tool T1\n## Goal\nverify compress tool\n## Facts\n- ${"x".repeat(300)}`,
       }),
     }
   }
@@ -231,7 +238,10 @@ function fakeText(body) {
     }
     return sum
   }, 0)
-  const factChars = Math.max(5_000, Math.min(8_000, totalChars - 2_000))
+  // 假 provider 像真实模型一样遵守提示里的字符上限；小窗口的块上限只有 4000。
+  const maxMatch = /under (\d+) characters/.exec(lastUser)
+  const charLimit = maxMatch ? Number(maxMatch[1]) : 20_000
+  const factChars = Math.max(200, Math.min(8_000, charLimit - 2_500, totalChars - 2_000))
 
   if (mode === "short") return "ok"
   if (mode === "babel-t3") {
@@ -282,7 +292,11 @@ function fakeText(body) {
     // t3-chain 模式：合并摘要保持巨大（6000 CJK ≈ 6000 token），逼出 T2→T3 连续合并；
     // long-session 模式：3000 CJK ≈ 3000 token，模拟真实会话里「合并后明显变小」的情况。
     const bigFact =
-      mode === "t3-chain" ? "中".repeat(6_000) : mode === "long-session" ? "中".repeat(3_000) : "t2 fact"
+      mode === "t3-chain"
+        ? "中".repeat(Math.max(200, charLimit - 2_500))
+        : mode === "long-session"
+          ? "中".repeat(3_000)
+          : "t2 fact"
     return JSON.stringify({
       candidate: 1,
       title: "E2E T2",
@@ -298,6 +312,9 @@ function fakeText(body) {
   return assistantText
 }
 
+/** 假 provider 捕获到的 compress 工具定义；用来断言切换摘要格式后工具真的变了。 */
+let lastCompressTool
+
 const fake = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -310,6 +327,15 @@ const fake = Bun.serve({
       return new Response("not found", { status: 404 })
     }
     const body = await request.json()
+    if (Array.isArray(body.tools)) {
+      const found = body.tools.find((item) => (item?.function?.name ?? item?.name) === "compress")
+      if (found !== undefined) {
+        lastCompressTool = {
+          description: found.function?.description ?? found.description,
+          parameters: found.function?.parameters ?? found.parameters,
+        }
+      }
+    }
     if (mode === "tool-compress" || mode === "tool-decompress") {
       const names = Array.isArray(body.tools)
         ? body.tools.map((item) => item?.function?.name ?? item?.name)
@@ -336,6 +362,7 @@ const fake = Bun.serve({
 })
 
 const config = {
+  snapshots: false,
   compaction: { auto: false, keep: { tokens: 1_000 } },
   plugins: [{ package: repo }],
   provider: {
@@ -347,6 +374,12 @@ const config = {
         fake: {
           name: "Fake",
           limit: { context: 1_000_000, output: 2_000 },
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+        },
+        // 小上下文模型：让第一个 case 在真实参数下几轮就能压出 T2，不需要跑几十轮。
+        small: {
+          name: "Small",
+          limit: { context: 20_000, output: 2_000 },
           capabilities: { tools: true, input: ["text"], output: ["text"] },
         },
       },
@@ -376,6 +409,20 @@ const server = Bun.spawn(["cmd.exe", "/d", "/s", "/c", `${opencode} serve --stdi
   stdout: "pipe",
   stderr: "pipe",
 })
+
+// 服务端日志转到 stderr，插件报错和 debug 才不会闷在管道里。
+let serverStderr = ""
+void (async () => {
+  const reader = server.stderr.getReader()
+  const decoder = new TextDecoder()
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    const text = decoder.decode(value)
+    serverStderr += text
+    process.stderr.write(text)
+  }
+})()
 
 /** 输入：方法/路径/body；输出：API 的 data。 */
 async function api(method, path, body) {
@@ -450,12 +497,12 @@ try {
     conn.close()
   }
 
-  /** 输入：标题 + 可选父 session；输出：新 sessionID。 */
-  const newSession = async (title, parentID) => {
+  /** 输入：标题 + 可选父 session + 可选模型；输出：新 sessionID。 */
+  const newSession = async (title, parentID, modelID = "small") => {
     const created = await api("POST", "/api/session", {
       title,
       ...(parentID === undefined ? {} : { parentID }),
-      model: { providerID: "fake", id: "fake" },
+      model: { providerID: "fake", id: modelID },
     })
     const id = created.id ?? created.sessionID
     assert.ok(id, "session id missing")
@@ -545,38 +592,30 @@ try {
 
   const session = await api("POST", "/api/session", {
     title: "e2e",
-    model: { providerID: "fake", id: "fake" },
+    model: { providerID: "fake", id: "small" },
   })
   const sessionID = session.id ?? session.sessionID
   assert.ok(sessionID, "session id missing")
   console.log("session:", sessionID)
 
-  await api("POST", `/api/session/${sessionID}/prompt`, { text: longText })
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  console.log("first prompt done")
-
-  await api("POST", `/api/session/${sessionID}/prompt`, { text: "continue" })
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  console.log("second prompt done")
-
-  await api("POST", `/api/session/${sessionID}/prompt`, { text: "continue again" })
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  console.log("third prompt done")
-
-  await api("POST", `/api/session/${sessionID}/prompt`, { text: "continue once more" })
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  console.log("fourth prompt done")
-
-  await api("POST", `/api/session/${sessionID}/prompt`, { text: "trigger t2" })
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  console.log("fifth prompt done")
-
-  // 下一次模型请求才会触发 T2 合并（T1 结束时历史里只剩 checkpoint，不能立刻入队）。
-  await api("POST", `/api/session/${sessionID}/prompt`, { text: "merge now" })
-  await api("POST", `/api/experimental/session/${sessionID}/wait`)
-  console.log("sixth prompt done")
+  // 小窗口模型（20k）下，真实参数 60% 的阈值是 12k，3 条 6k 字符消息就能压出多个 T1；
+  // 之后发短消息让 older 收敛，T2 自然执行。没有预置 state，也没有改插件参数。
+  setSettings(10, 50_000, 60)
+  for (let index = 0; index < 8; index += 1) {
+    const state = stateFor(sessionID)
+    if ((state?.blocks ?? []).some((block) => block.tier === 2)) break
+    await promptSession(sessionID, index < 4 ? mediumText : "continue")
+  }
+  await waitForState(
+    sessionID,
+    (state) => (state?.blocks ?? []).some((block) => block.tier === 2),
+    "T2 merge",
+  )
+  await waitForState(
+    sessionID,
+    (state) => (state?.blocks ?? []).some((block) => block.tier === 2),
+    "T2 merge",
+  )
 
   const messages = await api("GET", `/api/session/${sessionID}/message?limit=200`)
   const inbox = await api("GET", `/api/session/${sessionID}/inbox`)
@@ -749,14 +788,11 @@ try {
   mode = "retry-t2"
   t2Attempts = 0
   setSettings(2.5)
-  const t2Retry = await newSession("e2e-retry-t2")
-  await promptSession(t2Retry, longText)
-  await promptSession(t2Retry, "continue")
-  await promptSession(t2Retry, "continue again")
-  await promptSession(t2Retry, "continue once more")
-  await promptSession(t2Retry, "trigger t2")
-  // 下一次模型请求才会触发 T2 合并。
-  await promptSession(t2Retry, "merge now")
+  const t2Retry = await newSession("e2e-retry-t2", undefined, "small")
+  for (let index = 0; index < 10; index += 1) {
+    if ((stateFor(t2Retry)?.blocks ?? []).some((item) => item.tier === 2)) break
+    await promptSession(t2Retry, index < 5 ? mediumText : "continue")
+  }
   let t2RetryState = stateFor(t2Retry)
   for (let index = 0; index < 40 && !(t2RetryState?.blocks ?? []).some((item) => item.tier === 2); index += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -1040,14 +1076,16 @@ try {
   // case: Babel T1→T2→T3；验证首行 T/G、c=N 候选和层级合并都能落盘。
   mode = "babel-t3"
   setSettings(50, 50_000, 60, { summaryFormat: "babel" })
-  const babelSession = await newSession("e2e-babel-t3")
+  const babelSession = await newSession("e2e-babel-t3", undefined, "fake")
   for (let round = 0; round < 3; round += 1) {
+    await promptSession(babelSession, longText)
     await promptSession(babelSession, longText)
     await promptSession(babelSession, "continue")
     await api("POST", `/api/session/${babelSession}/compact`, {})
     await waitSession(babelSession)
   }
   setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20, summaryFormat: "babel" })
+  await promptSession(babelSession, longText)
   await promptSession(babelSession, longText)
   await promptSession(babelSession, "continue")
   await api("POST", `/api/session/${babelSession}/compact`, {})
@@ -1093,14 +1131,32 @@ try {
   assert.equal(babelState?.lastError, undefined, "Babel chain must not leave lastError")
   console.log("case passed: Babel T1→T2→T3")
 
+  // case: 走真实 RPC 切换摘要格式后，compress 工具的描述与参数跟着换。
+  await api("POST", "/api/rpc/compressed-context/settingsSet", {
+    input: { contextLimit: 1_000_000, triggerPercent: 95, summaryFormat: "babel" },
+  })
+  lastCompressTool = undefined
+  const formatSession = await newSession("e2e-format-tool")
+  await promptSession(formatSession, "format switch")
+  assert.ok(lastCompressTool, "request must carry the compress tool")
+  assert.equal(
+    lastCompressTool.description.includes("Return ONLY Babel text"),
+    true,
+    "compress description must switch to Babel after settingsSet",
+  )
+  const formatFields = Object.keys(lastCompressTool.parameters?.properties ?? {}).sort()
+  assert.deepEqual(formatFields, ["babel", "title"], "compress parameters must only expose Babel fields")
+  console.log("case passed: summary format switches compress tool shape")
+
   // case: 长会话压测（大窗口 + 多轮，模拟真实尺寸）
   // 每轮：长消息 + continue → 手动 compact 产 T1 → 再发一条触发下一次模型请求；
   // 若 T1 后超预算，context 钩子入队合并。验证多轮后链收敛、tier 单调、无残留错误。
   mode = "long-session"
   setSettings(5, 200_000, 80)
-  const longSession = await newSession("e2e-long-session")
+  const longSession = await newSession("e2e-long-session", undefined, "fake")
   const longTurns = 6
   for (let turn = 0; turn < longTurns; turn += 1) {
+    await promptSession(longSession, longText)
     await promptSession(longSession, longText)
     await promptSession(longSession, "continue")
     await api("POST", `/api/session/${longSession}/compact`, {})
@@ -1217,7 +1273,7 @@ try {
 } finally {
   server.kill()
   await server.exited
-  const stderr = await new Response(server.stderr).text()
+  const stderr = serverStderr
   if (stderr.trim()) {
     const interesting = stderr
       .split(/\r?\n/)
@@ -1226,7 +1282,8 @@ try {
     if (interesting.length > 0) console.error("server compaction logs:\n" + interesting.join("\n"))
   }
   fake.stop()
-  await rm(root, { recursive: true, force: true })
+  // 服务端子进程（git 等）可能还占着临时目录；清理失败不能盖掉真正的断言错误。
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined)
   if (prompts.length > 0) {
     console.error(
       "prompts tail:\n" +

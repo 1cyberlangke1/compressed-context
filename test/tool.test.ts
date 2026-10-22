@@ -1,11 +1,13 @@
 import type { Plugin } from "@opencode/plugin"
-import type { Schema } from "effect"
+import { Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
 import type { SummaryFields, SummaryInput } from "../src/compression/schema.ts"
+import { DEFAULT_SERVER_SETTINGS } from "../src/compression/settings.ts"
 import { saveState, type StorageLike } from "../src/compression/state.ts"
-import { registerCompressTool } from "../src/compression/tool.ts"
+import { registerCompressTool, type CompressToolHandle } from "../src/compression/tool.ts"
 import type { MessageLike } from "../src/compression/select.ts"
+import type { SummaryFormat } from "../src/shared/settings.ts"
 
 /** 输入：无；输出：内存 storage 替身，并记录读取过的 key。 */
 function createStorage(): StorageLike & { readonly reads: string[] } {
@@ -52,12 +54,40 @@ type ToolExecute = (
   toolCtx: { sessionID: string },
 ) => Promise<{ output: { block: string; status: string }; content: string }>
 
-/** 输入：storage + model + 可选 terminal；输出：捕获的 execute。 */
+/** 宿主传给 transform 的工具定义；只取本测试关心的字段。 */
+interface CapturedTool {
+  readonly description: string
+  readonly input: unknown
+  readonly execute: ToolExecute
+}
+
+/** 输入：schema + 值；输出：能否解码成功；预期：必填字段缺失时报错，多余字段默认忽略。 */
+function decodes(schema: unknown, value: unknown): boolean {
+  try {
+    Schema.decodeUnknownSync(schema as never)(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 输入：storage + 可选 terminal + 可选摘要格式。
+ * 输出：捕获的 execute、工具定义读取器、注册句柄。
+ * 预期：transform 替身会在 reload 时重跑回调，用来验证 setFormat 真的换了工具。
+ */
 async function setup(input: {
-  storage: StorageLike
+  storage: StorageLike & { readonly reads: string[] }
   terminal?: string
-}): Promise<{ execute: ToolExecute; reads: string[] }> {
-  const captured: { execute?: ToolExecute } = {}
+  format?: SummaryFormat
+}): Promise<{
+  execute: ToolExecute
+  reads: string[]
+  handle: CompressToolHandle
+  tool: () => CapturedTool
+}> {
+  const captured: { current?: CapturedTool } = {}
+  let render: (() => void) | undefined
   const ctx = {
     storage: input.storage,
     session: {
@@ -65,9 +95,16 @@ async function setup(input: {
       compact: () => Promise.resolve(),
     },
     tool: {
-      transform: (fn: (editor: { add: (tool: { execute: ToolExecute }) => void }) => void) => {
-        fn({ add: (tool) => (captured.execute = tool.execute) })
+      transform: (fn: (editor: { add: (tool: CapturedTool) => void }) => void) => {
+        render = () => {
+          fn({ add: (tool) => (captured.current = tool) })
+        }
+        render()
         return Promise.resolve({ dispose: () => Promise.resolve() })
+      },
+      reload: () => {
+        render?.()
+        return Promise.resolve()
       },
     },
   } as unknown as Plugin.Context
@@ -76,13 +113,19 @@ async function setup(input: {
     attempts: 0,
     ...(input.terminal === undefined ? {} : { terminal: input.terminal }),
   })
+  if (input.format !== undefined) {
+    await input.storage.set("settings", { ...DEFAULT_SERVER_SETTINGS, summaryFormat: input.format })
+  }
   const cache = new Map<string, readonly MessageLike[]>([
     ["ses_a", [message("m1", "a".repeat(6_000))]],
   ])
-  await registerCompressTool(ctx, cache)
-  const execute = captured.execute
-  if (execute === undefined) throw new Error("compress tool was not registered")
-  return { execute, reads: (input.storage as StorageLike & { reads: string[] }).reads }
+  const handle = await registerCompressTool(ctx, cache)
+  const tool = (): CapturedTool => {
+    const current = captured.current
+    if (current === undefined) throw new Error("compress tool was not registered")
+    return current
+  }
+  return { execute: tool().execute, reads: input.storage.reads, handle, tool }
 }
 
 describe("compress tool", () => {
@@ -112,5 +155,56 @@ describe("compress tool", () => {
     const result = await execute(summary(), { sessionID: "ses_a" })
     expect(result.output.status).toBe("error")
     expect(result.content).toContain("stop now")
+  })
+})
+
+describe("compress 工具随摘要格式变化", () => {
+  it("默认 markdown：只讲 markdown 写法，参数只收 markdown", async () => {
+    const storage = createStorage()
+    await storage.set("window:fake/model", 100_000)
+    const { tool } = await setup({ storage })
+    const current = tool()
+    expect(current.description).toContain("Return ONLY markdown")
+    expect(current.description).not.toContain("Return ONLY Babel text")
+    expect(current.description).not.toContain('"goal": "required')
+    expect(decodes(current.input, { markdown: "# t\n## Goal\nx" })).toBe(true)
+    expect(decodes(current.input, { goal: "x" })).toBe(false)
+  })
+
+  it("json：只讲 JSON 形状，参数要求 goal", async () => {
+    const storage = createStorage()
+    await storage.set("window:fake/model", 100_000)
+    const { tool } = await setup({ storage, format: "json" })
+    const current = tool()
+    expect(current.description).toContain('"goal": "required')
+    expect(current.description).not.toContain("Return ONLY markdown")
+    expect(current.description).not.toContain("Return ONLY Babel text")
+    expect(decodes(current.input, { goal: "x" })).toBe(true)
+    expect(decodes(current.input, {})).toBe(false)
+    expect(decodes(current.input, { markdown: "# t" })).toBe(false)
+  })
+
+  it("babel：只讲 T/G 首行，参数要求 babel", async () => {
+    const storage = createStorage()
+    await storage.set("window:fake/model", 100_000)
+    const { tool } = await setup({ storage, format: "babel" })
+    const current = tool()
+    expect(current.description).toContain("Return ONLY Babel text")
+    expect(current.description).toContain("T=<short title>|G=<one-line goal>")
+    expect(current.description).not.toContain("Return ONLY markdown")
+    expect(current.description).not.toContain('"goal": "required')
+    expect(decodes(current.input, { babel: "T=t|G=g" })).toBe(true)
+    expect(decodes(current.input, { markdown: "# t" })).toBe(false)
+  })
+
+  it("setFormat 后描述与参数立刻切换", async () => {
+    const storage = createStorage()
+    await storage.set("window:fake/model", 100_000)
+    const { tool, handle } = await setup({ storage })
+    expect(tool().description).toContain("Return ONLY markdown")
+    await handle.setFormat("babel")
+    expect(tool().description).toContain("Return ONLY Babel text")
+    expect(decodes(tool().input, { babel: "T=t|G=g" })).toBe(true)
+    expect(decodes(tool().input, { markdown: "# t" })).toBe(false)
   })
 })

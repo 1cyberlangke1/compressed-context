@@ -2,6 +2,8 @@
 
 OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独立的摘要块，让长会话在有限的上下文窗口里继续跑下去。
 
+![compressed-context TUI 面板](docs/panel.png)
+
 ## 架构与工作原理
 
 插件采用**分层检查点架构（Hierarchical Checkpoints）**接管发给模型的上下文。在保证 Prompt Cache（前缀缓存）最大化复用的同时，将历史对话递归折叠：

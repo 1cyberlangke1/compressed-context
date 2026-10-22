@@ -37,9 +37,15 @@ export default Plugin.define({
       })
     }
 
-    disposables.push(await registerCompressTool(ctx))
+    const compressTool = await registerCompressTool(ctx)
+    disposables.push(compressTool)
     disposables.push(await registerDecompressTool(ctx))
-    disposables.push(await registerSettingsRpc(ctx))
+    // 摘要格式存在设置里；保存后让 compress 工具的描述与参数立刻跟着换。
+    disposables.push(
+      await registerSettingsRpc(ctx, {
+        onSaved: (settings) => compressTool.setFormat(settings.summaryFormat),
+      }),
+    )
     const stopEvents = startSessionEvents(ctx, {
       onSessionIdle: forgetMemory,
       onSessionDeleted: forgetMemory,

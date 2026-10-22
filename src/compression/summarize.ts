@@ -4,6 +4,7 @@ import type { SummaryFormat, SummaryLanguage } from "../shared/settings.ts"
 import { splitBabelCandidate, toBabelSummary } from "./babel.ts"
 import { toSummary } from "./normalize.ts"
 import type { Summary } from "./schema.ts"
+import { shapeLines } from "./shape.ts"
 import type { Tier } from "./state.ts"
 import { MAX_SUMMARY_CHARS, MIN_SUMMARY_CHARS, minSummaryChars, validateSummary } from "./validate.ts"
 
@@ -97,68 +98,6 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
       return { text: response.text }
     },
   }
-}
-
-const SHAPE = `{
-  "title": "optional short label for this block",
-  "goal": "required: the objective and any pivots it went through",
-  "constraints": ["optional: hard limits and user preferences"],
-  "decisions": ["optional: what was decided — why"],
-  "progress": {
-    "completed": ["optional: work actually finished"],
-    "active": ["optional: work in progress, including what the user still expects"],
-    "blocked": ["optional: what is blocked — why"]
-  },
-  "open_items": ["optional: unanswered questions, TODOs, next actions"],
-  "files": ["optional: real file paths only, full/path.ext:line — role in the work"],
-  "facts": ["optional: exact errors, signatures, versions, config keys, thresholds, measured values"]
-}`
-
-const MARKDOWN_SHAPE = `# Short title
-## Goal
-...
-## Constraints
-- ...
-## Decisions
-- ...
-## Progress
-### Completed
-- ...
-### Active
-- ...
-### Blocked
-- ...
-## Open Items
-- ...
-## Files
-- ...
-## Facts
-- ...`
-
-/** 输入：格式 + 是否要 candidate 行；输出：格式说明行。 */
-function shapeLines(format: SummaryFormat | undefined, withCandidate: boolean): string[] {
-  if (format === "babel") {
-    return [
-      withCandidate
-        ? "Return ONLY Babel text. First line must be `c=N`, where N is the chosen candidate; second line must be `T=<short title>|G=<one-line goal>`."
-        : "Return ONLY Babel text. First line must be `T=<short title>|G=<one-line goal>`.",
-      "After the header, use adaptive Babel: only T/G is fixed; invent the shortest anchors/delimiters for this source. No fixed key schema, no Markdown headings, no JSON, no code fences, no commentary.",
-    ]
-  }
-  if (format === "markdown") {
-    return [
-      withCandidate
-        ? "Return ONLY markdown. First line must be `candidate: N`, then a self-contained markdown checkpoint."
-        : "Return ONLY markdown. Do not return JSON. Do not wrap in code fences.",
-      MARKDOWN_SHAPE,
-    ]
-  }
-  return [
-    withCandidate
-      ? "Return ONLY a JSON object with the normal summary shape PLUS a top-level `candidate` number:"
-      : "Return ONLY a JSON object with this exact shape (no markdown fences, no commentary):",
-    SHAPE,
-  ]
 }
 
 const BABEL_T1_RULES = `Guidance:
