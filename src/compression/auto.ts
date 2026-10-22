@@ -368,12 +368,13 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
       nudgeCount: (state.nudgeCount ?? 0) + 1,
     })
     // 让 TUI 的消息流也能看到这次提醒；内容就是发给模型的那一条，不另写文案。
-    // 合成消息不唤醒新一轮，失败也不影响请求。
+    // steer 让它在当前 step 结束后投递，resume:false 不会额外唤醒新一轮。
     try {
       await input.ctx.session.synthetic({
         sessionID: input.sessionID,
         text: notice,
-        description: "context reminder",
+        description: notice.slice(0, 120),
+        delivery: "steer",
         resume: false,
       })
     } catch {

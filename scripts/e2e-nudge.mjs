@@ -244,6 +244,14 @@ try {
   const state = stateFor(sessionID)
   assert.equal(state?.nudgeCount, 1, "nudge count should be one")
   assert.ok(typeof state?.nudgeBaselineTokens === "number", "baseline should be stored")
+
+  // 提醒除了追加到请求尾部，还要作为 synthetic 消息落进会话，TUI 才能在消息流里看到。
+  const messages = await api("GET", `/api/session/${sessionID}/message?limit=50`)
+  const synthetic = (Array.isArray(messages) ? messages : []).filter(
+    (item) => item.type === "synthetic" && String(item.description ?? "").includes("context-reminder"),
+  )
+  assert.ok(synthetic.length > 0, "nudge must also land as a synthetic message")
+  console.log("synthetic notice:", synthetic[0]?.description)
   console.log("case passed: nudge appended once at request tail, then reset")
 
   // 第二次跨阈值：基线已重置，再长大一次必须再提醒，且计数累加。
