@@ -131,6 +131,9 @@ describe("Babel prompts", () => {
     const t1 = buildT1Instruction({ format: "babel", maxChars: 2_000 })
     expect(t1).toContain("changes only notation, not content")
     expect(t1).toContain("never round or estimate")
+    // 文件清单和命令必须原样保留，不能被「各种文件」概括掉。
+    expect(t1).toContain("Keep file lists complete")
+    expect(t1).toContain("copy commands verbatim")
     // 不允许 babel 独有的 token 目标把内容压得比 markdown/json 更狠。
     expect(t1).not.toMatch(/Target \d+-\d+ tokens for T1/)
 
