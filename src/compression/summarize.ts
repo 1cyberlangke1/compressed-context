@@ -102,6 +102,7 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
 const BABEL_T1_RULES = `Guidance:
 - This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own. Describe what already happened as history, not as instructions to act now.
 - Keep the objective and hard constraints, decisions with their reasons, outcomes, open items, work the user still expects, and failure lessons.
+- Coverage: every topic, file path, test count, command, and version in the source must appear; never omit one because another seems more important.
 - Copy exact identifiers instead of describing them: full paths with line numbers, the line of code that carries the logic, signatures, error text, versions, config keys, thresholds, measured values.
 - Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why they failed), repeated status checks, and settled discussion.
 - If space is tight, keep in this order: objective and constraints; decisions and reasons; exact technical facts; conclusions; lessons from failures.`
