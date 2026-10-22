@@ -141,7 +141,7 @@ export function SummarySection(props: {
             when={props.blocks.length > 0}
             fallback={<text fg={props.theme.text.muted}>{props.copy.noData}</text>}
           >
-            <box paddingLeft={2} flexDirection="column" width="100%">
+            <box flexDirection="column" width="100%">
               <For each={props.blocks}>
                 {(block) => {
                   const meta = (): string => {
@@ -156,7 +156,6 @@ export function SummarySection(props: {
                     <box flexDirection="column" width="100%">
                       <box
                         flexDirection="row"
-                        gap={1}
                         onMouseOver={() => {
                           setHovered(block.id)
                         }}
