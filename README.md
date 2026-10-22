@@ -87,3 +87,4 @@ bun scripts/e2e-tool-loop.mjs  # 工具循环里的自动压缩 e2e
 ## 灵感
 
 - [billion-context](https://github.com/ranxianglei/billion-context)
+- [Large Language Models Do Not Always Need Readable Language](https://arxiv.org/abs/2606.19857) —— Babel 摘要格式的出处（BabelTele）
