@@ -44,7 +44,7 @@ export default Plugin.define({
       onSessionIdle: forgetMemory,
       onSessionDeleted: forgetMemory,
       onStepEnded: ({ sessionID, messageID, tokens }) =>
-        (async () => {
+        void (async () => {
           await recordCacheHistoryStep(ctx, sessionID, { messageID, tokens })
           await maybeAutoCompressStep({ ctx, sessionID, tokens })
         })(),

@@ -33,6 +33,35 @@ export function isCompactionInFlight(sessionID: string): boolean {
   return compactionInFlight.has(sessionID)
 }
 
+/** 入队后等待压缩完成的最大时长；OpenCode 原生压缩在 step 循环里同步等，这里对齐该语义。 */
+export const COMPACTION_WAIT_MS = 5 * 60_000
+/** 等待轮询间隔。 */
+const COMPACTION_POLL_MS = 200
+
+/**
+ * 输入：服务端上下文 + sessionID + 入队前的 state 快照。
+ * 输出：无。
+ * 预期：阻塞直到该次 compaction 落地——pending 出现（钩子已生成块）、blocks 增多
+ *       （事件循环转正）、lastError 出现或变化（失败）、或等待超时。
+ *       超时不抛错，放行请求。
+ */
+export async function waitForCompaction(
+  ctx: Plugin.Context,
+  sessionID: string,
+  before: { blocks: number; lastError: string | undefined },
+): Promise<void> {
+  const deadline = Date.now() + COMPACTION_WAIT_MS
+  while (Date.now() < deadline) {
+    const state = await loadState(ctx.storage, sessionID)
+    // pending 出现即钩子已生成块；blocks 增多即事件循环已转正；两者任一都算落地。
+    const settled =
+      state.pending !== undefined || state.blocks.length > before.blocks
+    const failed = state.lastError !== undefined && state.lastError !== before.lastError
+    if (settled || failed) return
+    await new Promise((resolve) => setTimeout(resolve, COMPACTION_POLL_MS))
+  }
+}
+
 /** 输入：tokens 前缀；输出：真实 prompt token 数；预期：output/reasoning 不计入。 */
 function stepPromptTokens(tokens: {
   readonly input: number
@@ -87,7 +116,11 @@ export async function maybeAutoCompressStep(input: {
 
     if (stepPromptTokens(input.tokens) < effective * (settings.triggerPercent / 100)) return
 
+    // 入队后同步等压缩落地，对齐 OpenCode 原生压缩的语义：
+    // 下一个 step 的模型请求一定从压缩后的上下文开始，而不是继续放大。
+    const before = { blocks: state.blocks.length, lastError: state.lastError }
     await input.ctx.session.compact({ sessionID: input.sessionID })
+    await waitForCompaction(input.ctx, input.sessionID, before)
   } catch (error) {
     try {
       const current = await loadState(input.ctx.storage, input.sessionID)

@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest"
 import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
 
-import { markCompactionInFlight, maybeAutoCompress } from "../src/compression/auto.ts"
+import { markCompactionInFlight, maybeAutoCompress, maybeAutoCompressStep } from "../src/compression/auto.ts"
 import { distillOnce, isTerminal, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
 import { handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
-import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
+import { EFFECTIVE_WINDOW_KEY, parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import { isBabelSummary, isMarkdownSummary, type Summary, type SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
@@ -674,6 +674,92 @@ describe("自动压缩", () => {
       system: [],
       tools: {},
       model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
+  })
+
+  it("step.ended usage 超阈值时入队并等待压缩落地", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: { blocks: [], attempts: 0 },
+    })
+    const base = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        // 模拟 compaction 钩子生命周期：inFlight 置位 → 写 pending → 清除。
+        void (async () => {
+          markCompactionInFlight("ses_test", true)
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          const state = await loadState(storage, "ses_test")
+          await saveState(storage, "ses_test", withPending(state, { ...block, id: "b1" }))
+          markCompactionInFlight("ses_test", false)
+        })()
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx: base,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 90_000, write: 0 } },
+    })
+    // 等待由 background 钩子写入的 pending 落盘。
+    for (let index = 0; index < 40 && (await loadState(storage, "ses_test")).pending === undefined; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    const state = await loadState(storage, "ses_test")
+    expect(state.pending).toBeDefined()
+  })
+
+  it("step.ended usage 低于阈值时不入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 10_000, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("原生窗口 1M 不会放大阈值，settings 100k 仍然生效", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: { blocks: [], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        // 模拟 compaction 钩子生命周期：inFlight 置位 → 写 pending → 清除。
+        void (async () => {
+          markCompactionInFlight("ses_test", true)
+          await new Promise((resolve) => setTimeout(resolve, 100))
+          const state = await loadState(storage, "ses_test")
+          await saveState(storage, "ses_test", withPending(state, { ...block, id: "b1" }))
+          markCompactionInFlight("ses_test", false)
+        })()
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 90_000, write: 0 } },
     })
     expect(compacts).toBe(1)
   })
