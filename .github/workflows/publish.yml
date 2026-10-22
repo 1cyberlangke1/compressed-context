@@ -17,4 +17,6 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Trusted Publishing 需要 npm >= 11.5.1，Node 22 自带的是 10.x
+      - run: npm install -g npm@latest
       - run: npm publish --provenance --access public
