@@ -5,7 +5,7 @@ import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/setti
 import { estimateCategories, totalCategories } from "../shared/tokens.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
 import { EFFECTIVE_WINDOW_KEY, RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
-import { MAX_COMPRESSION_ATTEMPTS, loadState, saveState } from "./state.ts"
+import { MAX_COMPRESSION_ATTEMPTS, loadState, saveState, type State } from "./state.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS } from "./validate.ts"
@@ -62,14 +62,6 @@ export async function waitForCompaction(
   }
 }
 
-/** 输入：tokens 前缀；输出：真实 prompt token 数；预期：output/reasoning 不计入。 */
-function stepPromptTokens(tokens: {
-  readonly input: number
-  readonly cache: { readonly read: number; readonly write: number }
-}): number {
-  return tokens.input + tokens.cache.read + tokens.cache.write
-}
-
 /**
  * 输入：storage；输出：最近一次解析到的「生效窗口」。
  * 预期：`resolveLimit` 在缓存里保存的是原生窗口，settings 里的数字上限
@@ -78,6 +70,41 @@ function stepPromptTokens(tokens: {
 async function effectiveLimit(storage: Plugin.Context["storage"]): Promise<number | undefined> {
   const stored = await storage.get(EFFECTIVE_WINDOW_KEY)
   return typeof stored === "number" && stored > 0 ? stored : undefined
+}
+
+/**
+ * 输入：会话状态。
+ * 输出：本轮自动压缩是否必须跳过。
+ * 预期：有 pending、已达尝试上限、或已进入终止态时都不再入队。
+ */
+function blockedByState(state: State): boolean {
+  return (
+    state.pending !== undefined ||
+    state.attempts >= MAX_COMPRESSION_ATTEMPTS ||
+    state.terminal !== undefined
+  )
+}
+
+/**
+ * 输入：服务端上下文 + sessionID + 捕获到的错误。
+ * 输出：无。
+ * 预期：累加 attempts 并记录 lastError；写状态失败时忽略，避免掩盖原始错误。
+ */
+async function recordCompressionFailure(
+  ctx: Plugin.Context,
+  sessionID: string,
+  error: unknown,
+): Promise<void> {
+  try {
+    const current = await loadState(ctx.storage, sessionID)
+    await saveState(ctx.storage, sessionID, {
+      ...current,
+      attempts: current.attempts + 1,
+      lastError: String(error),
+    })
+  } catch {
+    // best effort
+  }
 }
 
 /**
@@ -97,9 +124,7 @@ export async function maybeAutoCompressStep(input: {
   try {
     if (isCompactionInFlight(input.sessionID)) return
     const state = await loadState(input.ctx.storage, input.sessionID)
-    if (state.pending) return
-    if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return
-    if (state.terminal !== undefined) return
+    if (blockedByState(state)) return
 
     const settings = await loadServerSettings(input.ctx.storage)
     if (!settings.autoCompress) return
@@ -114,7 +139,7 @@ export async function maybeAutoCompressStep(input: {
       return
     }
 
-    if (stepPromptTokens(input.tokens) < effective * (settings.triggerPercent / 100)) return
+    if (promptTokens(input.tokens) < effective * (settings.triggerPercent / 100)) return
 
     // 入队后同步等压缩落地，对齐 OpenCode 原生压缩的语义：
     // 下一个 step 的模型请求一定从压缩后的上下文开始，而不是继续放大。
@@ -122,16 +147,7 @@ export async function maybeAutoCompressStep(input: {
     await input.ctx.session.compact({ sessionID: input.sessionID })
     await waitForCompaction(input.ctx, input.sessionID, before)
   } catch (error) {
-    try {
-      const current = await loadState(input.ctx.storage, input.sessionID)
-      await saveState(input.ctx.storage, input.sessionID, {
-        ...current,
-        attempts: current.attempts + 1,
-        lastError: String(error),
-      })
-    } catch {
-      // best effort
-    }
+    await recordCompressionFailure(input.ctx, input.sessionID, error)
   }
 }
 
@@ -208,8 +224,7 @@ export async function resolveLimit(
       // best effort：写不进去只影响 step.ended 兜底
     }
   }
-  if (setting !== "auto") return native === undefined ? setting : Math.min(setting, native)
-  return native
+  return effective
 }
 
 /** 输入：system / tools / messages；输出：估算总 token。 */
@@ -265,9 +280,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (isCompressionInstruction(input.messages)) return
 
     const state = await loadState(input.ctx.storage, input.sessionID)
-    if (state.pending) return
-    if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return
-    if (state.terminal !== undefined) return
+    if (blockedByState(state)) return
 
     const settings = await loadServerSettings(input.ctx.storage)
     if (!settings.autoCompress) return
@@ -291,16 +304,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
 
     await input.ctx.session.compact({ sessionID: input.sessionID })
   } catch (error) {
-    try {
-      const current = await loadState(input.ctx.storage, input.sessionID)
-      await saveState(input.ctx.storage, input.sessionID, {
-        ...current,
-        attempts: current.attempts + 1,
-        lastError: String(error),
-      })
-    } catch {
-      // best effort
-    }
+    await recordCompressionFailure(input.ctx, input.sessionID, error)
   }
 }
 
@@ -334,9 +338,7 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     if (isCompressionInstruction(input.messages)) return
 
     const state = await loadState(input.ctx.storage, input.sessionID)
-    if (state.pending || state.phase !== undefined) return
-    if (state.terminal !== undefined) return
-    if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return
+    if (blockedByState(state) || state.phase !== undefined) return
 
     const settings = await loadServerSettings(input.ctx.storage)
     if (settings.nudgeGrowthTokens <= 0) return

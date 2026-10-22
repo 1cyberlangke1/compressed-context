@@ -1,6 +1,7 @@
 import type { Schema } from "effect"
 
 import { isSessionDeleted } from "./deleted-sessions.ts"
+import { forEachScannedEntry } from "../shared/scan.ts"
 import type { Block, StorageLike } from "./state.ts"
 import type { MediaSourceLike, MessageLike } from "./select.ts"
 
@@ -242,19 +243,9 @@ export async function deleteTranscriptsForSession(
   },
   sessionID: string,
 ): Promise<void> {
-  if (storage.scan === undefined) return
-  const prefix = transcriptSessionPrefix(sessionID)
-  let after: string | undefined
-  for (;;) {
-    const page = await storage.scan({
-      prefix,
-      limit: 100,
-      ...(after === undefined ? {} : { after }),
-    })
-    for (const entry of page.entries) await storage.remove(entry.key)
-    if (page.next === undefined) return
-    after = page.next
-  }
+  await forEachScannedEntry(storage, transcriptSessionPrefix(sessionID), async (entry) => {
+    await storage.remove(entry.key)
+  })
 }
 
 /** 输入：storage + 会话 + 块；输出：manifest 是否存在。 */

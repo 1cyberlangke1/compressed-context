@@ -2,7 +2,8 @@
 /**
  * 输入：本机 opencode 2.x + bun。
  * 输出：隔离 HOME/DB/config 里启动 OpenCode，用假 provider 捕获两次模型请求。
- * 预期：第二次请求尾部出现 context-reminder；第三次短请求不再出现；system 未被改写。
+ * 预期：第二次请求尾部出现 context-reminder；第三次短请求不再出现；system 未被改写；
+ *       第二次跨阈值会再次提醒并累加计数；关闭自动压缩后文案改为手动调用。
  *
  * 用法：bun scripts/e2e-nudge.mjs
  */
@@ -244,6 +245,45 @@ try {
   assert.equal(state?.nudgeCount, 1, "nudge count should be one")
   assert.ok(typeof state?.nudgeBaselineTokens === "number", "baseline should be stored")
   console.log("case passed: nudge appended once at request tail, then reset")
+
+  // 第二次跨阈值：基线已重置，再长大一次必须再提醒，且计数累加。
+  const beforeSecond = requests.length
+  await promptSession(sessionID, longText)
+  const secondBatch = requests.slice(beforeSecond)
+  const nudgedAgain = secondBatch.filter((body) => nudgeOf(body) !== undefined)
+  assert.ok(nudgedAgain.length > 0, "second threshold crossing must nudge again")
+  assert.equal(stateFor(sessionID)?.nudgeCount, 2, "nudge count should accumulate")
+  console.log("case passed: second threshold crossing nudges again")
+
+  // 关闭自动压缩后，文案应改为「需要时手动调用 compress」。
+  const db2 = new Database(join(root, "opencode.db"))
+  const now2 = Date.now()
+  db2
+    .query("insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)")
+    .run(
+      `plugin:${pluginHex}:settings`,
+      JSON.stringify({
+        contextLimit: 1_000_000,
+        triggerPercent: 95,
+        summaryBlockPercent: 20,
+        summaryTotalPercent: 10,
+        summaryFormat: "markdown",
+        autoCompress: false,
+        enableCompressTool: true,
+        enableDecompressTool: true,
+        nudgeGrowthTokens: 1_000,
+      }),
+      now2,
+      now2,
+    )
+  db2.close()
+
+  const beforeManual = requests.length
+  await promptSession(sessionID, longText)
+  const manualBatch = requests.slice(beforeManual)
+  const manualNudge = manualBatch.map((body) => nudgeOf(body)).find((text) => text !== undefined)
+  assert.ok(manualNudge?.includes("call compress when convenient"), "manual wording when autoCompress is off")
+  console.log("case passed: manual wording after disabling auto compression")
 } finally {
   server.kill()
   await server.exited

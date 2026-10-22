@@ -4,7 +4,7 @@
  * 输入：token 数量（非负整数）。
  * 输出：紧凑字符串：<1000 原样、<10000 一位小数 k、<1e6 取整 k、
  *       <1e7 一位小数 M、更大取整 M。
- * 预期：侧栏一行内放得下，和 ACP 面板的显示口径一致。
+ * 预期：侧栏一行内放得下。
  */
 export function formatTokens(count: number): string {
   if (!Number.isFinite(count) || count <= 0) return "0"

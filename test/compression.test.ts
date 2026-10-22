@@ -764,6 +764,74 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
+  it("生效窗口缺失时 step.ended 不入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+      [stateKey("ses_test")]: { blocks: [], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 500_000, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("窗口小到放不下最小摘要时 step.ended 不入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 10_000, triggerPercent: 80 },
+      [EFFECTIVE_WINDOW_KEY]: 10_000,
+      [stateKey("ses_test")]: { blocks: [], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 9_900, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("已排下一层蒸馏时 step.ended 不看阈值直接入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: { blocks: [], attempts: 0, phase: "t2" },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 10, write: 0 } },
+    })
+    expect(compacts).toBe(1)
+  })
+
   it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {
     const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 } })
     let compacts = 0

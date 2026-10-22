@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { cacheHistoryKey } from "../shared/cache.ts"
+import { forEachScannedEntry } from "../shared/scan.ts"
 import { clearActiveSummary } from "./active-summary-cache.ts"
 import { recordCacheHistory } from "./cache-history.ts"
 import { deleteSessionTempFiles } from "./decompress.ts"
@@ -210,49 +211,45 @@ function isSessionMissing(error: unknown): boolean {
 }
 
 /**
+ * 输入：服务端上下文 + 每个 state 条目的处理函数。
+ * 输出：无。
+ * 预期：按 100 条一页顺序遍历所有 state key；空 sessionID 跳过，处理函数串行 await。
+ */
+async function forEachStateEntry(
+  ctx: Plugin.Context,
+  visit: (sessionID: string, value: unknown) => Promise<void>,
+): Promise<void> {
+  await forEachScannedEntry(ctx.storage, STATE_PREFIX, async (entry) => {
+    const sessionID = entry.key.slice(STATE_PREFIX.length)
+    if (sessionID.length === 0) return
+    await visit(sessionID, entry.value)
+  })
+}
+
+/**
  * 输入：服务端上下文。
  * 输出：无。
  * 预期：启动时只清理“明确不存在”会话的孤儿 state；瞬时错误不删数据。
  */
 async function cleanupOrphanStates(ctx: Plugin.Context): Promise<void> {
-  let after: string | undefined
-  for (;;) {
-    const page = await ctx.storage.scan({
-      prefix: STATE_PREFIX,
-      limit: 100,
-      ...(after === undefined ? {} : { after }),
-    })
-    for (const entry of page.entries) {
-      const sessionID = entry.key.slice(STATE_PREFIX.length)
-      if (sessionID.length === 0) continue
-      try {
-        await ctx.session.get({ sessionID })
-      } catch (error) {
-        if (isSessionMissing(error)) await forgetSession(ctx, sessionID)
-      }
+  await forEachStateEntry(ctx, async (sessionID) => {
+    try {
+      await ctx.session.get({ sessionID })
+    } catch (error) {
+      if (isSessionMissing(error)) await forgetSession(ctx, sessionID)
     }
-    if (page.next === undefined) return
-    after = page.next
-  }
+  })
 }
 
 /** 输入：服务端上下文；输出：无；预期：启动时对账所有 pending 状态并清理孤儿。 */
 export async function reconcileAll(ctx: Plugin.Context): Promise<void> {
   try {
     await cleanupOrphanStates(ctx)
-    let after: string | undefined
-    for (;;) {
-      const options = after === undefined ? { prefix: STATE_PREFIX, limit: 100 } : { prefix: STATE_PREFIX, after, limit: 100 }
-      const page = await ctx.storage.scan(options)
-      for (const entry of page.entries) {
-        const sessionID = entry.key.slice(STATE_PREFIX.length)
-        const state = parseState(entry.value)
-        if (!state.pending) continue
-        await saveState(ctx.storage, sessionID, await reconcile(ctx, sessionID, state))
-      }
-      if (page.next === undefined) return
-      after = page.next
-    }
+    await forEachStateEntry(ctx, async (sessionID, value) => {
+      const state = parseState(value)
+      if (!state.pending) return
+      await saveState(ctx.storage, sessionID, await reconcile(ctx, sessionID, state))
+    })
   } catch {
     // best effort
   }

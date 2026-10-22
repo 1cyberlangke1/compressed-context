@@ -1,7 +1,7 @@
 /**
  * 摘要块的跨进程 DTO。
  *
- * 服务端把 active 链渲染成 body（markdown），TUI 只负责展示。
+ * 服务端把 active 链渲染成 body，TUI 只负责展示。
  */
 export interface SummaryBlock {
   readonly id: string
