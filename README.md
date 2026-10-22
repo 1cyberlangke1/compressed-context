@@ -74,6 +74,12 @@ bun scripts/e2e-nudge.mjs      # 隔离环境 + 假 provider 的提醒 e2e
 bun scripts/e2e-tool-loop.mjs  # 工具循环里的自动压缩 e2e
 ```
 
+## 基准
+
+在 Terminal-Bench 的 `schemelike-metacircular-eval` 上做过一次粗略对比：100k 窗口下插件把单步上下文
+压在 93,560 并让该次运行通过验证。**只跑了一次，波动很大，只能当参考**，详见
+[docs/benchmark.md](docs/benchmark.md)。
+
 ## 协议
 
 [MIT](LICENSE) © 1cyberlangke1
