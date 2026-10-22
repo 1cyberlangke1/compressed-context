@@ -15,10 +15,12 @@ function tierColor(tier: SummaryBlock["tier"], theme: Context["theme"]): RGBA {
   return theme.text.feedback.error.base
 }
 
-/** 输入：无；输出：共享的 SyntaxStyle；预期：markdown 渲染器需要它，懒加载避免重复创建。 */
+/** 输入：TUI renderer；输出：共享的 SyntaxStyle，拿不到 resource owner 时返回 undefined。 */
 let sharedSyntaxStyle: SyntaxStyle | undefined
-function getSyntaxStyle(): SyntaxStyle {
-  sharedSyntaxStyle ??= SyntaxStyle.create()
+function getSyntaxStyle(renderer: Context["renderer"]): SyntaxStyle | undefined {
+  const owner = (renderer as { readonly nativeScene?: unknown }).nativeScene
+  if (owner === undefined) return undefined
+  sharedSyntaxStyle ??= SyntaxStyle.create(owner as Parameters<typeof SyntaxStyle.create>[0])
   return sharedSyntaxStyle
 }
 
@@ -49,18 +51,27 @@ export function SummaryDialog(props: {
         </text>
       </box>
       <scrollbox height={height()} scrollY={true} focused={true} width="100%">
-        <Show
-          when={props.block.format === "babel"}
-          fallback={
-            <markdown
-              content={props.block.body}
-              syntaxStyle={getSyntaxStyle()}
-              fg={props.theme.text.base}
-              conceal={true}
-              tableOptions={{ widthMode: "full", style: "columns" }}
-            />
-          }
-        >
+        <Show when={props.block.format !== "babel"}>
+          <Show
+            when={getSyntaxStyle(props.context.renderer)}
+            fallback={
+              <text fg={props.theme.text.base} wrapMode="word">
+                {props.block.body}
+              </text>
+            }
+          >
+            {(style) => (
+              <markdown
+                content={props.block.body}
+                syntaxStyle={style()}
+                fg={props.theme.text.base}
+                conceal={true}
+                tableOptions={{ widthMode: "full", style: "columns" }}
+              />
+            )}
+          </Show>
+        </Show>
+        <Show when={props.block.format === "babel"}>
           <text fg={props.theme.text.base} wrapMode="word">
             {props.block.body}
           </text>

@@ -357,15 +357,28 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
 
     const hasCompressed = state.blocks.length > 0
+    const notice = buildNudgeText(growth, hasCompressed, settings.autoCompress)
     input.messages.push({
       role: "user",
-      content: [{ type: "text", text: buildNudgeText(growth, hasCompressed, settings.autoCompress) }],
+      content: [{ type: "text", text: notice }],
     })
     await saveState(input.ctx.storage, input.sessionID, {
       ...state,
       nudgeBaselineTokens: total,
       nudgeCount: (state.nudgeCount ?? 0) + 1,
     })
+    // 让 TUI 的消息流也能看到这次提醒；内容就是发给模型的那一条，不另写文案。
+    // 合成消息不唤醒新一轮，失败也不影响请求。
+    try {
+      await input.ctx.session.synthetic({
+        sessionID: input.sessionID,
+        text: notice,
+        description: "context reminder",
+        resume: false,
+      })
+    } catch {
+      // best effort
+    }
   } catch {
     // 提醒是 best effort，不能影响模型请求。
   }
