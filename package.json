@@ -1,9 +1,26 @@
 {
   "name": "compressed-context",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "OpenCode 上下文管理插件：按需压缩、自包含摘要",
   "type": "module",
   "license": "MIT",
+  "author": "1cyberlangke1",
+  "homepage": "https://github.com/1cyberlangke1/compressed-context#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1cyberlangke1/compressed-context.git"
+  },
+  "bugs": {
+    "url": "https://github.com/1cyberlangke1/compressed-context/issues"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "context",
+    "compression",
+    "summarization",
+    "llm"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./tui": "./src/tui/index.tsx"
