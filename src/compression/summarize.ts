@@ -34,10 +34,9 @@ function promptRules(options: SummaryPromptOptions | undefined): string[] {
       ? [
           "- Receiver is another equally capable language model, not a human. Drop human readability and grammar; freely mix languages, emoji, math/logic symbols; replace connectives, modifiers, and long clauses with symbols.",
           "- Only `T=<short title>|G=<one-line goal>` is fixed. Do not use a fixed key schema or long labels (`Meta:`, `Entity:`, `Decisions:`, `Progress:`). Invent the shortest one-character anchors or delimiters that fit this source and use them consistently.",
-          "- Body is a compact latent index, not prose: no headings, no paragraphs, no sentences, no JSON, no code fences.",
+          "- Body is a dense index in Babel notation, not prose: no headings, no paragraphs, no sentences, no JSON, no code fences.",
           "- Preserve exactly in latent space: entity/relation graph; exact numbers, versions, config keys, thresholds, formulas; conditions, causality, exceptions; comparisons; original placeholders, paths, commands, signatures, error text. Never invent or round.",
-          "- Keep the latest objective, constraints, decisions with reasons, outcomes, open items, and work the user still expects. Drop narrative, process, logs, repeated reads, and duplicates.",
-          "- Target 400-800 tokens for T1; drop explanations before exact facts.",
+          "- Babel changes only notation, not content: keep the same objective, constraints, decisions with reasons, exact facts, outcomes, open items, failure lessons, and work the user still expects as a normal checkpoint; density comes from symbols and dropped connectives, never from dropping facts. Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (keep one line on why they failed), repeated status checks, and settled discussion.",
           `- Keep this summary under ${maxChars.toString()} characters.`,
         ]
       : options?.format === "markdown"
@@ -100,12 +99,37 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
   }
 }
 
+const BABEL_FIDELITY = `- Babel changes only how it is written, not what it keeps: the same content policy as a normal checkpoint, denser notation. Lossless in latent space: entity/relation graph; exact numbers, versions, config keys, thresholds and formulas (never round or estimate); conditions, causality, exceptions; comparisons; original placeholders, paths, commands, signatures, error text. Mark missing or unknown data as ? or NULL; never invent.`
+
 const BABEL_T1_RULES = `Guidance:
-- This checkpoint replaces the messages above; write a compact latent index, not a story.
-- Only T/G is fixed. Dynamically invent the shortest anchors/delimiters for this source; do not reuse a fixed field schema or long labels.
-- Keep only what future work needs: latest objective, hard constraints, decisions with one-line reasons, outcomes, open items, and exact technical facts.
-- Preserve exact paths, line numbers, signatures, commands, error text, versions, config keys, thresholds, and measured values.
-- Drop process, logs, repeated reads, full diffs, abandoned details, and explanation prose. If space is tight, keep exact facts before narrative.`
+- This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own.
+${BABEL_FIDELITY}
+- Describe what already happened as history. Do not turn a recorded plan or request into an instruction to act now.
+- Only T/G is fixed. Dynamically invent the shortest anchors/delimiters for this source and use them consistently; do not reuse a fixed field schema or long labels. Entries are anchor plus facts, with connective prose dropped.
+- Copy exact identifiers instead of describing them: full paths with line numbers, function and type signatures, the line of code that carries the logic, error text, versions, config keys, thresholds, and measured numbers.
+- For each decision, say why it was made. Keep discovered constraints, the user's objective and any change of direction, the reason behind important actions, unanswered questions, and work the user still expects.
+- Quote the user only when the exact wording matters; otherwise paraphrase and never invent a quote.
+- Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (keep one line on why they failed), repeated status checks, and discussion that has already reached a conclusion.
+- If space is tight, keep in this order: objective and constraints; decisions and reasons; exact technical facts; conclusions; lessons from failures.`
+
+const BABEL_T2_RULES = `Guidance for merging existing checkpoints:
+- The sources are already compressed summaries, not raw conversation. Merge them into one checkpoint that covers all of them; do not re-tell the process.
+${BABEL_FIDELITY}
+- Only T/G is fixed. Dynamically invent the shortest anchors/delimiters and use them consistently; no fixed field schema, no long labels, no prose.
+- Keep the latest objective and hard constraints; decisions with their reasons; final outcomes; open items and blocked work; the user's still-open expectations.
+- Keep exact paths, signatures, errors, versions, config keys, and measured values only when they still matter. Drop line numbers, full diffs, code listings, logs, repeated reads, and intermediate debugging.
+- Merge duplicate facts across sources and keep the latest status. Mark superseded or obsolete content with one short marker; do not keep its details.
+- A failed attempt may stay as one line saying what failed and why, because that prevents repeating it.
+- Target roughly 50-150 tokens per source block. Prefer dense factual entries over narrative.`
+
+const BABEL_T3_RULES = `Guidance for ultra-condensing existing checkpoints:
+- Reduce the sources to a lookup index in Babel notation; only T/G is fixed, invent the shortest anchors and use them consistently.
+${BABEL_FIDELITY}
+- Keep only shipped outcomes, open work, architectural decisions, and critical constraints.
+- For each source block, keep one to three single-line facts: subject plus outcome.
+- Drop explanations, rationale details, process, logs, and anything already marked obsolete or superseded.
+- Open user-requested objectives survive until a later source marks them completed or superseded.
+- Target roughly 30-60 tokens per source block.`
 
 const TIER1_RULES = `Guidance:
 - This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own.
@@ -133,7 +157,7 @@ const TIER3_RULES = `Guidance for ultra-condensing existing checkpoints:
 - Target roughly 30-60 tokens per source block.`
 
 function rulesFor(tier: Tier, format?: SummaryFormat): string {
-  if (format === "babel") return tier === 1 ? BABEL_T1_RULES : tier === 2 ? TIER2_RULES : TIER3_RULES
+  if (format === "babel") return tier === 1 ? BABEL_T1_RULES : tier === 2 ? BABEL_T2_RULES : BABEL_T3_RULES
   if (tier === 2) return TIER2_RULES
   if (tier === 3) return TIER3_RULES
   return TIER1_RULES
@@ -232,11 +256,11 @@ const BABEL_CHOICE_RULES = `Guidance for choosing and merging:
 - Exactly one adjacent pair may be merged. Pick one candidate from the list below and merge ONLY that pair; every other block is context for the decision, not part of the merge.
 - First line must be \`c=N\`, where N is the chosen candidate number.
 - Second line must be \`T=<short title>|G=<one-line goal>\`. After that, write adaptive Babel: only T/G is fixed; dynamically invent the shortest anchors/delimiters and use them consistently. Do not use a fixed field schema or long labels.
-- Mix languages, emoji, and logic symbols freely for density; no Markdown headings, no JSON, no prose/sentences, no code fences.
-- Target 150-300 tokens for T2 and 60-120 tokens for T3; drop explanations before exact facts.
-- Keep the latest objective and hard constraints, decisions with reasons, final outcomes, open items, blocked work, and exact facts that still matter.
+- Babel changes only notation, not content: same policy as a normal merge checkpoint, denser writing. No Markdown headings, no JSON, no prose/sentences, no code fences.
+- Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items, blocked work, and exact facts that still matter.
 - Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
-- Copy identifiers, paths, commands, errors, versions, and numbers verbatim. Do not invent facts.`
+- If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
+- Copy identifiers, paths, commands, errors, versions, and numbers verbatim; never round or estimate; mark missing data as ? or NULL. Do not invent facts.`
 
 function buildChoicePrompt(
   context: string,

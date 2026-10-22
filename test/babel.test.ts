@@ -126,4 +126,20 @@ describe("Babel prompts", () => {
     expect(merge).toContain("T=<short title>|G=<one-line goal>")
     expect(merge).not.toContain("candidate: N")
   })
+
+  it("Babel 只换书写方式，不比其他格式少保留内容", () => {
+    const t1 = buildT1Instruction({ format: "babel", maxChars: 2_000 })
+    expect(t1).toContain("changes only notation, not content")
+    expect(t1).toContain("never round or estimate")
+    // 不允许 babel 独有的 token 目标把内容压得比 markdown/json 更狠。
+    expect(t1).not.toMatch(/Target \d+-\d+ tokens for T1/)
+
+    const merge = buildMergeInstruction(
+      [{ index: 1, description: "b1 + b2 → T2", sourceChars: 1_000, tier: 2 }],
+      { format: "babel", maxChars: 2_000 },
+    )
+    expect(merge).toContain("changes only notation, not content")
+    expect(merge).toContain("never round or estimate")
+    expect(merge).not.toMatch(/Target \d+-\d+ tokens for T2/)
+  })
 })
