@@ -24,6 +24,7 @@
     "test": "vitest run",
     "test:tui": "cd tui-test && bun test",
     "test:e2e:nudge": "bun scripts/e2e-nudge.mjs",
+    "test:e2e:tool-loop": "bun scripts/e2e-tool-loop.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {
