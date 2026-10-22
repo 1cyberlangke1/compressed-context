@@ -172,7 +172,6 @@ describe("initialSettings / normalizeSettings", () => {
       cacheLogExpanded: false,
       showSummaries: false,
       summariesExpanded: false,
-      expandedBlockId: "b2",
     })
     expect(settings.cacheExpanded).toBe(false)
     expect(settings.showCacheChart).toBe(false)
@@ -181,11 +180,8 @@ describe("initialSettings / normalizeSettings", () => {
     expect(settings.cacheLogExpanded).toBe(false)
     expect(settings.showSummaries).toBe(false)
     expect(settings.summariesExpanded).toBe(false)
-    expect(settings.expandedBlockId).toBe("b2")
 
     expect(initialSettings({ showCacheChart: "no" }).showCacheChart).toBe(true)
-    expect(initialSettings({ expandedBlockId: 1 }).expandedBlockId).toBeUndefined()
-    expect(initialSettings({ expandedBlockId: "" }).expandedBlockId).toBeUndefined()
   })
 })
 

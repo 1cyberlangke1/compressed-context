@@ -33,7 +33,6 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     cacheLogExpanded: settings.cacheLogExpanded,
     showSummaries: settings.showSummaries,
     summariesExpanded: settings.summariesExpanded,
-    ...(settings.expandedBlockId === undefined ? {} : { expandedBlockId: settings.expandedBlockId }),
     decompressInlineMax: settings.decompressInlineMax,
     decompressTempCap: settings.decompressTempCap,
     decompressShowTokens: settings.decompressShowTokens,
@@ -60,7 +59,6 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     settings.cacheLogExpanded === normalized.cacheLogExpanded &&
     settings.showSummaries === normalized.showSummaries &&
     settings.summariesExpanded === normalized.summariesExpanded &&
-    settings.expandedBlockId === normalized.expandedBlockId &&
     settings.decompressInlineMax === normalized.decompressInlineMax &&
     settings.decompressTempCap === normalized.decompressTempCap &&
     settings.decompressShowTokens === normalized.decompressShowTokens

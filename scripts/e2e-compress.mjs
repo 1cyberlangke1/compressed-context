@@ -32,8 +32,6 @@ await Promise.all([
 const password = randomBytes(24).toString("base64url")
 const basic = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
 const longText = "context ".repeat(750)
-/** 第一个 case 用多条中等消息：单条超过 keep 容量会卡在 recent 里反复被压，T2 永远轮不到。 */
-const mediumText = "context ".repeat(750)
 const assistantText = "assistant ".repeat(200)
 
 /** 输入：content；输出：OpenAI 兼容的非流式响应。 */
@@ -604,7 +602,7 @@ try {
   for (let index = 0; index < 8; index += 1) {
     const state = stateFor(sessionID)
     if ((state?.blocks ?? []).some((block) => block.tier === 2)) break
-    await promptSession(sessionID, index < 4 ? mediumText : "continue")
+    await promptSession(sessionID, index < 4 ? longText : "continue")
   }
   await waitForState(
     sessionID,
@@ -791,7 +789,7 @@ try {
   const t2Retry = await newSession("e2e-retry-t2", undefined, "small")
   for (let index = 0; index < 10; index += 1) {
     if ((stateFor(t2Retry)?.blocks ?? []).some((item) => item.tier === 2)) break
-    await promptSession(t2Retry, index < 5 ? mediumText : "continue")
+    await promptSession(t2Retry, index < 5 ? longText : "continue")
   }
   let t2RetryState = stateFor(t2Retry)
   for (let index = 0; index < 40 && !(t2RetryState?.blocks ?? []).some((item) => item.tier === 2); index += 1) {

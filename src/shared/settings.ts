@@ -149,8 +149,6 @@ export interface Settings extends CompressionSettings {
   showSummaries: boolean
   /** 摘要区是否展开 */
   summariesExpanded: boolean
-  /** 当前展开的摘要块 id；undefined 表示全部收起 */
-  expandedBlockId?: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -336,9 +334,6 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
     showSummaries: typeof value["showSummaries"] === "boolean" ? value["showSummaries"] : DEFAULT_SHOW_SUMMARIES,
     summariesExpanded:
       typeof value["summariesExpanded"] === "boolean" ? value["summariesExpanded"] : DEFAULT_SUMMARIES_EXPANDED,
-    ...(typeof value["expandedBlockId"] === "string" && value["expandedBlockId"].length > 0
-      ? { expandedBlockId: value["expandedBlockId"] }
-      : {}),
     decompressInlineMax: readInt(
       value["decompressInlineMax"],
       MIN_DECOMPRESS_INLINE_MAX,
