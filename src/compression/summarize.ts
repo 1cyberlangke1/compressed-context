@@ -1,6 +1,7 @@
 import { jsonrepair } from "jsonrepair"
 
 import type { SummaryFormat, SummaryLanguage } from "../shared/settings.ts"
+import { splitBabelCandidate, toBabelSummary } from "./babel.ts"
 import { toSummary } from "./normalize.ts"
 import type { Summary } from "./schema.ts"
 import type { Tier } from "./state.ts"
@@ -28,26 +29,44 @@ function languageLine(language: SummaryLanguage | undefined): string {
 function promptRules(options: SummaryPromptOptions | undefined): string[] {
   const maxChars = options?.maxChars ?? MAX_SUMMARY_CHARS
   const lines =
-    options?.format === "markdown"
+    options?.format === "babel"
       ? [
-          "- Return ONLY markdown, no JSON, no code fences.",
-          "- Start with a short `# Title` line.",
-          "- Only include sections with real content; never invent entries to fill a section.",
-          "- Use real file paths in `## Files`; put config keys and function names in `## Facts`.",
-          "- Put work in `### Completed` only when it was actually finished; plans go in `### Active` or `## Open Items`.",
+          "- Receiver is another equally capable language model, not a human. Drop human readability and grammar; freely mix languages, emoji, math/logic symbols; replace connectives, modifiers, and long clauses with symbols.",
+          "- Only `T=<short title>|G=<one-line goal>` is fixed. Do not use a fixed key schema or long labels (`Meta:`, `Entity:`, `Decisions:`, `Progress:`). Invent the shortest one-character anchors or delimiters that fit this source and use them consistently.",
+          "- Body is a compact latent index, not prose: no headings, no paragraphs, no sentences, no JSON, no code fences.",
+          "- Preserve exactly in latent space: entity/relation graph; exact numbers, versions, config keys, thresholds, formulas; conditions, causality, exceptions; comparisons; original placeholders, paths, commands, signatures, error text. Never invent or round.",
+          "- Keep the latest objective, constraints, decisions with reasons, outcomes, open items, and work the user still expects. Drop narrative, process, logs, repeated reads, and duplicates.",
+          "- Target 400-800 tokens for T1; drop explanations before exact facts.",
           `- Keep this summary under ${maxChars.toString()} characters.`,
         ]
-      : [
-          "- Only \"goal\" is required. Omit any optional field that has no real content; never invent entries to fill it.",
-          "- Use \"files\" only for real file paths; put config keys and function names in \"facts\".",
-          "- Put work in \"progress.completed\" only when the source shows it was finished; plans go in \"progress.active\" or \"open_items\".",
-          `- Keep this summary under ${maxChars.toString()} characters.`,
-        ]
+      : options?.format === "markdown"
+        ? [
+            "- Return ONLY markdown, no JSON, no code fences.",
+            "- Start with a short `# Title` line.",
+            "- Only include sections with real content; never invent entries to fill a section.",
+            "- Use real file paths in `## Files`; put config keys and function names in `## Facts`.",
+            "- Put work in `### Completed` only when it was actually finished; plans go in `### Active` or `## Open Items`.",
+            `- Keep this summary under ${maxChars.toString()} characters.`,
+          ]
+        : [
+            "- Only \"goal\" is required. Omit any optional field that has no real content; never invent entries to fill it.",
+            "- Use \"files\" only for real file paths; put config keys and function names in \"facts\".",
+            "- Put work in \"progress.completed\" only when the source shows it was finished; plans go in \"progress.active\" or \"open_items\".",
+            `- Keep this summary under ${maxChars.toString()} characters.`,
+          ]
   if (options?.totalChars !== undefined) {
     lines.push(`- The whole active checkpoint chain must stay under ${options.totalChars.toString()} characters.`)
   }
-  lines.push(`- ${languageLine(options?.language)}`)
+  // Babel 的卖点就是跨语言/符号密度，不能再强制单一语言。
+  if (options?.format !== "babel") lines.push(`- ${languageLine(options?.language)}`)
   return lines
+}
+
+/** 输入：摘要格式；输出：提示词和错误里的格式名。 */
+function formatName(format: SummaryFormat): string {
+  if (format === "babel") return "Babel"
+  if (format === "markdown") return "Markdown"
+  return "JSON"
 }
 
 /** 模型引用的最小结构。 */
@@ -118,6 +137,14 @@ const MARKDOWN_SHAPE = `# Short title
 
 /** 输入：格式 + 是否要 candidate 行；输出：格式说明行。 */
 function shapeLines(format: SummaryFormat | undefined, withCandidate: boolean): string[] {
+  if (format === "babel") {
+    return [
+      withCandidate
+        ? "Return ONLY Babel text. First line must be `c=N`, where N is the chosen candidate; second line must be `T=<short title>|G=<one-line goal>`."
+        : "Return ONLY Babel text. First line must be `T=<short title>|G=<one-line goal>`.",
+      "After the header, use adaptive Babel: only T/G is fixed; invent the shortest anchors/delimiters for this source. No fixed key schema, no Markdown headings, no JSON, no code fences, no commentary.",
+    ]
+  }
   if (format === "markdown") {
     return [
       withCandidate
@@ -133,6 +160,13 @@ function shapeLines(format: SummaryFormat | undefined, withCandidate: boolean): 
     SHAPE,
   ]
 }
+
+const BABEL_T1_RULES = `Guidance:
+- This checkpoint replaces the messages above; write a compact latent index, not a story.
+- Only T/G is fixed. Dynamically invent the shortest anchors/delimiters for this source; do not reuse a fixed field schema or long labels.
+- Keep only what future work needs: latest objective, hard constraints, decisions with one-line reasons, outcomes, open items, and exact technical facts.
+- Preserve exact paths, line numbers, signatures, commands, error text, versions, config keys, thresholds, and measured values.
+- Drop process, logs, repeated reads, full diffs, abandoned details, and explanation prose. If space is tight, keep exact facts before narrative.`
 
 const TIER1_RULES = `Guidance:
 - This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own.
@@ -159,7 +193,8 @@ const TIER3_RULES = `Guidance for ultra-condensing existing checkpoints:
 - Open user-requested objectives survive until a later source marks them completed or superseded.
 - Target roughly 30-60 tokens per source block.`
 
-function rulesFor(tier: Tier): string {
+function rulesFor(tier: Tier, format?: SummaryFormat): string {
+  if (format === "babel") return tier === 1 ? BABEL_T1_RULES : tier === 2 ? TIER2_RULES : TIER3_RULES
   if (tier === 2) return TIER2_RULES
   if (tier === 3) return TIER3_RULES
   return TIER1_RULES
@@ -179,7 +214,7 @@ function buildPrompt(transcript: string, tier: Tier, options?: SummaryPromptOpti
     "",
     ...shapeLines(options?.format, false),
     "",
-    rulesFor(tier),
+    rulesFor(tier, options?.format),
     ...promptRules(options),
     "",
     "Sources:",
@@ -196,7 +231,7 @@ export function buildT1Instruction(options?: SummaryPromptOptions): string {
     "",
     ...shapeLines(options?.format, false),
     "",
-    rulesFor(1),
+    rulesFor(1, options?.format),
     ...promptRules(options),
   ].join("\n")
 }
@@ -214,7 +249,11 @@ export function buildMergeInstruction(
     "",
     ...shapeLines(options?.format, true),
     "",
-    options?.format === "markdown" ? MARKDOWN_CHOICE_RULES : CHOICE_RULES,
+    options?.format === "babel"
+      ? BABEL_CHOICE_RULES
+      : options?.format === "markdown"
+        ? MARKDOWN_CHOICE_RULES
+        : CHOICE_RULES,
     ...promptRules(options),
     "",
     "Candidates (oldest first):",
@@ -250,6 +289,16 @@ const MARKDOWN_CHOICE_RULES = `Guidance for choosing and merging:
 - If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts. Write in the source conversation's primary language.`
 
+const BABEL_CHOICE_RULES = `Guidance for choosing and merging:
+- Exactly one adjacent pair may be merged. Pick one candidate from the list below and merge ONLY that pair; every other block is context for the decision, not part of the merge.
+- First line must be \`c=N\`, where N is the chosen candidate number.
+- Second line must be \`T=<short title>|G=<one-line goal>\`. After that, write adaptive Babel: only T/G is fixed; dynamically invent the shortest anchors/delimiters and use them consistently. Do not use a fixed field schema or long labels.
+- Mix languages, emoji, and logic symbols freely for density; no Markdown headings, no JSON, no prose/sentences, no code fences.
+- Target 150-300 tokens for T2 and 60-120 tokens for T3; drop explanations before exact facts.
+- Keep the latest objective and hard constraints, decisions with reasons, final outcomes, open items, blocked work, and exact facts that still matter.
+- Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- Copy identifiers, paths, commands, errors, versions, and numbers verbatim. Do not invent facts.`
+
 function buildChoicePrompt(
   context: string,
   task: string,
@@ -263,7 +312,11 @@ function buildChoicePrompt(
     "",
     ...shapeLines(options?.format, true),
     "",
-    options?.format === "markdown" ? MARKDOWN_CHOICE_RULES : CHOICE_RULES,
+    options?.format === "babel"
+      ? BABEL_CHOICE_RULES
+      : options?.format === "markdown"
+        ? MARKDOWN_CHOICE_RULES
+        : CHOICE_RULES,
     ...promptRules(options),
     "",
     "Current task:",
@@ -334,16 +387,26 @@ async function runSummaryPrompt(
       throw error
     }
 
-    const decoded = format === "markdown" ? decodeMarkdownSummary(text) : toSummary(parseJsonSafe(text), "json")
+    const decoded =
+      format === "babel"
+        ? toBabelSummary(text)
+        : format === "markdown"
+          ? decodeMarkdownSummary(text)
+          : toSummary(parseJsonSafe(text), "json")
     if (decoded) {
       const result = validateSummary(decoded, sourceChars, MIN_SUMMARY_CHARS, maxChars)
       if (result.ok) return decoded
       reason = result.message
-      prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected ${format === "markdown" ? "markdown" : "JSON"} only.`
+      prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected ${formatName(format)} only.`
       continue
     }
-    reason = format === "markdown" ? "reply was not valid markdown" : "reply was not valid JSON matching the shape"
-    prompt = `${base}\n\nYour previous reply was not valid ${format === "markdown" ? "markdown" : "JSON"}. Return the corrected ${format === "markdown" ? "markdown" : "JSON"} only.`
+    reason =
+      format === "babel"
+        ? "reply was not valid Babel with a T/G header"
+        : format === "markdown"
+          ? "reply was not valid markdown"
+          : "reply was not valid JSON matching the shape"
+    prompt = `${base}\n\nYour previous reply was not valid ${formatName(format)}. Return the corrected ${formatName(format)} only.`
   }
   onFailure?.(reason)
   throw new Error(reason)
@@ -441,7 +504,12 @@ async function runChoicePrompt(
       throw error
     }
 
-    const split = format === "markdown" ? splitMarkdownCandidate(text) : splitCandidate(parseJsonSafe(text))
+    const split =
+      format === "babel"
+        ? splitBabelCandidate(text)
+        : format === "markdown"
+          ? splitMarkdownCandidate(text)
+          : splitCandidate(parseJsonSafe(text))
     if (split !== undefined && typeof split.candidate === "number" && Number.isInteger(split.candidate)) {
       const candidate = candidates[split.candidate - 1]
       if (candidate !== undefined) {
@@ -455,16 +523,23 @@ async function runChoicePrompt(
           )
           if (result.ok) return { summary: decoded, candidate }
           reason = result.message
-          prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected ${format === "markdown" ? "markdown" : "JSON"} only.`
+          prompt = `${base}\n\nYour previous reply was rejected: ${result.message}. Return the corrected ${formatName(format)} only.`
           continue
         }
       }
     }
-    reason = format === "markdown" ? "reply was not valid markdown with a valid candidate" : "reply was not valid JSON with a valid candidate and summary"
+    reason =
+      format === "babel"
+        ? "reply was not valid Babel with a valid candidate"
+        : format === "markdown"
+          ? "reply was not valid markdown with a valid candidate"
+          : "reply was not valid JSON with a valid candidate and summary"
     prompt =
-      format === "markdown"
-        ? `${base}\n\nYour previous reply was not valid markdown. Return the corrected markdown only. First line must be \`candidate: N\` with N from 1 to ${candidates.length.toString()}.`
-        : `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only. The top-level "candidate" must be an integer from 1 to ${candidates.length.toString()}; "goal" must be non-empty.`
+      format === "babel"
+        ? `${base}\n\nYour previous reply was not valid Babel. Return the corrected Babel only. First line must be \`c=N\` with N from 1 to ${candidates.length.toString()}; second line must be \`T=<title>|G=<goal>\`.`
+        : format === "markdown"
+          ? `${base}\n\nYour previous reply was not valid markdown. Return the corrected markdown only. First line must be \`candidate: N\` with N from 1 to ${candidates.length.toString()}.`
+          : `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only. The top-level "candidate" must be an integer from 1 to ${candidates.length.toString()}; "goal" must be non-empty.`
   }
   onFailure?.(reason)
   throw new Error(reason)

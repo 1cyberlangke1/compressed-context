@@ -57,6 +57,7 @@ export const zh: Messages = {
     summaryFormat: "摘要格式",
     summaryFormatJson: "JSON（结构化）",
     summaryFormatMarkdown: "Markdown（自然语言）",
+    summaryFormatBabel: "Babel（模型间高密度）",
     autoCompress: "自动压缩",
     enableCompressTool: "compress 工具",
     enableDecompressTool: "decompress 工具",

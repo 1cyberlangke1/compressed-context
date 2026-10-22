@@ -242,6 +242,7 @@ export function SettingsCommand(props: {
       options: [
         { title: copy().settings.summaryFormatJson, value: "json" },
         { title: copy().settings.summaryFormatMarkdown, value: "markdown" },
+        { title: copy().settings.summaryFormatBabel, value: "babel" },
       ],
     })
     if (picked === undefined) return

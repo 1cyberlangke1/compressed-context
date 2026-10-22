@@ -24,8 +24,8 @@ function getSyntaxStyle(): SyntaxStyle {
 
 /**
  * 输入：TUI 上下文 + 主题 + 块。
- * 输出：占满可用高度的 markdown 阅读弹窗。
- * 预期：标题保持 `[T1] b1 : title`，正文交给 markdown 渲染器，esc 关闭。
+ * 输出：占满可用高度的阅读弹窗。
+ * 预期：标题保持 `[T1] b1 : title`；Babel 按纯文本显示，其余交给 markdown 渲染器，esc 关闭。
  */
 export function SummaryDialog(props: {
   readonly context: Context
@@ -49,13 +49,22 @@ export function SummaryDialog(props: {
         </text>
       </box>
       <scrollbox height={height()} scrollY={true} focused={true} width="100%">
-        <markdown
-          content={props.block.body}
-          syntaxStyle={getSyntaxStyle()}
-          fg={props.theme.text.base}
-          conceal={true}
-          tableOptions={{ widthMode: "full", style: "columns" }}
-        />
+        <Show
+          when={props.block.format === "babel"}
+          fallback={
+            <markdown
+              content={props.block.body}
+              syntaxStyle={getSyntaxStyle()}
+              fg={props.theme.text.base}
+              conceal={true}
+              tableOptions={{ widthMode: "full", style: "columns" }}
+            />
+          }
+        >
+          <text fg={props.theme.text.base} wrapMode="word">
+            {props.block.body}
+          </text>
+        </Show>
       </scrollbox>
     </box>
   )

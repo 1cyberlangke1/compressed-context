@@ -1,5 +1,6 @@
 import type { Schema } from "effect"
 
+import { toBabelSummary } from "./babel.ts"
 import { isSessionDeleted } from "./deleted-sessions.ts"
 import { type Summary, type SummaryFields } from "./schema.ts"
 
@@ -115,6 +116,14 @@ function parseSummary(value: unknown): Summary | undefined {
   if (record["format"] === "markdown") {
     if (typeof record["title"] !== "string" || typeof record["text"] !== "string") return undefined
     return { format: "markdown", title: record["title"], text: record["text"] }
+  }
+  if (record["format"] === "babel") {
+    if (typeof record["text"] !== "string") return undefined
+    return toBabelSummary(
+      record["text"],
+      typeof record["title"] === "string" ? record["title"] : undefined,
+      typeof record["goal"] === "string" ? record["goal"] : undefined,
+    )
   }
   if ("format" in record) return undefined
   return parseFields(value)

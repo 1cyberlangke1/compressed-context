@@ -19,6 +19,7 @@ const SettingsProperties = {
   summaryBlockPercent: { type: "number" },
   summaryTotalPercent: { type: "number" },
   summaryLanguage: { type: "string", enum: ["auto", "zh", "en"] },
+  summaryFormat: { type: "string", enum: ["json", "markdown", "babel"] },
   autoCompress: { type: "boolean" },
   enableCompressTool: { type: "boolean" },
   enableDecompressTool: { type: "boolean" },
@@ -68,6 +69,7 @@ const BlockJson = {
   properties: {
     id: { type: "string" },
     tier: { type: "number", enum: [1, 2, 3] },
+    format: { type: "string", enum: ["json", "markdown", "babel"] },
     title: { type: "string" },
     at: { type: "number" },
     tokensBefore: { type: "number" },
@@ -75,7 +77,7 @@ const BlockJson = {
     sourceBlockIds: { type: "array", items: { type: "string" } },
     body: { type: "string" },
   },
-  required: ["id", "tier", "title", "at", "tokensBefore", "tokensAfter", "body"],
+  required: ["id", "tier", "format", "title", "at", "tokensBefore", "tokensAfter", "body"],
   additionalProperties: false,
 } as const
 

@@ -17,7 +17,8 @@ import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
 const DESCRIPTION =
   "Compress the conversation so far into a structured checkpoint. Call this when the context is getting full. " +
   "It covers every message since the last compressed block, up to the current user message, and replaces them with " +
-  "one block. In JSON mode provide `goal` plus the optional fields; in Markdown mode provide `markdown`. Omit any " +
+  "one block. In JSON mode provide `goal` plus the optional fields; in Markdown mode provide `markdown`; in Babel " +
+  "mode provide `babel` with first line `T=<short title>|G=<one-line goal>` and a dense body. Omit any " +
   "optional field that has no real content instead of inventing entries. Do not call while a compression is already " +
   "pending. " +
   "Add a short title if useful. " +

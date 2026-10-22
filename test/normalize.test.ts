@@ -2,11 +2,17 @@ import { Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
 import { normalizeSummary, toSummary } from "../src/compression/normalize.ts"
-import { isMarkdownSummary, SummaryInput, type Summary, type SummaryFields } from "../src/compression/schema.ts"
+import {
+  isBabelSummary,
+  isMarkdownSummary,
+  SummaryInput,
+  type Summary,
+  type SummaryFields,
+} from "../src/compression/schema.ts"
 
-/** 输入：摘要；输出：JSON 字段；Markdown 返回 undefined。 */
+/** 输入：摘要；输出：JSON 字段；Markdown/Babel 返回 undefined。 */
 function jsonSummary(summary: Summary | undefined): SummaryFields | undefined {
-  return summary !== undefined && !isMarkdownSummary(summary) ? summary : undefined
+  return summary !== undefined && !isMarkdownSummary(summary) && !isBabelSummary(summary) ? summary : undefined
 }
 
 describe("summary normalization", () => {

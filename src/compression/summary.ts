@@ -1,4 +1,4 @@
-import { isMarkdownSummary, type Summary, type SummaryFields } from "./schema.ts"
+import { isBabelSummary, isMarkdownSummary, type Summary, type SummaryFields } from "./schema.ts"
 import { markdownGoal } from "./markdown.ts"
 
 /** 输入：条目；输出：Markdown 列表；空列表输出 `- (none)`。 */
@@ -45,17 +45,19 @@ export function summaryTitle(summary: Summary): string {
 
 /** 输入：摘要；输出：用于候选描述的短目标。 */
 export function summaryGoal(summary: Summary): string {
+  if (isBabelSummary(summary)) return summary.goal
   return isMarkdownSummary(summary) ? markdownGoal(summary.text) : summary.goal
 }
 
 /** 输入：摘要；输出：渲染后的正文。 */
 export function summaryBody(summary: Summary): string {
-  return isMarkdownSummary(summary) ? summary.text : renderFields(summary)
+  if (isBabelSummary(summary) || isMarkdownSummary(summary)) return summary.text
+  return renderFields(summary)
 }
 
 /** 输入：摘要；输出：正文实际字符数。 */
 export function summaryChars(summary: Summary): number {
-  if (isMarkdownSummary(summary)) return summary.text.length
+  if (isBabelSummary(summary) || isMarkdownSummary(summary)) return summary.text.length
   return [
     summary.title,
     summary.goal,

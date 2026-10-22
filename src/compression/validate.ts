@@ -1,4 +1,4 @@
-import { isMarkdownSummary, type Summary } from "./schema.ts"
+import { isBabelSummary, isMarkdownSummary, type Summary } from "./schema.ts"
 import { summaryChars } from "./summary.ts"
 
 export const MIN_SUMMARY_CHARS = 200
@@ -33,7 +33,12 @@ export function validateSummary(
   maxChars: number = MAX_SUMMARY_CHARS,
 ): ValidationResult {
   const fields: string[] = []
-  if (isMarkdownSummary(summary)) {
+  if (isBabelSummary(summary)) {
+    if (summary.title.trim().length === 0 || summary.title.length > 80) fields.push("title")
+    if (summary.goal.trim().length === 0) fields.push("goal")
+    const body = summary.text.split(/\r?\n/).slice(1).join("\n").trim()
+    if (body.length === 0) fields.push("text")
+  } else if (isMarkdownSummary(summary)) {
     if (summary.title.trim().length === 0 || summary.title.length > 80) fields.push("title")
     if (summary.text.trim().length === 0) fields.push("text")
   } else {

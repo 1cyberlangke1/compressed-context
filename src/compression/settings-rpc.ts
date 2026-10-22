@@ -4,6 +4,7 @@ import type { SummaryBlock } from "../shared/blocks.ts"
 import { ContextRpc } from "../shared/rpc.ts"
 import { loadCacheHistory, recordCacheHistory } from "./cache-history.ts"
 import { activeBlocks, renderSummary } from "./render.ts"
+import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
 import { loadState } from "./state.ts"
 import {
   RESOLVED_WINDOW_KEY,
@@ -55,6 +56,7 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
         summaryBlockPercent: settings.summaryBlockPercent,
         summaryTotalPercent: settings.summaryTotalPercent,
         summaryLanguage: settings.summaryLanguage,
+        summaryFormat: settings.summaryFormat,
         autoCompress: settings.autoCompress,
         enableCompressTool: settings.enableCompressTool,
         enableDecompressTool: settings.enableDecompressTool,
@@ -80,6 +82,11 @@ export async function registerSettingsRpc(ctx: Plugin.Context): Promise<Disposab
       const blocks: SummaryBlock[] = activeBlocks(state.blocks, state.pending).map((block) => ({
         id: block.id,
         tier: block.tier,
+        format: isBabelSummary(block.summary)
+          ? "babel"
+          : isMarkdownSummary(block.summary)
+            ? "markdown"
+            : "json",
         title: block.summary.title,
         at: block.at,
         tokensBefore: block.tokensBefore,

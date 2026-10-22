@@ -128,6 +128,8 @@ describe("initialSettings / normalizeSettings", () => {
     )
     expect(normalizeSettings({ enabled: true, locale: "zh" }).contextLimit).toBe("auto")
     expect(normalizeSettings({ summaryBlockPercent: 200 }).summaryBlockPercent).toBe(10)
+    expect(initialSettings({ summaryFormat: "babel" }).summaryFormat).toBe("babel")
+    expect(initialSettings({ summaryFormat: "xml" }).summaryFormat).toBe("markdown")
   })
 
   it("新开关与 decompress 限制可配置，非法值回退", () => {

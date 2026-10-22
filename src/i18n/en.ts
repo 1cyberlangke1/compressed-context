@@ -57,6 +57,7 @@ export const en: Messages = {
     summaryFormat: "Summary format",
     summaryFormatJson: "JSON (structured)",
     summaryFormatMarkdown: "Markdown (natural language)",
+    summaryFormatBabel: "Babel (model-to-model dense)",
     autoCompress: "Auto compression",
     enableCompressTool: "compress tool",
     enableDecompressTool: "decompress tool",

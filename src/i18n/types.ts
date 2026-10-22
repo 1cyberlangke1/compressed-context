@@ -53,6 +53,7 @@ export interface Messages {
     readonly summaryFormat: string
     readonly summaryFormatJson: string
     readonly summaryFormatMarkdown: string
+    readonly summaryFormatBabel: string
     readonly autoCompress: string
     readonly enableCompressTool: string
     readonly enableDecompressTool: string

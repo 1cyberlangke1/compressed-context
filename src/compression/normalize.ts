@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 
 import type { SummaryFormat } from "../shared/settings.ts"
+import { toBabelSummary } from "./babel.ts"
 import { toMarkdownSummary } from "./markdown.ts"
 import { SummaryFields, type Summary } from "./schema.ts"
 
@@ -68,12 +69,38 @@ function markdownTitle(value: unknown): string | undefined {
   return typeof title === "string" ? title : undefined
 }
 
+/** 输入：Babel 载体；输出：正文文本和可选 title/goal。 */
+function babelParts(
+  value: unknown,
+): { readonly text: string; readonly title?: string; readonly goal?: string } | undefined {
+  if (typeof value === "string") return { text: value }
+  if (typeof value !== "object" || value === null) return undefined
+  const record = value as Record<string, unknown>
+  for (const key of ["babel", "markdown", "text", "summary", "content"]) {
+    const text = record[key]
+    if (typeof text !== "string") continue
+    const title = typeof record["title"] === "string" ? record["title"] : undefined
+    const goal = typeof record["goal"] === "string" ? record["goal"] : undefined
+    return {
+      text,
+      ...(title === undefined ? {} : { title }),
+      ...(goal === undefined ? {} : { goal }),
+    }
+  }
+  return undefined
+}
+
 /**
  * 输入：模型返回的原始值 + 摘要格式。
  * 输出：规范摘要；形状不合法时返回 undefined。
  * 预期：Markdown 直接保留原文；JSON 先补齐可选字段再由 SummaryFields 解码。
  */
 export function toSummary(value: unknown, format: SummaryFormat = "markdown"): Summary | undefined {
+  if (format === "babel") {
+    const parts = babelParts(value)
+    if (parts === undefined) return undefined
+    return toBabelSummary(parts.text, parts.title, parts.goal)
+  }
   if (format === "markdown") {
     const text = markdownText(value)
     if (text !== undefined) return toMarkdownSummary(text, markdownTitle(value))

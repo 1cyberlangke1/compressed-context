@@ -6,6 +6,8 @@
 export interface SummaryBlock {
   readonly id: string
   readonly tier: 1 | 2 | 3
+  /** 摘要格式；Babel 正文不能按 Markdown 渲染。 */
+  readonly format: "json" | "markdown" | "babel"
   readonly title: string
   readonly at: number
   readonly tokensBefore: number

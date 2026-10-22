@@ -55,6 +55,7 @@ export function nudgeLabel(settings: Settings, copy: Messages): string {
 
 /** 输入：设置；输出：当前摘要格式标签。 */
 export function summaryFormatLabel(settings: Settings, copy: Messages): string {
+  if (settings.summaryFormat === "babel") return copy.settings.summaryFormatBabel
   return settings.summaryFormat === "markdown"
     ? copy.settings.summaryFormatMarkdown
     : copy.settings.summaryFormatJson

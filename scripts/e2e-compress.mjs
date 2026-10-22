@@ -234,6 +234,16 @@ function fakeText(body) {
   const factChars = Math.max(5_000, Math.min(8_000, totalChars - 2_000))
 
   if (mode === "short") return "ok"
+  if (mode === "babel-t3") {
+    if (lastUser.includes("You are writing a checkpoint for the older part")) {
+      console.log("fake: Babel T1 instruction")
+      return `T=Babel T1|G=verify babel checkpoint\nD ${"中".repeat(6_000)}`
+    }
+    if (lastUser.includes("checkpoint at the top of the conversation contains summary blocks")) {
+      console.log("fake: Babel T2/T3 instruction")
+      return `c=1\nT=Babel merged|G=verify babel merge\nD ${"中".repeat(6_000)}`
+    }
+  }
   if (mode === "retry-t1" && lastUser.includes("You are writing a checkpoint for the older part")) {
     t1Attempts += 1
     if (t1Attempts === 1) return "not json"
@@ -1026,6 +1036,62 @@ try {
   assert.deepEqual(activeTiers, [3], "active chain collapses to one T3")
   assert.equal(t3State.terminal, undefined, "under budget must not be terminal")
   console.log("case passed: T3 keeps merging until the chain fits")
+
+  // case: Babel T1→T2→T3；验证首行 T/G、c=N 候选和层级合并都能落盘。
+  mode = "babel-t3"
+  setSettings(50, 50_000, 60, { summaryFormat: "babel" })
+  const babelSession = await newSession("e2e-babel-t3")
+  for (let round = 0; round < 3; round += 1) {
+    await promptSession(babelSession, longText)
+    await promptSession(babelSession, "continue")
+    await api("POST", `/api/session/${babelSession}/compact`, {})
+    await waitSession(babelSession)
+  }
+  setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20, summaryFormat: "babel" })
+  await promptSession(babelSession, longText)
+  await promptSession(babelSession, "continue")
+  await api("POST", `/api/session/${babelSession}/compact`, {})
+  await waitSession(babelSession)
+  let babelState = stateFor(babelSession)
+  assert.equal(babelState?.blocks?.length, 4, "Babel case needs four T1 blocks")
+  assert.equal(
+    (babelState?.blocks ?? []).every((block) => block.tier === 1 && block.summary?.format === "babel"),
+    true,
+    "all Babel T1 blocks must be tier 1 and format=babel",
+  )
+  assert.equal(babelState?.phase, "t2", "Babel low budget must schedule T2")
+
+  await promptSession(babelSession, "continue")
+  babelState = await waitForState(
+    babelSession,
+    (state) => (state?.blocks ?? []).some((block) => block.tier === 2),
+    "Babel T2 merge",
+  )
+  const babelT2 = (babelState?.blocks ?? []).filter((block) => block.tier === 2)
+  assert.equal(babelT2.length, 1, "Babel T2 produces one merged block")
+  assert.equal(babelT2[0]?.summary?.format, "babel", "Babel T2 must keep format=babel")
+  assert.equal(babelT2[0]?.sourceBlockIds?.length, 2, "Babel T2 merges two T1 blocks")
+
+  await promptSession(babelSession, "continue")
+  babelState = await waitForState(
+    babelSession,
+    (state) => (state?.blocks ?? []).some((block) => block.tier === 3),
+    "Babel first T3 merge",
+  )
+  assert.equal(babelState?.phase, "t3", "Babel first T3 must keep phase=t3 while over budget")
+
+  await promptSession(babelSession, "continue")
+  babelState = await waitForState(
+    babelSession,
+    (state) => state?.phase === undefined && (state?.blocks ?? []).length === 7,
+    "Babel second T3 merge",
+  )
+  const babelConsumed = new Set((babelState?.blocks ?? []).flatMap((block) => block.sourceBlockIds ?? []))
+  const babelActive = (babelState?.blocks ?? []).filter((block) => !babelConsumed.has(block.id))
+  assert.equal(babelActive.length, 1, "Babel active chain must collapse to one block")
+  assert.equal(babelActive[0]?.tier, 3, "Babel active chain must end at T3")
+  assert.equal(babelState?.lastError, undefined, "Babel chain must not leave lastError")
+  console.log("case passed: Babel T1→T2→T3")
 
   // case: 长会话压测（大窗口 + 多轮，模拟真实尺寸）
   // 每轮：长消息 + continue → 手动 compact 产 T1 → 再发一条触发下一次模型请求；

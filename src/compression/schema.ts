@@ -30,12 +30,28 @@ export interface MarkdownSummary {
   readonly text: string
 }
 
-/** 块摘要：JSON 保持原形状，Markdown 用 format 标记；旧 JSON 块天然兼容。 */
-export type Summary = SummaryFields | MarkdownSummary
+/**
+ * Babel 摘要：正文是模型间高密度文本，title/goal 从首行 `T=...|G=...` 解析。
+ * text 保留首行，方便 T2/T3 合并时继续看到目标。
+ */
+export interface BabelSummary {
+  readonly format: "babel"
+  readonly title: string
+  readonly goal: string
+  readonly text: string
+}
+
+/** 块摘要：JSON 保持原形状，Markdown/Babel 用 format 标记；旧 JSON 块天然兼容。 */
+export type Summary = SummaryFields | MarkdownSummary | BabelSummary
 
 /** 输入：任意摘要；输出：是否 Markdown 摘要。 */
 export function isMarkdownSummary(summary: Summary): summary is MarkdownSummary {
-  return "format" in summary
+  return "format" in summary && summary.format === "markdown"
+}
+
+/** 输入：任意摘要；输出：是否 Babel 摘要。 */
+export function isBabelSummary(summary: Summary): summary is BabelSummary {
+  return "format" in summary && summary.format === "babel"
 }
 
 /**
@@ -44,8 +60,11 @@ export function isMarkdownSummary(summary: Summary): summary is MarkdownSummary 
  * 预期：JSON 模式在归一化时要求 goal；Markdown 模式要求 markdown。
  */
 export const SummaryInput = Schema.Struct({
-  format: Schema.optional(Schema.Union([Schema.Literal("json"), Schema.Literal("markdown")])),
+  format: Schema.optional(
+    Schema.Union([Schema.Literal("json"), Schema.Literal("markdown"), Schema.Literal("babel")]),
+  ),
   markdown: Schema.optional(Schema.String),
+  babel: Schema.optional(Schema.String),
   title: Schema.optional(Schema.String),
   goal: Schema.optional(Schema.String),
   constraints: Schema.optional(Schema.Array(Schema.String)),

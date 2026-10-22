@@ -18,8 +18,8 @@ export const SUMMARY_LANGUAGES = ["auto", "zh", "en"] as const
 
 export type SummaryLanguage = (typeof SUMMARY_LANGUAGES)[number]
 
-/** 摘要格式：JSON 结构化，或自由 Markdown。 */
-export const SUMMARY_FORMATS = ["json", "markdown"] as const
+/** 摘要格式：JSON 结构化、自由 Markdown，或模型间高密度 Babel。 */
+export const SUMMARY_FORMATS = ["json", "markdown", "babel"] as const
 
 export type SummaryFormat = (typeof SUMMARY_FORMATS)[number]
 
@@ -108,7 +108,7 @@ export interface CompressionSettings {
   summaryTotalPercent: number
   /** 摘要语言；只影响提示词 */
   summaryLanguage: SummaryLanguage
-  /** 摘要格式：JSON 结构化 / Markdown 自然语言 */
+  /** 摘要格式：JSON 结构化 / Markdown 自然语言 / Babel 模型间高密度 */
   summaryFormat: SummaryFormat
   /** 自动压缩总开关 */
   autoCompress: boolean
