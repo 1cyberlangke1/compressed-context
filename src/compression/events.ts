@@ -129,6 +129,30 @@ export async function forgetSession(ctx: Plugin.Context, sessionID: string): Pro
   }
 }
 
+/** 输入：事件里未校验的 tokens 字段；输出：规范化后的 usage，形状不对时 undefined。 */
+function readStepTokens(raw: unknown): {
+  input: number
+  output: number
+  reasoning: number
+  cache: { read: number; write: number }
+} | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined
+  const record = raw as Record<string, unknown>
+  const input = record["input"]
+  if (typeof input !== "number" || !Number.isFinite(input)) return undefined
+  const finite = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0)
+  const cache =
+    typeof record["cache"] === "object" && record["cache"] !== null
+      ? (record["cache"] as Record<string, unknown>)
+      : {}
+  return {
+    input,
+    output: finite(record["output"]),
+    reasoning: finite(record["reasoning"]),
+    cache: { read: finite(cache["read"]), write: finite(cache["write"]) },
+  }
+}
+
 /**
  * 输入：插件上下文 + 可选清理回调。
  * 输出：订阅会话事件并返回取消函数。
@@ -148,19 +172,14 @@ export function startSessionEvents(
             const data = event.data as {
               sessionID: string
               assistantMessageID?: string
-              tokens?: { input: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
+              tokens?: unknown
             }
-            const tokens = data.tokens
+            const tokens = readStepTokens(data.tokens)
             if (tokens !== undefined && options.onStepEnded !== undefined) {
               await options.onStepEnded({
                 sessionID: data.sessionID,
                 messageID: data.assistantMessageID ?? "",
-                tokens: {
-                  input: tokens.input,
-                  output: tokens.output ?? 0,
-                  reasoning: tokens.reasoning ?? 0,
-                  cache: { read: tokens.cache?.read ?? 0, write: tokens.cache?.write ?? 0 },
-                },
+                tokens,
               })
             }
             break
