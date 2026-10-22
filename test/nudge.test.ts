@@ -3,7 +3,7 @@ import type { Plugin } from "@opencode/plugin"
 import { describe, expect, it } from "vitest"
 
 import { buildNudgeText, maybeNudge } from "../src/compression/auto.ts"
-import { DEFAULT_SERVER_SETTINGS, SETTINGS_KEY } from "../src/compression/settings.ts"
+import { DEFAULT_SERVER_SETTINGS, SETTINGS_KEY, loadServerSettings } from "../src/compression/settings.ts"
 import { loadState, saveState, MAX_COMPRESSION_ATTEMPTS, type Block, type StorageLike } from "../src/compression/state.ts"
 import type { MessageLike } from "../src/compression/select.ts"
 
@@ -87,6 +87,23 @@ describe("主动压缩提醒", () => {
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(3)
     expect((await loadState(storage, "ses_test")).nudgeBaselineTokens).toBeUndefined()
+  })
+
+  it("compress 工具关闭时跳过提醒，且不改用户设置", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { ...settings(1_000), enableCompressTool: false },
+    })
+    const messages = context("x".repeat(20_000))
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(3)
+    const state = await loadState(storage, "ses_test")
+    expect(state.nudgeBaselineTokens).toBeUndefined()
+    expect(state.nudgeCount ?? 0).toBe(0)
+
+    // 只跳过运行时提醒，不替用户关提醒、也不改工具开关。
+    const stored = await loadServerSettings(storage)
+    expect(stored.nudgeGrowthTokens).toBe(1_000)
+    expect(stored.enableCompressTool).toBe(false)
   })
 
   it("压缩 pending 时跳过提醒", async () => {

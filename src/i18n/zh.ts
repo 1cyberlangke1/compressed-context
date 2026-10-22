@@ -44,7 +44,7 @@ export const zh: Messages = {
     thresholdInvalid: "阈值必须在 60 ~ 95 之间",
     thresholdPreview: (value) => `= ${value}%`,
     nudgeGrowth: "压缩提醒间隔",
-    nudgeGrowthHint: "上下文每增长这么多 token 提醒模型可主动压缩；0 关闭",
+    nudgeGrowthHint: "上下文每增长这么多 token 提醒模型可主动压缩；0 关闭；compress 工具关闭时跳过",
     nudgeGrowthInvalid: "请输入 0，或 1k ~ 200k",
     summaryBlockPercent: "单条摘要上限",
     summaryBlockPercentHint: "单条摘要最多占窗口的百分比；可输入 10% 或 20k",

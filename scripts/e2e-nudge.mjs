@@ -168,6 +168,32 @@ function stateFor(id) {
   return typeof row?.value === "string" ? JSON.parse(row.value) : undefined
 }
 
+/** 输入：设置覆盖；输出：无；预期：直接写插件 settings，模拟 TUI 保存。 */
+function writeSettings(overrides) {
+  const db = new Database(join(root, "opencode.db"))
+  const now = Date.now()
+  db.query(
+    "insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)",
+  ).run(
+    `plugin:${pluginHex}:settings`,
+    JSON.stringify({
+      contextLimit: 1_000_000,
+      triggerPercent: 95,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 10,
+      summaryFormat: "markdown",
+      autoCompress: true,
+      enableCompressTool: true,
+      enableDecompressTool: true,
+      nudgeGrowthTokens: 1_000,
+      ...overrides,
+    }),
+    now,
+    now,
+  )
+  db.close()
+}
+
 /** 输入：请求体；输出：尾部 context-reminder 文本，没有则 undefined。 */
 function nudgeOf(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : []
@@ -192,27 +218,7 @@ try {
   pluginHex = Array.from("compressed-context")
     .map((char) => (char.codePointAt(0) ?? 0).toString(16).padStart(4, "0"))
     .join("")
-  const db = new Database(join(root, "opencode.db"))
-  const now = Date.now()
-  db.query(
-    "insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)",
-  ).run(
-    `plugin:${pluginHex}:settings`,
-    JSON.stringify({
-      contextLimit: 1_000_000,
-      triggerPercent: 95,
-      summaryBlockPercent: 20,
-      summaryTotalPercent: 10,
-      summaryFormat: "markdown",
-      autoCompress: true,
-      enableCompressTool: true,
-      enableDecompressTool: true,
-      nudgeGrowthTokens: 1_000,
-    }),
-    now,
-    now,
-  )
-  db.close()
+  writeSettings({})
 
   const created = await api("POST", "/api/session", {
     title: "e2e-nudge",
@@ -264,27 +270,7 @@ try {
   console.log("case passed: second threshold crossing nudges again")
 
   // 关闭自动压缩后，文案应改为「需要时手动调用 compress」。
-  const db2 = new Database(join(root, "opencode.db"))
-  const now2 = Date.now()
-  db2
-    .query("insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)")
-    .run(
-      `plugin:${pluginHex}:settings`,
-      JSON.stringify({
-        contextLimit: 1_000_000,
-        triggerPercent: 95,
-        summaryBlockPercent: 20,
-        summaryTotalPercent: 10,
-        summaryFormat: "markdown",
-        autoCompress: false,
-        enableCompressTool: true,
-        enableDecompressTool: true,
-        nudgeGrowthTokens: 1_000,
-      }),
-      now2,
-      now2,
-    )
-  db2.close()
+  writeSettings({ autoCompress: false })
 
   const beforeManual = requests.length
   await promptSession(sessionID, longText)
@@ -292,6 +278,35 @@ try {
   const manualNudge = manualBatch.map((body) => nudgeOf(body)).find((text) => text !== undefined)
   assert.ok(manualNudge?.includes("call compress when convenient"), "manual wording when autoCompress is off")
   console.log("case passed: manual wording after disabling auto compression")
+
+  // 关闭 compress 工具后，即使提醒设置仍然打开，也不能发提醒。
+  writeSettings({ enableCompressTool: false })
+  const countBeforeDisabled = stateFor(sessionID)?.nudgeCount ?? 0
+  const beforeDisabled = requests.length
+  await promptSession(sessionID, longText)
+  const disabledBatch = requests.slice(beforeDisabled)
+  assert.ok(disabledBatch.length > 0, "disabled tool turn must reach the provider")
+  assert.ok(
+    disabledBatch.every((body) => nudgeOf(body) === undefined),
+    "disabled compress tool must not nudge",
+  )
+  assert.equal(
+    stateFor(sessionID)?.nudgeCount ?? 0,
+    countBeforeDisabled,
+    "disabled tool must not increment nudge count",
+  )
+  console.log("case passed: disabled compress tool skips the reminder")
+
+  // 重新打开后提醒恢复；禁用期间没有更新基线，所以这次增长应立刻跨过阈值。
+  writeSettings({})
+  const beforeEnabled = requests.length
+  await promptSession(sessionID, longText)
+  const enabledBatch = requests.slice(beforeEnabled)
+  assert.ok(
+    enabledBatch.some((body) => nudgeOf(body) !== undefined),
+    "re-enabled compress tool must nudge again",
+  )
+  console.log("case passed: re-enabled compress tool restores the reminder")
 } finally {
   server.kill()
   await server.exited

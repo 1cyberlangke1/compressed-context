@@ -32,7 +32,7 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 - **按需解压**：模型可通过 `decompress` 工具还原指定摘要块（支持逐层展开或直接恢复为原始对话）。
 - **缓存友好**：压缩请求尽量保持前缀不变，避免破坏 Prompt Cache。
 - **双摘要格式**：支持标准 `markdown`（默认）和极致压缩的 `babel` 格式（首行 `T=标题|G=目标`，正文为高密度非自然语言）。
-- **超长提醒**：上下文增长超过设定阈值时，在请求尾部追加轻量提醒，引导模型自主决定压缩时机。
+- **超长提醒**：上下文增长超过设定阈值时，在请求尾部追加轻量提醒，引导模型自主决定压缩时机；`compress` 工具关闭时自动跳过。
 - **TUI 面板**：直观查看摘要块、缓存命中率与上下文构成，支持在面板内直接修改配置。
 
 ## 安装与配置
@@ -70,9 +70,11 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 | `summaryTotalPercent`  | `50` | 所有摘要的总 Token 预算占比，超出后触发 T2 / T3 合并           |
 | `summaryFormat`        | `"markdown"`       | 摘要格式：`markdown` 或 `babel`                                |
 | `summaryLanguage`      | `"auto"`           | 摘要语言（`babel` 格式下忽略此项）                             |
-| `nudgeGrowthTokens`    | `50000`            | 触发“主动压缩提醒”的 Token 增长阈值，设为 `0` 则关闭           |
+| `nudgeGrowthTokens`    | `50000`            | 触发“主动压缩提醒”的 Token 增长阈值，设为 `0` 则关闭；`compress` 工具关闭时跳过 |
 | `enableCompressTool`   | `true`             | 是否允许模型调用 `compress` 工具                               |
 | `enableDecompressTool` | `true`             | 是否允许模型调用 `decompress` 工具                             |
+
+关闭 `compress` 工具后，主动提醒会直接跳过，但不会改写你的 `nudgeGrowthTokens` 设置；重新打开工具后提醒会按原设置恢复。
 
 ## 本地开发
 

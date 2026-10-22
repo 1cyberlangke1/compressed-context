@@ -44,7 +44,7 @@ export const en: Messages = {
     thresholdInvalid: "Threshold must be between 60 and 95",
     thresholdPreview: (value) => `= ${value}%`,
     nudgeGrowth: "Compression reminder",
-    nudgeGrowthHint: "Remind the model after this much context growth; 0 disables it",
+    nudgeGrowthHint: "Remind the model after this much context growth; 0 disables it; skipped while the compress tool is off",
     nudgeGrowthInvalid: "Enter 0, or 1k to 200k",
     summaryBlockPercent: "Summary block limit",
     summaryBlockPercentHint: "Max share of the window for one summary; enter 10% or 20k",

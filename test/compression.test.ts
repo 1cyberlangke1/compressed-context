@@ -1021,6 +1021,30 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
+  it("compress 工具关闭时自动压缩仍然生效", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60, enableCompressTool: false },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
+  })
+
   it("autoCompress 关闭时不入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60, autoCompress: false },

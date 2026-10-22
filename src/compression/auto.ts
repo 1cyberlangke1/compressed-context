@@ -342,6 +342,9 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
 
     const settings = await loadServerSettings(input.ctx.storage)
     if (settings.nudgeGrowthTokens <= 0) return
+    // compress 工具被关闭时提醒没有意义：模型即使看到也调不动。
+    // 只跳过本次提醒，不改用户的 nudgeGrowthTokens / enableCompressTool 设置。
+    if (!settings.enableCompressTool) return
 
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
     if (state.nudgeBaselineTokens === undefined || state.nudgeBaselineTokens > total) {
