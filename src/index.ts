@@ -55,6 +55,8 @@ export default Plugin.define({
           await maybeAutoCompressStep({ ctx, sessionID, tokens })
         })(),
     })
+    // 工具注册后刷新一次工具表，让已存在的会话在下一次请求也能看到 compress。
+    await ctx.tool.reload()
     void reconcileAll(ctx)
 
     disposables.push(

@@ -37,6 +37,7 @@ function createFakeContext() {
         fn({ add: (tool) => tools.push(tool.name) })
         return Promise.resolve({ dispose: () => Promise.resolve() })
       },
+      reload: () => Promise.resolve(),
     },
     rpc: {
       register: () => Promise.resolve({ dispose: () => Promise.resolve() }),
