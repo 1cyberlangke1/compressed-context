@@ -96,6 +96,16 @@ export async function handleCompactionEvent(
 export interface SessionEventOptions {
   readonly onSessionIdle?: (sessionID: string) => void
   readonly onSessionDeleted?: (sessionID: string) => void
+  readonly onStepEnded?: (input: {
+    readonly sessionID: string
+    readonly messageID: string
+    readonly tokens: {
+      readonly input: number
+      readonly output: number
+      readonly reasoning: number
+      readonly cache: { readonly read: number; readonly write: number }
+    }
+  }) => void | Promise<void>
 }
 
 /**
@@ -133,6 +143,27 @@ export function startSessionEvents(
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         switch (event.type) {
+          case "session.step.ended": {
+            const data = event.data as {
+              sessionID: string
+              assistantMessageID?: string
+              tokens?: { input: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
+            }
+            const tokens = data.tokens
+            if (tokens !== undefined && options.onStepEnded !== undefined) {
+              await options.onStepEnded({
+                sessionID: data.sessionID,
+                messageID: data.assistantMessageID ?? "",
+                tokens: {
+                  input: tokens.input,
+                  output: tokens.output ?? 0,
+                  reasoning: tokens.reasoning ?? 0,
+                  cache: { read: tokens.cache?.read ?? 0, write: tokens.cache?.write ?? 0 },
+                },
+              })
+            }
+            break
+          }
           case "session.compaction.ended":
           case "session.compaction.failed": {
             const type: CompactionEventType =

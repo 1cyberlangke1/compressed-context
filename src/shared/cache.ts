@@ -118,6 +118,26 @@ export function appendCacheSamples(
   return normalizeSamples([...existing, ...added])
 }
 
+/**
+ * 输入：已有历史 + 单个 step 的 assistant usage。
+ * 输出：追加该 step 样本后的新历史。
+ * 预期：tool loop 里 context/usage.updated 拿不到最新 step usage，
+ *       `session.step.ended` 事件直接携带 tokens，这里按 messageID 去重落一条。
+ */
+export function appendCacheSampleFromStep(
+  existing: readonly CacheSample[],
+  messageID: string,
+  tokens: {
+    readonly input: number
+    readonly output: number
+    readonly reasoning: number
+    readonly cache: { readonly read: number; readonly write: number }
+  },
+  fallbackAt: number = Date.now(),
+): readonly CacheSample[] {
+  return appendCacheSamples(existing, [{ id: messageID, type: "assistant", tokens }], fallbackAt)
+}
+
 /** 输入：任意 storage 值；输出：合法历史；损坏时返回空历史，绝不抛错。hitRate 按 input/cached 重算。 */
 export function parseCacheHistory(value: unknown): CacheHistory {
   if (typeof value !== "object" || value === null) return EMPTY_CACHE_HISTORY

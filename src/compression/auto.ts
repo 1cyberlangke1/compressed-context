@@ -4,7 +4,7 @@ import { formatTokens } from "../shared/format.ts"
 import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/settings.ts"
 import { estimateCategories, totalCategories } from "../shared/tokens.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
-import { RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
+import { EFFECTIVE_WINDOW_KEY, RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
 import { MAX_COMPRESSION_ATTEMPTS, loadState, saveState } from "./state.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -31,6 +31,75 @@ export function markCompactionInFlight(sessionID: string, active: boolean): void
 /** 输入：sessionID；输出：是否正在压缩。 */
 export function isCompactionInFlight(sessionID: string): boolean {
   return compactionInFlight.has(sessionID)
+}
+
+/** 输入：tokens 前缀；输出：真实 prompt token 数；预期：output/reasoning 不计入。 */
+function stepPromptTokens(tokens: {
+  readonly input: number
+  readonly cache: { readonly read: number; readonly write: number }
+}): number {
+  return tokens.input + tokens.cache.read + tokens.cache.write
+}
+
+/**
+ * 输入：storage；输出：最近一次解析到的「生效窗口」。
+ * 预期：`resolveLimit` 在缓存里保存的是原生窗口，settings 里的数字上限
+ *       `contextLimit=100000` 只有在生效窗口里才体现；缺失时 undefined。
+ */
+async function effectiveLimit(storage: Plugin.Context["storage"]): Promise<number | undefined> {
+  const stored = await storage.get(EFFECTIVE_WINDOW_KEY)
+  return typeof stored === "number" && stored > 0 ? stored : undefined
+}
+
+/**
+ * 输入：`session.step.ended` 事件带的 usage + 服务端上下文 + sessionID。
+ * 输出：无。
+ * 预期：tool loop 的后续 step 不触发 context hook，这里是唯一能在同 turn 内
+ *       看到 usage 增长的入口；超过阈值直接入队 compaction。
+ */
+export async function maybeAutoCompressStep(input: {
+  readonly ctx: Plugin.Context
+  readonly sessionID: string
+  readonly tokens: {
+    readonly input: number
+    readonly cache: { readonly read: number; readonly write: number }
+  }
+}): Promise<void> {
+  try {
+    if (isCompactionInFlight(input.sessionID)) return
+    const state = await loadState(input.ctx.storage, input.sessionID)
+    if (state.pending) return
+    if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return
+    if (state.terminal !== undefined) return
+
+    const settings = await loadServerSettings(input.ctx.storage)
+    if (!settings.autoCompress) return
+    // 事件里没有 model 引用；用生效窗口缓存（min(settings, native)）折算阈值。
+    // 原生窗口单独是 1M 时阈值会变成 800k，压缩永远不会触发。
+    const effective = await effectiveLimit(input.ctx.storage)
+    if (effective === undefined || effective <= 0) return
+    if (effective - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
+
+    if (state.phase !== undefined) {
+      await input.ctx.session.compact({ sessionID: input.sessionID })
+      return
+    }
+
+    if (stepPromptTokens(input.tokens) < effective * (settings.triggerPercent / 100)) return
+
+    await input.ctx.session.compact({ sessionID: input.sessionID })
+  } catch (error) {
+    try {
+      const current = await loadState(input.ctx.storage, input.sessionID)
+      await saveState(input.ctx.storage, input.sessionID, {
+        ...current,
+        attempts: current.attempts + 1,
+        lastError: String(error),
+      })
+    } catch {
+      // best effort
+    }
+  }
 }
 
 /**
@@ -98,6 +167,14 @@ export async function resolveLimit(
       // 原生窗口未知：数字设置按原值使用，auto 则关闭自动压缩
     }
   }
+  const effective = setting === "auto" ? native : native === undefined ? setting : Math.min(setting, native)
+  if (typeof effective === "number" && effective > 0) {
+    try {
+      await ctx.storage.set(EFFECTIVE_WINDOW_KEY, effective)
+    } catch {
+      // best effort：写不进去只影响 step.ended 兜底
+    }
+  }
   if (setting !== "auto") return native === undefined ? setting : Math.min(setting, native)
   return native
 }
@@ -124,7 +201,7 @@ function promptTokens(tokens: {
 /**
  * 输入：服务端上下文 + sessionID。
  * 输出：最后一个 assistant 的真实 prompt token；没有 usage 时 undefined。
- * 预期：优先使用 provider 返回的 usage；失败时让调用方回退到估算。
+ * 预期：SessionHistory 按 seq 升序返回，从末尾取最新 assistant。
  */
 async function measuredPromptTokens(
   ctx: Plugin.Context,

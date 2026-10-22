@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 
-import { maybeAutoCompress, maybeNudge } from "./compression/auto.ts"
+import { maybeAutoCompress, maybeAutoCompressStep, maybeNudge } from "./compression/auto.ts"
+import { recordCacheHistoryStep } from "./compression/cache-history.ts"
 import { adoptNativeCheckpoint } from "./compression/adopt.ts"
 import { handleCompaction } from "./compression/compaction.ts"
 import { reconcileAll, startSessionEvents } from "./compression/events.ts"
@@ -42,6 +43,11 @@ export default Plugin.define({
     const stopEvents = startSessionEvents(ctx, {
       onSessionIdle: forgetMemory,
       onSessionDeleted: forgetMemory,
+      onStepEnded: ({ sessionID, messageID, tokens }) =>
+        (async () => {
+          await recordCacheHistoryStep(ctx, sessionID, { messageID, tokens })
+          await maybeAutoCompressStep({ ctx, sessionID, tokens })
+        })(),
     })
     void reconcileAll(ctx)
 

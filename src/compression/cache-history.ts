@@ -2,6 +2,7 @@ import type { Plugin } from "@opencode/plugin"
 import type { Schema } from "effect"
 
 import {
+  appendCacheSampleFromStep,
   appendCacheSamples,
   cacheHistoryEquals,
   cacheHistoryKey,
@@ -23,6 +24,36 @@ export async function saveCacheHistory(
   samples: readonly CacheSample[],
 ): Promise<void> {
   await storage.set(cacheHistoryKey(sessionID), { v: 1, samples } as unknown as Schema.Json)
+}
+
+/**
+ * 输入：插件上下文 + sessionID + 单 step 的 assistant usage。
+ * 输出：无。
+ * 预期：tool loop 的后续 step 不触发 context/usage.updated 的完整读取，
+ *       用 `session.step.ended` 事件里的 tokens 直接落一条缓存样本。
+ */
+export async function recordCacheHistoryStep(
+  ctx: Plugin.Context,
+  sessionID: string,
+  input: {
+    readonly messageID: string
+    readonly tokens: {
+      readonly input: number
+      readonly output: number
+      readonly reasoning: number
+      readonly cache: { readonly read: number; readonly write: number }
+    }
+  },
+): Promise<void> {
+  try {
+    const history = await loadCacheHistory(ctx.storage, sessionID)
+    const samples = appendCacheSampleFromStep(history.samples, input.messageID, input.tokens)
+    if (!cacheHistoryEquals(history.samples, samples)) {
+      await saveCacheHistory(ctx.storage, sessionID, samples)
+    }
+  } catch {
+    // best effort：历史缺失不影响主流程
+  }
 }
 
 /**

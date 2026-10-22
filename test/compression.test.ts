@@ -8,7 +8,7 @@ import { handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
 import { parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
-import { isMarkdownSummary, type Summary, type SummaryFields } from "../src/compression/schema.ts"
+import { isBabelSummary, isMarkdownSummary, type Summary, type SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
 import { commitPending, dropPending, loadState, parseState, saveState, stateKey, withPending, type Block, type CompactionPhase, type State, type StorageLike } from "../src/compression/state.ts"
 import {
@@ -23,9 +23,9 @@ import { registerCompressTool } from "../src/compression/tool.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
 import { minSummaryChars, validateSummary } from "../src/compression/validate.ts"
 
-/** 输入：摘要；输出：JSON 字段；Markdown 摘要返回 undefined。 */
+/** 输入：摘要；输出：JSON 字段；Markdown/Babel 摘要返回 undefined。 */
 function jsonSummary(summary: Summary | undefined): SummaryFields | undefined {
-  return summary !== undefined && !isMarkdownSummary(summary) ? summary : undefined
+  return summary !== undefined && !isMarkdownSummary(summary) && !isBabelSummary(summary) ? summary : undefined
 }
 
 /** 测试辅助：显式设置/清空 phase；生产代码不再使用 withPhase。 */
