@@ -32,9 +32,11 @@ function promptRules(options: SummaryPromptOptions | undefined): string[] {
   const lines =
     options?.format === "babel"
       ? [
-          "- Receiver is another equally capable language model, not a human. Babel changes only notation, not content: drop grammar and connectives and mix languages/emoji/logic symbols, but keep the same facts as a normal checkpoint.",
-          "- Only `T=<short title>|G=<one-line goal>` is fixed. Invent the shortest anchors/delimiters for this source and reuse them; no headings, paragraphs, sentences, JSON, or code fences.",
-          "- Lossless in latent space: entity/relation graph, exact numbers (never round or estimate), versions, config keys, thresholds, formulas, conditions, causality, exceptions, comparisons, placeholders, paths, complete file lists, exact commands, signatures, error text. Mark unknown data as ? or NULL; never invent.",
+          "- Audience=peer LLM. Notation only, not content: drop grammar/connectives, mix languages/emoji/math（forall、exists、in、=>）.",
+          "- Only `T=<short title>|G=<one-line goal>` fixed; invent anchors and reuse them; no headings/paragraphs/sentences/JSON/fences.",
+          "- Anchors: `S[module]` `D[decision]:why` `F[path:line]` `C[step>step]` `Config[target]:k=v` `?cond=>action` `!edge:detail` `Eval[A/B]:result`; flatten parallel items `[A,B,C]`.",
+          "- Files `F:[...]` complete, never \"various files\"; commands `C:[...]` verbatim, never paraphrase.",
+          "- Lossless: entity graph, exact numbers (no rounding), versions, config keys, thresholds, formulas, conditions, causality, exceptions, comparisons, placeholders, paths, signatures, error text; unknown=?/NULL, never invent.",
           `- Keep this summary under ${maxChars.toString()} characters.`,
         ]
       : options?.format === "markdown"
@@ -100,7 +102,7 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
 const BABEL_T1_RULES = `Guidance:
 - This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own. Describe what already happened as history, not as instructions to act now.
 - Keep the objective and hard constraints, decisions with their reasons, outcomes, open items, work the user still expects, and failure lessons.
-- Copy exact identifiers instead of describing them: full paths with line numbers, signatures, error text, versions, config keys, thresholds, measured values. Keep file lists complete and copy commands verbatim; never replace a list with "various files" or paraphrase a command.
+- Copy exact identifiers instead of describing them: full paths with line numbers, the line of code that carries the logic, signatures, error text, versions, config keys, thresholds, measured values.
 - Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why they failed), repeated status checks, and settled discussion.
 - If space is tight, keep in this order: objective and constraints; decisions and reasons; exact technical facts; conclusions; lessons from failures.`
 
@@ -131,7 +133,7 @@ const TIER1_RULES = `Guidance:
 const TIER2_RULES = `Guidance for merging existing checkpoints:
 - The sources are already compressed summaries, not raw conversation. Merge them into one checkpoint that covers all of them; do not re-tell the process.
 - Keep only what future work needs: the latest objective and hard constraints; decisions with their reasons; final outcomes; open items and blocked work; the user's still-open expectations.
-- Keep exact paths, signatures, errors, versions, config keys, measured values, complete file lists, and exact commands only when they still matter. Drop line numbers, full diffs, code listings, logs, repeated reads, and intermediate debugging.
+- Keep exact paths, signatures, errors, versions, config keys, and measured values only when they still matter. Drop line numbers, full diffs, code listings, logs, repeated reads, and intermediate debugging.
 - Merge duplicate facts across sources and keep the latest status. Mark superseded or obsolete content with one short marker; do not keep its details.
 - A failed attempt may stay as one line saying what failed and why, because that prevents repeating it.
 - Target roughly 50-150 tokens per source block. Prefer dense factual entries over narrative.`

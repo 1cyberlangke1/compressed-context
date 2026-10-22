@@ -129,11 +129,11 @@ describe("Babel prompts", () => {
 
   it("Babel 只换书写方式，不比其他格式少保留内容", () => {
     const t1 = buildT1Instruction({ format: "babel", maxChars: 2_000 })
-    expect(t1).toContain("changes only notation, not content")
-    expect(t1).toContain("never round or estimate")
-    // 文件清单和命令必须原样保留，不能被「各种文件」概括掉。
-    expect(t1).toContain("Keep file lists complete")
-    expect(t1).toContain("copy commands verbatim")
+    expect(t1).toContain("Notation only, not content")
+    expect(t1).toContain("no rounding")
+    // 文件清单和命令用符号锚点写，必须原样保留。
+    expect(t1).toContain("Files `F:[...]` complete")
+    expect(t1).toContain("commands `C:[...]` verbatim")
     // 不允许 babel 独有的 token 目标把内容压得比 markdown/json 更狠。
     expect(t1).not.toMatch(/Target \d+-\d+ tokens for T1/)
 
@@ -142,7 +142,7 @@ describe("Babel prompts", () => {
       { format: "babel", maxChars: 2_000 },
     )
     expect(merge).toContain("changes only notation, not content")
-    expect(merge).toContain("never round or estimate")
+    expect(merge).toContain("no rounding")
     expect(merge).not.toMatch(/Target \d+-\d+ tokens for T2/)
   })
 })
