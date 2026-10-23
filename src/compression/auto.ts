@@ -99,6 +99,29 @@ function blockedByState(state: State): boolean {
 }
 
 /**
+ * 输入：服务端上下文 + sessionID。
+ * 输出：最近一次 completed compaction 之后是否出现了新的 user 消息。
+ * 预期：没有 compaction 或读不到历史时返回 true，保持旧触发行为；
+ *       有 completed compaction 且后面只有 assistant/tool 消息时返回 false，
+ *       避免同一轮压缩刚结束又入队一次空压缩。
+ */
+async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): Promise<boolean> {
+  try {
+    const messages = await ctx.session.context({ sessionID })
+    let latest = -1
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index]
+      if (message?.type === "compaction" && message.status === "completed") latest = index
+    }
+    if (latest < 0) return true
+    return messages.slice(latest + 1).some((message) => message.type === "user" && message.text.trim().length > 0)
+  } catch {
+    // 读不到历史时不阻断压缩；OpenCode 会在钩子里给出真实错误。
+    return true
+  }
+}
+
+/**
  * 输入：服务端上下文 + sessionID + 捕获到的错误。
  * 输出：无。
  * 预期：累加 attempts 并记录 lastError；写状态失败时忽略，避免掩盖原始错误。
@@ -157,6 +180,9 @@ export async function maybeAutoCompressStep(input: {
     }
 
     if (promptTokens(input.tokens) < effective * (settings.triggerPercent / 100)) return
+    // 刚压缩完、还没有新的 user 消息时，历史里只剩 checkpoint；再入队只会得到
+    // Nothing to compact yet，并在 state 里留下一次无意义的 attempts。
+    if (!(await hasUserSinceCompaction(input.ctx, input.sessionID))) return
 
     // 入队后同步等压缩落地，对齐 OpenCode 原生压缩的语义：
     // 下一个 step 的模型请求一定从压缩后的上下文开始，而不是继续放大。

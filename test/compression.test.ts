@@ -131,24 +131,27 @@ function fakeCtx(
   text: (input: { prompt: string }) => Promise<{ text: string }>,
   compact: () => Promise<void>,
   usage?: number,
+  contextMessages?: readonly unknown[],
 ): Plugin.Context {
   const measured =
-    usage === undefined
-      ? {}
-      : {
-          context: () =>
-            Promise.resolve([
-              {
-                type: "assistant",
-                tokens: {
-                  input: usage,
-                  output: 0,
-                  reasoning: 0,
-                  cache: { read: 0, write: 0 },
+    contextMessages !== undefined
+      ? { context: () => Promise.resolve(contextMessages) }
+      : usage === undefined
+        ? {}
+        : {
+            context: () =>
+              Promise.resolve([
+                {
+                  type: "assistant",
+                  tokens: {
+                    input: usage,
+                    output: 0,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                  },
                 },
-              },
-            ]),
-        }
+              ]),
+          }
   return {
     storage,
     location: { directory: configDirectories.get(storage) ?? tmpdir() },
@@ -742,6 +745,64 @@ describe("自动压缩", () => {
     }
     const state = await loadState(storage, "ses_test")
     expect(state.blocks.map((item) => item.id)).toEqual(["b1"])
+  })
+
+  it("压缩成功后没有新 user 消息时 step.ended 不再入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      async () => {
+        compacts += 1
+        const current = await loadState(storage, "ses_test")
+        await saveState(storage, "ses_test", { ...current, lastError: "compacted" })
+      },
+      undefined,
+      [
+        { type: "compaction", status: "completed", summary: "old" },
+        { type: "assistant", content: [{ type: "text", text: "done" }] },
+      ],
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 90_000, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("压缩后出现新 user 消息时 step.ended 仍然入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      async () => {
+        compacts += 1
+        const current = await loadState(storage, "ses_test")
+        await saveState(storage, "ses_test", { ...current, lastError: "compacted" })
+      },
+      undefined,
+      [
+        { type: "compaction", status: "completed", summary: "old" },
+        { type: "user", text: "new request", files: [] },
+      ],
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 90_000, write: 0 } },
+    })
+    expect(compacts).toBe(1)
   })
 
   it("step.ended usage 低于阈值时不入队", async () => {
