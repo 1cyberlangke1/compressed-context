@@ -1,12 +1,20 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
+
+import { CONFIG_FILE } from "../src/shared/config-paths.ts"
+
+/** 测试里只作为 JSONC 的旧键名，插件本身不再读 storage 设置。 */
+const SETTINGS_KEY = "settings"
 
 import { markCompactionInFlight, maybeAutoCompress, maybeAutoCompressStep } from "../src/compression/auto.ts"
 import { distillOnce, isTerminal, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
 import { handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
-import { EFFECTIVE_WINDOW_KEY, effectiveWindowKey, parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
+import { EFFECTIVE_WINDOW_KEY, effectiveWindowKey, parseServerSettings } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import { isBabelSummary, isMarkdownSummary, type Summary, type SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
@@ -83,12 +91,28 @@ const longBlock = (id: string, tier: 1 | 2 | 3, order: number): Block => ({
   summary: { ...summary, facts: ["x".repeat(24_000)] },
 })
 
-/** 输入：初始键值；输出：内存版 StorageLike。 */
+/** 测试 storage 对应的临时 JSONC 目录。 */
+const configDirectories = new WeakMap<StorageLike, string>()
+
+/** 输入：初始键值；输出：内存版 StorageLike。预期：settings 落成临时 JSONC 文件。 */
 function memoryStorage(initial: Record<string, unknown> = {}): StorageLike {
   const values = new Map<string, Schema.Json>(Object.entries(initial) as [string, Schema.Json][])
-  return {
+  const directory = mkdtempSync(join(tmpdir(), "cc-settings-"))
+  const settings = initial[SETTINGS_KEY]
+  if (settings !== undefined) {
+    const opencode = join(directory, ".opencode")
+    mkdirSync(opencode, { recursive: true })
+    writeFileSync(join(opencode, CONFIG_FILE), JSON.stringify(settings), "utf8")
+  }
+  const storage: StorageLike = {
     get: (key) => Promise.resolve(values.get(key)),
     set: (key, value) => {
+      if (key === SETTINGS_KEY) {
+        const opencode = join(directory, ".opencode")
+        mkdirSync(opencode, { recursive: true })
+        writeFileSync(join(opencode, CONFIG_FILE), JSON.stringify(value), "utf8")
+        return Promise.resolve()
+      }
       values.set(key, value)
       return Promise.resolve()
     },
@@ -97,6 +121,8 @@ function memoryStorage(initial: Record<string, unknown> = {}): StorageLike {
       return Promise.resolve()
     },
   }
+  configDirectories.set(storage, directory)
+  return storage
 }
 
 /** 输入：storage / 摘要回复 / compact 回调；输出：够自动压缩和 distill 用的假 ctx。 */
@@ -125,6 +151,7 @@ function fakeCtx(
         }
   return {
     storage,
+    location: { directory: configDirectories.get(storage) ?? tmpdir() },
     model: { list: () => Promise.resolve({ data: [] }) },
     generate: { text },
     session: {
@@ -1375,6 +1402,7 @@ describe("compress 工具只做 T1", () => {
     let definition: ToolDefinition | undefined
     const ctx = {
       storage,
+      location: { directory: configDirectories.get(storage) ?? tmpdir() },
       tool: {
         transform: (fn: (tools: { add: (tool: ToolDefinition) => void }) => void) => {
           fn({ add: (tool) => { definition = tool } })

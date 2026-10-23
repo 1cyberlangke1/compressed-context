@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import type { Plugin } from "@opencode/plugin"
 import { describe, expect, it, vi } from "vitest"
 
@@ -32,6 +33,7 @@ function createFakeContext() {
       remove: () => Promise.resolve(),
       scan: () => Promise.resolve({ entries: [] }),
     },
+    location: { directory: tmpdir() },
     tool: {
       transform: (fn: (editor: { add: (tool: { name: string }) => void }) => void) => {
         fn({ add: (tool) => tools.push(tool.name) })

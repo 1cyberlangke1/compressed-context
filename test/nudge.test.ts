@@ -1,16 +1,31 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
 import { describe, expect, it } from "vitest"
 
 import { buildNudgeText, maybeNudge } from "../src/compression/auto.ts"
-import { DEFAULT_SERVER_SETTINGS, SETTINGS_KEY, loadServerSettings } from "../src/compression/settings.ts"
+import { DEFAULT_SERVER_SETTINGS, loadServerSettings } from "../src/compression/settings.ts"
 import { loadState, saveState, MAX_COMPRESSION_ATTEMPTS, type Block, type StorageLike } from "../src/compression/state.ts"
 import type { MessageLike } from "../src/compression/select.ts"
+import { CONFIG_FILE } from "../src/shared/config-paths.ts"
 
-/** 输入：初始键值；输出：内存版 StorageLike。 */
+/** 测试里只作为 JSONC 的旧键名，插件本身不再读 storage 设置。 */
+const SETTINGS_KEY = "settings"
+const configDirectories = new WeakMap<StorageLike, string>()
+
+/** 输入：初始键值；输出：内存版 StorageLike。预期：settings 落成临时 JSONC 文件。 */
 function memoryStorage(initial: Record<string, unknown> = {}): StorageLike {
   const values = new Map<string, Schema.Json>(Object.entries(initial) as [string, Schema.Json][])
-  return {
+  const directory = mkdtempSync(join(tmpdir(), "cc-settings-"))
+  const settings = initial[SETTINGS_KEY]
+  if (settings !== undefined) {
+    const opencode = join(directory, ".opencode")
+    mkdirSync(opencode, { recursive: true })
+    writeFileSync(join(opencode, CONFIG_FILE), JSON.stringify(settings), "utf8")
+  }
+  const storage: StorageLike = {
     get: (key) => Promise.resolve(values.get(key)),
     set: (key, value) => {
       values.set(key, value)
@@ -21,6 +36,8 @@ function memoryStorage(initial: Record<string, unknown> = {}): StorageLike {
       return Promise.resolve()
     },
   }
+  configDirectories.set(storage, directory)
+  return storage
 }
 
 /** 输入：文本；输出：一段带前序消息和当前 user 的上下文。 */
@@ -32,9 +49,12 @@ function context(text: string): MessageLike[] {
   ]
 }
 
-/** 输入：storage；输出：只提供 storage 的假 ctx。 */
+/** 输入：storage；输出：只提供 storage + 临时配置目录的假 ctx。 */
 function fakeCtx(storage: StorageLike): Plugin.Context {
-  return { storage } as unknown as Plugin.Context
+  return {
+    storage,
+    location: { directory: configDirectories.get(storage) ?? tmpdir() },
+  } as unknown as Plugin.Context
 }
 
 /** 输入：storage + 可追加消息；输出：执行 maybeNudge 所需的输入。 */
@@ -60,7 +80,8 @@ describe("主动压缩提醒", () => {
     const text = buildNudgeText(52_300, true, true)
     expect(text).toContain("about 52k tokens since the last compressed block")
     expect(text).toContain("entire current conversation flow since the last compressed block")
-    expect(text).toContain("automatic compression will run later")
+    expect(text).toContain("still need these exact details")
+    expect(text).toContain("Automatic compression will run later")
   })
 
   it("第一次只建立基线，增长到阈值后才追加一次提醒", async () => {
@@ -101,7 +122,7 @@ describe("主动压缩提醒", () => {
     expect(state.nudgeCount ?? 0).toBe(0)
 
     // 只跳过运行时提醒，不替用户关提醒、也不改工具开关。
-    const stored = await loadServerSettings(storage)
+    const stored = await loadServerSettings(fakeCtx(storage))
     expect(stored.nudgeGrowthTokens).toBe(1_000)
     expect(stored.enableCompressTool).toBe(false)
   })
@@ -126,7 +147,7 @@ describe("主动压缩提醒", () => {
   })
 
   it("自动压缩关闭时文案改为手动调用", () => {
-    expect(buildNudgeText(10_000, false, false)).toContain("call compress when convenient")
+    expect(buildNudgeText(10_000, false, false)).toContain("Call compress when convenient")
   })
 
   it("终止态下不追加提醒", async () => {

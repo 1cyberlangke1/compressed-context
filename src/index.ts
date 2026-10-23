@@ -27,7 +27,7 @@ export default Plugin.define({
     const published = new Map<string, ContextStats>()
     const disposables: Disposable[] = []
     // 清理上一个进程留下的解压临时文件；保留期由当前设置决定，默认 24 小时。
-    const initialSettings = await loadServerSettings(ctx.storage)
+    const initialSettings = await loadServerSettings(ctx)
     cleanupStaleTempFiles({
       maxAgeMs: effectiveDecompressTempMaxAgeHours(initialSettings) * 60 * 60 * 1000,
     })

@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { createMemo, createSignal, onMount } from "solid-js"
 
 import { formatTokens } from "../shared/format.ts"
 import { resolveMessages } from "../i18n/index.ts"
@@ -22,7 +22,6 @@ import {
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
   maxSummaryPercent,
-  serverSettingsPayload,
   type ContextLimit,
   type LocaleSetting,
   type Settings,
@@ -91,17 +90,6 @@ export function SettingsCommand(props: {
   // 读取当前会话模型的原生窗口，auto 时也能把绝对值换算成百分比。
   onMount(() => {
     void fetchWindow(routeSessionID())
-  })
-
-  // 设置变化时推给服务端；服务端插件未加载时静默忽略。
-  createEffect(() => {
-    try {
-      void contextRpc(props.context.client)
-        .settingsSet(serverSettingsPayload(props.settings))
-        .catch(() => undefined)
-    } catch {
-      // server plugin not loaded
-    }
   })
 
   const openNudge = (): void => {

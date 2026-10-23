@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 import { describe, expect, it } from "vitest"
@@ -9,18 +12,29 @@ import { registerCompressTool, type CompressToolHandle } from "../src/compressio
 import { registerDecompressTool } from "../src/compression/decompress-tool.ts"
 import type { MessageLike } from "../src/compression/select.ts"
 import type { SummaryFormat } from "../src/shared/settings.ts"
+import { CONFIG_FILE } from "../src/shared/config-paths.ts"
 
-/** 输入：无；输出：内存 storage 替身，并记录读取过的 key。 */
+/** 测试 storage 对应的临时 JSONC 目录。 */
+const configDirectories = new WeakMap<StorageLike, string>()
+
+/** 输入：无；输出：内存 storage 替身，并记录读取过的 key。预期：settings 落成临时 JSONC 文件。 */
 function createStorage(): StorageLike & { readonly reads: string[] } {
   const data = new Map<string, unknown>()
   const reads: string[] = []
-  return {
+  const directory = mkdtempSync(join(tmpdir(), "cc-settings-"))
+  const storage: StorageLike & { readonly reads: string[] } = {
     reads,
     get(key) {
       reads.push(key)
       return Promise.resolve(data.get(key) as Schema.Json | undefined)
     },
     set(key, value) {
+      if (key === "settings") {
+        const opencode = join(directory, ".opencode")
+        mkdirSync(opencode, { recursive: true })
+        writeFileSync(join(opencode, CONFIG_FILE), JSON.stringify(value), "utf8")
+        return Promise.resolve()
+      }
       data.set(key, value)
       return Promise.resolve()
     },
@@ -29,6 +43,8 @@ function createStorage(): StorageLike & { readonly reads: string[] } {
       return Promise.resolve()
     },
   }
+  configDirectories.set(storage, directory)
+  return storage
 }
 
 /** 输入：文本；输出：可压缩的 user 消息。 */
@@ -99,6 +115,7 @@ async function setup(input: {
   let render: (() => void) | undefined
   const ctx = {
     storage: input.storage,
+    location: { directory: configDirectories.get(input.storage) ?? tmpdir() },
     session: {
       get: () => Promise.resolve({ model: { providerID: "fake", id: "model" } }),
       compact: () => Promise.resolve(),
@@ -142,6 +159,7 @@ async function setupDecompress(storage: StorageLike): Promise<DecompressExecute>
   let execute: DecompressExecute | undefined
   const ctx = {
     storage,
+    location: { directory: configDirectories.get(storage) ?? tmpdir() },
     tool: {
       transform: (fn: (editor: { add: (tool: { execute: DecompressExecute }) => void }) => void) => {
         fn({ add: (tool) => (execute = tool.execute) })

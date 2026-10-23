@@ -2,11 +2,20 @@ import { Rpc } from "@opencode/plugin/rpc"
 
 import type { SummaryBlock } from "./blocks.ts"
 import type { CacheSample } from "./cache.ts"
-import type { CompressionSettings } from "./settings.ts"
+import type { Settings } from "./settings.ts"
+
+/** 配置层路径：全局在前，项目由远到近。 */
+const LayersJson = {
+  type: "array",
+  items: { type: "string" },
+} as const
 
 const SettingsGetInputJson = {
   type: "object",
-  properties: { sessionID: { type: "string" } },
+  properties: {
+    sessionID: { type: "string" },
+    layers: LayersJson,
+  },
   additionalProperties: false,
 } as const
 
@@ -29,11 +38,25 @@ const SettingsProperties = {
   decompressTempCap: { type: "number" },
   decompressTempMaxAgeHours: { type: "number" },
   decompressShowTokens: { type: "boolean" },
+  enabled: { type: "boolean" },
+  expanded: { type: "boolean" },
+  locale: { type: "string", enum: ["auto", "zh", "en"] },
+  cacheExpanded: { type: "boolean" },
+  showCacheChart: { type: "boolean" },
+  cacheChartExpanded: { type: "boolean" },
+  showCacheLog: { type: "boolean" },
+  cacheLogExpanded: { type: "boolean" },
+  showSummaries: { type: "boolean" },
+  summariesExpanded: { type: "boolean" },
+  nativeCompactionPromptDismissed: { type: "boolean" },
 } as const
 
 const SettingsInputJson = {
   type: "object",
-  properties: SettingsProperties,
+  properties: {
+    ...SettingsProperties,
+    layers: LayersJson,
+  },
   required: ["contextLimit", "triggerPercent"],
   additionalProperties: false,
 } as const
@@ -51,7 +74,10 @@ const SettingsOutputJson = {
 
 const OkJson = {
   type: "object",
-  properties: { ok: { type: "boolean" } },
+  properties: {
+    ok: { type: "boolean" },
+    error: { type: "string" },
+  },
   required: ["ok"],
   additionalProperties: false,
 } as const
@@ -146,14 +172,14 @@ export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
 })
 
 /** 服务端设置读取结果。 */
-export interface ContextSettingsResult extends CompressionSettings {
+export interface ContextSettingsResult extends Settings {
   readonly resolvedWindow?: number
 }
 
 /** TUI 侧对 ContextRpc 的类型化视图。 */
 export interface ContextRpcClient {
-  settingsGet(input: { readonly sessionID?: string }): Promise<ContextSettingsResult>
-  settingsSet(input: CompressionSettings): Promise<{ readonly ok: boolean }>
+  settingsGet(input: { readonly sessionID?: string; readonly layers?: readonly string[] }): Promise<ContextSettingsResult>
+  settingsSet(input: Settings & { readonly layers?: readonly string[] }): Promise<{ readonly ok: boolean; readonly error?: string }>
   blocksGet(input: { readonly sessionID: string }): Promise<{ readonly blocks: readonly SummaryBlock[] }>
   cacheHistoryGet(input: {
     readonly sessionID: string

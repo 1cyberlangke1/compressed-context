@@ -143,7 +143,7 @@ export async function maybeAutoCompressStep(input: {
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (blockedByState(state)) return
 
-    const settings = await loadServerSettings(input.ctx.storage)
+    const settings = await loadServerSettings(input.ctx)
     if (!settings.autoCompress) return
     // 事件里没有 model 引用；用生效窗口缓存（min(settings, native)）折算阈值。
     // 原生窗口单独是 1M 时阈值会变成 800k，压缩永远不会触发。
@@ -303,7 +303,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (blockedByState(state)) return
 
-    const settings = await loadServerSettings(input.ctx.storage)
+    const settings = await loadServerSettings(input.ctx)
     if (!settings.autoCompress) return
     const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)
     if (limit === undefined || limit <= 0) return
@@ -333,8 +333,8 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
 export function buildNudgeText(growthTokens: number, hasCompressed: boolean, autoCompress: boolean): string {
   const scope = hasCompressed ? "since the last compressed block" : "since the session started"
   const fallback = autoCompress
-    ? "If you are busy, ignore this; automatic compression will run later."
-    : "If you are busy, ignore this; call compress when convenient."
+    ? "If you are busy, ignore this; if you are busy but still need these exact details, keep them for now. Automatic compression will run later."
+    : "If you are busy, ignore this; if you are busy but still need these exact details, keep them for now. Call compress when convenient."
   return (
     `[context-reminder] Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
     `You may call compress to checkpoint the entire current conversation flow ${scope}. ` +
@@ -358,7 +358,7 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     if (isCompactionInFlight(input.sessionID)) return
     if (isCompressionInstruction(input.messages)) return
 
-    const settings = await loadServerSettings(input.ctx.storage)
+    const settings = await loadServerSettings(input.ctx)
     if (settings.nudgeGrowthTokens <= 0) return
     // compress 工具被关闭时提醒没有意义：模型即使看到也调不动。
     // 只跳过本次提醒，不改用户的 nudgeGrowthTokens / enableCompressTool 设置。

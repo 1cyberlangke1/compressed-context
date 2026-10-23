@@ -93,7 +93,7 @@ export async function registerCompressTool(
   ctx: Plugin.Context,
   legacyCache?: ReadonlyMap<string, readonly MessageLike[]>,
 ): Promise<CompressToolHandle> {
-  const initial = await loadServerSettings(ctx.storage)
+  const initial = await loadServerSettings(ctx)
   let format: SummaryFormat = initial.summaryFormat
   const registration = await ctx.tool.transform((tools) => {
     tools.add({
@@ -126,7 +126,7 @@ export async function registerCompressTool(
           )
         }
 
-        const settings = await loadServerSettings(ctx.storage)
+        const settings = await loadServerSettings(ctx)
         if (!settings.enableCompressTool) return failure("compress tool is disabled in settings")
         // 优先用当前会话模型自己的窗口；取不到再回退最近一次解析值。
         let windowTokens: number | undefined

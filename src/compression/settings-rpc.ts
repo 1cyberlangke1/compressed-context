@@ -7,12 +7,13 @@ import { disableNativeCompaction } from "./native-compaction.ts"
 import { activeBlocks, renderSummary } from "./render.ts"
 import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
 import { loadState } from "./state.ts"
+import { normalizeSettings } from "../shared/settings.ts"
 import {
   RESOLVED_WINDOW_KEY,
-  loadServerSettings,
+  loadSettings,
   parseServerSettings,
   resolvedWindowKey,
-  saveServerSettings,
+  saveSettings,
   type ServerSettings,
   windowKey,
 } from "./settings.ts"
@@ -20,6 +21,15 @@ import {
 /** 注册句柄的最小结构。 */
 export interface Disposable {
   dispose(): Promise<void>
+}
+
+/** 输入：RPC 参数；输出：TUI 传来的配置文件层；非法或缺失返回 undefined。 */
+function readLayers(input: unknown): readonly string[] | undefined {
+  if (typeof input !== "object" || input === null) return undefined
+  const value = (input as { readonly layers?: unknown }).layers
+  if (!Array.isArray(value)) return undefined
+  const layers = value.filter((item): item is string => typeof item === "string" && item.length > 0)
+  return layers.length === 0 ? undefined : layers
 }
 
 /** 设置 RPC 的可选回调。 */
@@ -41,7 +51,8 @@ export async function registerSettingsRpc(
 ): Promise<Disposable> {
   return ctx.rpc.register(ContextRpc, {
     settingsGet: async (input) => {
-      const settings = await loadServerSettings(ctx.storage)
+      const layers = readLayers(input)
+      const settings = await loadSettings(ctx, layers)
       const requested = (input as { readonly sessionID?: unknown }).sessionID
       const sessionID = typeof requested === "string" && requested.length > 0 ? requested : undefined
       // 优先返回当前会话模型自己的窗口；拿不到再退回最近一次解析值。
@@ -67,29 +78,22 @@ export async function registerSettingsRpc(
         if (typeof stored === "number" && stored > 0) resolvedWindow = stored
       }
       return {
-        contextLimit: settings.contextLimit,
-        triggerPercent: settings.triggerPercent,
-        nudgeGrowthTokens: settings.nudgeGrowthTokens,
-        summaryBlockPercent: settings.summaryBlockPercent,
-        summaryTotalPercent: settings.summaryTotalPercent,
-        summaryLanguage: settings.summaryLanguage,
-        summaryFormat: settings.summaryFormat,
-        autoCompress: settings.autoCompress,
-        enableCompressTool: settings.enableCompressTool,
-        enableDecompressTool: settings.enableDecompressTool,
-        showTimeline: settings.showTimeline,
-        showBlockTokens: settings.showBlockTokens,
-        decompressInlineMax: settings.decompressInlineMax,
-        decompressTempCap: settings.decompressTempCap,
-        decompressShowTokens: settings.decompressShowTokens,
+        ...settings,
         ...(resolvedWindow === undefined ? {} : { resolvedWindow }),
       }
     },
     settingsSet: async (input) => {
-      const current = await loadServerSettings(ctx.storage)
-      const parsed = parseServerSettings({ ...current, ...(input as Record<string, unknown>) })
-      if (!parsed) return { ok: false }
-      await saveServerSettings(ctx.storage, parsed)
+      const layers = readLayers(input)
+      const current = await loadSettings(ctx, layers)
+      const merged = { ...current, ...(input as Record<string, unknown>) }
+      const parsed = parseServerSettings(merged)
+      if (parsed === undefined) return { ok: false }
+      const next = normalizeSettings(merged)
+      try {
+        await saveSettings(ctx, next, layers)
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
       if (options?.onSaved !== undefined) await options.onSaved(parsed)
       return { ok: true }
     },

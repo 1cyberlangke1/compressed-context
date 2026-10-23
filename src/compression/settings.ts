@@ -1,5 +1,3 @@
-import type { Schema } from "effect"
-
 import {
   DEFAULT_AUTO_COMPRESS,
   DEFAULT_DECOMPRESS_INLINE_MAX,
@@ -28,15 +26,21 @@ import {
   MIN_TRIGGER_PERCENT,
   isSummaryLanguage,
   isSummaryFormat,
+  normalizeSettings,
   type CompressionSettings,
+  type Settings,
 } from "../shared/settings.ts"
+import { resolveConfigFiles } from "../shared/config-paths.ts"
 import { readOptionalInt, readStrictBoolean } from "../shared/parse.ts"
-import type { StorageLike } from "./state.ts"
+import { diffConfig, nearestExistingConfig, readMergedConfig, writeConfigValues } from "./config-file.ts"
 
 /** 服务端从 TUI 收到的设置；字段与 shared 的 CompressionSettings 一致。 */
 export type ServerSettings = CompressionSettings
 
-export const SETTINGS_KEY = "settings"
+/** 读取/写入插件配置需要的上下文；只用到项目目录。 */
+export interface SettingsContext {
+  readonly location?: { readonly directory?: string }
+}
 /** 插件最近一次从模型解析到的原生窗口；TUI 用它把绝对值换算成百分比。 */
 export const RESOLVED_WINDOW_KEY = "window:last"
 
@@ -193,12 +197,42 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   }
 }
 
-/** 输入：storage；输出：设置（缺失或损坏时用默认值）。 */
-export async function loadServerSettings(storage: StorageLike): Promise<ServerSettings> {
-  return parseServerSettings(await storage.get(SETTINGS_KEY)) ?? DEFAULT_SERVER_SETTINGS
+/**
+ * 输入：插件上下文 + 可选 TUI 传来的层路径。
+ * 输出：合并后的完整设置。
+ * 预期：默认值 < 全局 < 远项目 < 近项目；坏层跳过，字段缺失按默认值补齐。
+ */
+export async function loadSettings(ctx: SettingsContext, layers?: readonly string[]): Promise<Settings> {
+  const paths = resolveConfigFiles(ctx.location?.directory ?? process.cwd(), layers)
+  const merged = await readMergedConfig(paths)
+  return normalizeSettings(merged.values)
 }
 
-/** 输入：storage + 设置；输出：无。 */
-export async function saveServerSettings(storage: StorageLike, settings: ServerSettings): Promise<void> {
-  await storage.set(SETTINGS_KEY, settings as unknown as Schema.Json)
+/** 输入：插件上下文 + 可选层路径；输出：服务端压缩设置（非法值回退默认）。 */
+export async function loadServerSettings(
+  ctx: SettingsContext,
+  layers?: readonly string[],
+): Promise<ServerSettings> {
+  return parseServerSettings(await loadSettings(ctx, layers)) ?? DEFAULT_SERVER_SETTINGS
+}
+
+/**
+ * 输入：插件上下文 + 完整设置 + 可选层路径。
+ * 输出：无；失败抛错，由 RPC 转成 ok:false。
+ * 预期：只把变化键写进最近的已存在项目文件；没有项目文件时写全局。
+ */
+export async function saveSettings(
+  ctx: SettingsContext,
+  settings: Settings,
+  layers?: readonly string[],
+): Promise<void> {
+  const paths = resolveConfigFiles(ctx.location?.directory ?? process.cwd(), layers)
+  const merged = await readMergedConfig(paths)
+  const normalized = normalizeSettings({ ...settings })
+  const patch = diffConfig(merged.values, { ...normalized })
+  if (patch === undefined) return
+  const target = await nearestExistingConfig(paths)
+  if (target === undefined) throw new Error("no plugin config path")
+  const result = await writeConfigValues(target, patch)
+  if (!result.ok) throw new Error(result.error)
 }

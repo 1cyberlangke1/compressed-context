@@ -1,6 +1,11 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { Plugin } from "@opencode/plugin"
 import type { Schema } from "effect"
 import { describe, expect, it } from "vitest"
+
+import { CONFIG_FILE } from "../src/shared/config-paths.ts"
 
 import type { CacheMessage } from "../src/shared/cache.ts"
 import type { Block } from "../src/compression/state.ts"
@@ -80,8 +85,13 @@ async function createHandlers(
   onSaved?: (settings: ServerSettings) => Promise<void>,
 ): Promise<Record<string, (input: unknown) => Promise<unknown>>> {
   const handlers: Record<string, (input: unknown) => Promise<unknown>> = {}
+  const directory = mkdtempSync(join(tmpdir(), "cc-settings-"))
+  const opencode = join(directory, ".opencode")
+  mkdirSync(opencode, { recursive: true })
+  writeFileSync(join(opencode, CONFIG_FILE), "{}", "utf8")
   const ctx = {
     storage,
+    location: { directory },
     session: {
       get: () => Promise.resolve({ metadata: {} }),
       context: ({ sessionID }: { sessionID: string }) =>
