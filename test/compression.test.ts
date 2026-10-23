@@ -747,6 +747,30 @@ describe("自动压缩", () => {
     expect(state.blocks.map((item) => item.id)).toEqual(["b1"])
   })
 
+  it("两个实例同时触发自动压缩只入队一次", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 50_000, triggerPercent: 60 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      async () => {
+        compacts += 1
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      },
+    )
+    const input = {
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    }
+
+    await Promise.all([maybeAutoCompress(input), maybeAutoCompress(input)])
+    expect(compacts).toBe(1)
+  })
+
   it("压缩成功后没有新 user 消息时 step.ended 不再入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
@@ -1682,6 +1706,43 @@ describe("摘要单层合并", () => {
     expect(activeBlocks(state.blocks, state.pending).some((item) => item.tier === 2)).toBe(true)
     expect(state.lastError).toBeUndefined()
     expect(event.result?.summary).toContain("T2")
+  })
+
+  it("两个实例同时处理同一 compaction 只生成一次摘要", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_parallel_compaction", {
+      blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3)],
+      attempts: 0,
+      phase: "t2",
+    })
+    let calls = 0
+    const ctx = fakeCtx(
+      storage,
+      () => {
+        calls += 1
+        return Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) })
+      },
+      () => Promise.resolve(),
+    )
+    const makeEvent = (): CompactionEvent => ({
+      sessionID: "ses_parallel_compaction",
+      model: { providerID: "fake", id: "model" },
+      messages: [
+        message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
+        message("user", "continue", "m1"),
+        message("assistant", "ok", "m2"),
+      ],
+    })
+
+    await Promise.all([handleCompaction(ctx, makeEvent()), handleCompaction(ctx, makeEvent())])
+    expect(calls).toBe(1)
   })
 
   it("预算内不合并", async () => {

@@ -3,7 +3,11 @@ import type { Plugin } from "@opencode/plugin"
 import { formatTokens } from "../shared/format.ts"
 import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/settings.ts"
 import { estimateCategories, totalCategories } from "../shared/tokens.ts"
-import { isCompactionInFlight } from "./inflight.ts"
+import {
+  endCompactionRequest,
+  isCompactionInFlight,
+  tryBeginCompactionRequest,
+} from "./inflight.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
 import {
   EFFECTIVE_WINDOW_KEY,
@@ -175,7 +179,12 @@ export async function maybeAutoCompressStep(input: {
     if (effective - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
 
     if (state.phase !== undefined) {
-      await input.ctx.session.compact({ sessionID: input.sessionID })
+      if (!tryBeginCompactionRequest(input.sessionID)) return
+      try {
+        await input.ctx.session.compact({ sessionID: input.sessionID })
+      } finally {
+        endCompactionRequest(input.sessionID)
+      }
       return
     }
 
@@ -186,9 +195,14 @@ export async function maybeAutoCompressStep(input: {
 
     // 入队后同步等压缩落地，对齐 OpenCode 原生压缩的语义：
     // 下一个 step 的模型请求一定从压缩后的上下文开始，而不是继续放大。
-    const before = { blocks: state.blocks.length, lastError: state.lastError }
-    await input.ctx.session.compact({ sessionID: input.sessionID })
-    await waitForCompaction(input.ctx, input.sessionID, before)
+    if (!tryBeginCompactionRequest(input.sessionID)) return
+    try {
+      const before = { blocks: state.blocks.length, lastError: state.lastError }
+      await input.ctx.session.compact({ sessionID: input.sessionID })
+      await waitForCompaction(input.ctx, input.sessionID, before)
+    } finally {
+      endCompactionRequest(input.sessionID)
+    }
   } catch (error) {
     await recordCompressionFailure(input.ctx, input.sessionID, error)
   }
@@ -339,7 +353,12 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     // 已排下一层蒸馏：下一次模型请求就入队 compaction，由 compaction 钩子合并。
     // 不能在 T1 刚结束时入队——那时历史里只剩 checkpoint，OpenCode 会拒绝压缩。
     if (state.phase !== undefined) {
-      await input.ctx.session.compact({ sessionID: input.sessionID })
+      if (!tryBeginCompactionRequest(input.sessionID)) return
+      try {
+        await input.ctx.session.compact({ sessionID: input.sessionID })
+      } finally {
+        endCompactionRequest(input.sessionID)
+      }
       return
     }
 
@@ -349,7 +368,12 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const sourceChars = buildTranscript(eligible).length
     if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
 
-    await input.ctx.session.compact({ sessionID: input.sessionID })
+    if (!tryBeginCompactionRequest(input.sessionID)) return
+    try {
+      await input.ctx.session.compact({ sessionID: input.sessionID })
+    } finally {
+      endCompactionRequest(input.sessionID)
+    }
   } catch (error) {
     await recordCompressionFailure(input.ctx, input.sessionID, error)
   }

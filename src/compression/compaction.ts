@@ -7,7 +7,7 @@ import { measuredPromptTokens, resolveLimit } from "./auto.ts"
 import { createT1Block } from "./block.ts"
 import { distillOnce, isTerminal, planT1Phase } from "./distill.ts"
 import { TERMINAL_MESSAGE } from "./events.ts"
-import { markCompactionInFlight } from "./inflight.ts"
+import { endCompaction, tryBeginCompaction } from "./inflight.ts"
 import { activeBlocks } from "./render.ts"
 import { messageRange, olderMessages, textChars, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
@@ -33,7 +33,10 @@ export interface CompactionEvent {
  *       终止时记录 terminal；异常写入 lastError 后重新抛出，交给失败事件。
  */
 export async function handleCompaction(ctx: Plugin.Context, event: CompactionEvent): Promise<void> {
-  markCompactionInFlight(event.sessionID, true)
+  // 另一个实例已经给出摘要时不要覆盖；同一事件在多个 hook 间共享 result。
+  if (event.result !== undefined) return
+  // 同一会话同一时间只允许一个实例生成摘要，避免重复模型调用。
+  if (!tryBeginCompaction(event.sessionID)) return
   try {
     const state = await loadState(ctx.storage, event.sessionID)
     if (state.terminal !== undefined) throw new Error(state.terminal)
@@ -195,6 +198,6 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
     }))
     throw error
   } finally {
-    markCompactionInFlight(event.sessionID, false)
+    endCompaction(event.sessionID)
   }
 }
