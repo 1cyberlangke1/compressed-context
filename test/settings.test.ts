@@ -6,6 +6,7 @@ import {
   effectiveLimit,
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
+  effectiveDecompressTempMaxAgeHours,
   effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
@@ -51,6 +52,7 @@ describe("initialSettings / normalizeSettings", () => {
       summariesExpanded: true,
       decompressInlineMax: 10_000,
       decompressTempCap: 50,
+      decompressTempMaxAgeHours: 24,
       decompressShowTokens: true,
     })
   })
@@ -141,6 +143,7 @@ describe("initialSettings / normalizeSettings", () => {
       showBlockTokens: true,
       decompressInlineMax: 5_000,
       decompressTempCap: 10,
+      decompressTempMaxAgeHours: 48,
       decompressShowTokens: false,
     })
     expect(settings.autoCompress).toBe(false)
@@ -150,6 +153,7 @@ describe("initialSettings / normalizeSettings", () => {
     expect(settings.showBlockTokens).toBe(true)
     expect(settings.decompressInlineMax).toBe(5_000)
     expect(settings.decompressTempCap).toBe(10)
+    expect(settings.decompressTempMaxAgeHours).toBe(48)
     expect(settings.decompressShowTokens).toBe(false)
 
     expect(initialSettings({ autoCompress: "no" }).autoCompress).toBe(true)
@@ -159,8 +163,11 @@ describe("initialSettings / normalizeSettings", () => {
     expect(initialSettings({ decompressInlineMax: 2_000_000 }).decompressInlineMax).toBe(10_000)
     expect(initialSettings({ decompressTempCap: 0 }).decompressTempCap).toBe(50)
     expect(initialSettings({ decompressTempCap: 2_000 }).decompressTempCap).toBe(50)
+    expect(initialSettings({ decompressTempMaxAgeHours: 0 }).decompressTempMaxAgeHours).toBe(24)
+    expect(initialSettings({ decompressTempMaxAgeHours: 721 }).decompressTempMaxAgeHours).toBe(24)
     expect(effectiveDecompressInlineMax({ decompressInlineMax: Number.NaN })).toBe(10_000)
     expect(effectiveDecompressTempCap({ decompressTempCap: 0 })).toBe(50)
+    expect(effectiveDecompressTempMaxAgeHours({ decompressTempMaxAgeHours: 0 })).toBe(24)
   })
 
   it("面板显示项可配置，非法值回退", () => {

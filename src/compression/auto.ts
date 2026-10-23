@@ -3,47 +3,36 @@ import type { Plugin } from "@opencode/plugin"
 import { formatTokens } from "../shared/format.ts"
 import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/settings.ts"
 import { estimateCategories, totalCategories } from "../shared/tokens.ts"
+import { isCompactionInFlight } from "./inflight.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
 import { EFFECTIVE_WINDOW_KEY, RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
-import { MAX_COMPRESSION_ATTEMPTS, loadState, saveState, type State } from "./state.ts"
+import { MAX_COMPRESSION_ATTEMPTS, loadState, type State } from "./state.ts"
+import { stateStore } from "./state-store.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS } from "./validate.ts"
+
+// 旧测试与外部调用仍从 auto 导入；实现已抽到 inflight。
+export { isCompactionInFlight, markCompactionInFlight } from "./inflight.ts"
 
 /** 模型窗口缓存时长。 */
 const LIMIT_TTL = 60_000
 
 const limitCache = new Map<string, { at: number; limit: number }>()
 
-/**
- * 正在执行 compaction 钩子的 session。
- * 压缩钩子内部会调用 session.generate 生成摘要；那个请求同样会经过 context 钩子，
- * 如果不拦住，就会在压缩过程中再次入队压缩，形成递归并让本次摘要失败。
- */
-const compactionInFlight = new Set<string>()
-
-/** 输入：sessionID + 是否正在压缩；输出：无；预期：只更新进程内标记。 */
-export function markCompactionInFlight(sessionID: string, active: boolean): void {
-  if (active) compactionInFlight.add(sessionID)
-  else compactionInFlight.delete(sessionID)
-}
-
-/** 输入：sessionID；输出：是否正在压缩。 */
-export function isCompactionInFlight(sessionID: string): boolean {
-  return compactionInFlight.has(sessionID)
-}
-
 /** 入队后等待压缩完成的最大时长；OpenCode 原生压缩在 step 循环里同步等，这里对齐该语义。 */
 export const COMPACTION_WAIT_MS = 5 * 60_000
+/** pending 已生成后，等事件转正的额外窗口；事件丢失时不至于卡满 5 分钟。 */
+const COMPACTION_COMMIT_WAIT_MS = 10_000
 /** 等待轮询间隔。 */
 const COMPACTION_POLL_MS = 200
 
 /**
  * 输入：服务端上下文 + sessionID + 入队前的 state 快照。
  * 输出：无。
- * 预期：阻塞直到该次 compaction 落地——pending 出现（钩子已生成块）、blocks 增多
- *       （事件循环转正）、lastError 出现或变化（失败）、或等待超时。
- *       超时不抛错，放行请求。
+ * 预期：阻塞直到该次 compaction 落地——blocks 增多（事件已把 pending 转正）、
+ *       lastError 出现或变化（失败）、或等待超时。pending 已出现时再给事件一个短窗口，
+ *       避免下一步在 pending 尚未转正时启动；超时不抛错，放行请求。
  */
 export async function waitForCompaction(
   ctx: Plugin.Context,
@@ -51,13 +40,24 @@ export async function waitForCompaction(
   before: { blocks: number; lastError: string | undefined },
 ): Promise<void> {
   const deadline = Date.now() + COMPACTION_WAIT_MS
+  let pendingSince: number | undefined
   while (Date.now() < deadline) {
     const state = await loadState(ctx.storage, sessionID)
-    // pending 出现即钩子已生成块；blocks 增多即事件循环已转正；两者任一都算落地。
-    const settled =
-      state.pending !== undefined || state.blocks.length > before.blocks
+    // blocks 增多 = 事件已把 pending 转正，下一步可以安全地从新上下文开始。
+    const settled = state.blocks.length > before.blocks
     const failed = state.lastError !== undefined && state.lastError !== before.lastError
-    if (settled || failed) return
+    if (settled || failed) {
+      // 钩子的 finally 可能还没清 in-flight；等它清掉再放行，否则下一步 nudge 会被跳过。
+      while (isCompactionInFlight(sessionID) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, COMPACTION_POLL_MS))
+      }
+      return
+    }
+    if (state.pending !== undefined) {
+      // 钩子已生成块，但事件还没转正；再等一小段，避免下一次 context hook 被 pending 挡掉。
+      pendingSince ??= Date.now()
+      if (Date.now() - pendingSince > COMPACTION_COMMIT_WAIT_MS) return
+    }
     await new Promise((resolve) => setTimeout(resolve, COMPACTION_POLL_MS))
   }
 }
@@ -96,12 +96,16 @@ async function recordCompressionFailure(
   error: unknown,
 ): Promise<void> {
   try {
-    const current = await loadState(ctx.storage, sessionID)
-    await saveState(ctx.storage, sessionID, {
-      ...current,
-      attempts: current.attempts + 1,
-      lastError: String(error),
-    })
+    // 压缩钩子自己会记录真实错误；它运行期间不要让等待超时之类的错误覆盖。
+    if (isCompactionInFlight(sessionID)) return
+    await stateStore(ctx.storage).transact(sessionID, (current) => ({
+      next: {
+        ...current,
+        attempts: current.attempts + 1,
+        lastError: String(error),
+      },
+      result: undefined,
+    }))
   } catch {
     // best effort
   }
@@ -251,7 +255,7 @@ function promptTokens(tokens: {
  * 输出：最后一个 assistant 的真实 prompt token；没有 usage 时 undefined。
  * 预期：SessionHistory 按 seq 升序返回，从末尾取最新 assistant。
  */
-async function measuredPromptTokens(
+export async function measuredPromptTokens(
   ctx: Plugin.Context,
   sessionID: string,
 ): Promise<number | undefined> {
@@ -337,9 +341,6 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     if (isCompactionInFlight(input.sessionID)) return
     if (isCompressionInstruction(input.messages)) return
 
-    const state = await loadState(input.ctx.storage, input.sessionID)
-    if (blockedByState(state) || state.phase !== undefined) return
-
     const settings = await loadServerSettings(input.ctx.storage)
     if (settings.nudgeGrowthTokens <= 0) return
     // compress 工具被关闭时提醒没有意义：模型即使看到也调不动。
@@ -347,28 +348,37 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     if (!settings.enableCompressTool) return
 
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
-    if (state.nudgeBaselineTokens === undefined || state.nudgeBaselineTokens > total) {
-      await saveState(input.ctx.storage, input.sessionID, { ...state, nudgeBaselineTokens: total })
-      return
-    }
-
-    const growth = total - state.nudgeBaselineTokens
-    if (growth < settings.nudgeGrowthTokens) return
-
+    // 没有可压缩内容时仍要建立基线；只是不追加提醒，也不推进基线。
     const eligible = eligibleMessages(input.messages)
-    const sourceChars = buildTranscript(eligible).length
-    if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
+    const canEmit = eligible.length > 0 && buildTranscript(eligible).length >= MIN_SOURCE_CHARS
 
-    const hasCompressed = state.blocks.length > 0
-    const notice = buildNudgeText(growth, hasCompressed, settings.autoCompress)
+    // 测量在锁外完成；基线比较和写入必须在同一事务里，否则并发请求会重复提醒。
+    const notice = await stateStore(input.ctx.storage).transact(input.sessionID, (state) => {
+      if (isCompactionInFlight(input.sessionID)) return { result: undefined }
+      if (blockedByState(state) || state.phase !== undefined) return { result: undefined }
+
+      if (state.nudgeBaselineTokens === undefined || state.nudgeBaselineTokens > total) {
+        return { next: { ...state, nudgeBaselineTokens: total }, result: undefined }
+      }
+      const growth = total - state.nudgeBaselineTokens
+      if (growth < settings.nudgeGrowthTokens) return { result: undefined }
+      if (!canEmit) return { result: undefined }
+
+      const hasCompressed = state.blocks.length > 0
+      return {
+        next: {
+          ...state,
+          nudgeBaselineTokens: total,
+          nudgeCount: (state.nudgeCount ?? 0) + 1,
+        },
+        result: buildNudgeText(growth, hasCompressed, settings.autoCompress),
+      }
+    })
+    if (notice === undefined) return
+
     input.messages.push({
       role: "user",
       content: [{ type: "text", text: notice }],
-    })
-    await saveState(input.ctx.storage, input.sessionID, {
-      ...state,
-      nudgeBaselineTokens: total,
-      nudgeCount: (state.nudgeCount ?? 0) + 1,
     })
     // 让 TUI 的消息流也能看到这次提醒；内容就是发给模型的那一条，不另写文案。
     // steer 让它在当前 step 结束后投递，resume:false 不会额外唤醒新一轮。

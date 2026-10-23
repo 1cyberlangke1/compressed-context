@@ -1,8 +1,13 @@
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 import { describe, expect, it } from "vitest"
 import type { Schema } from "effect"
 
 import { resolveDecompress } from "../src/compression/decompress.ts"
 import type { Block, StorageLike } from "../src/compression/state.ts"
+import { createTempFileStore } from "../src/compression/temp-files.ts"
 
 const summary = {
   title: "t",
@@ -22,8 +27,8 @@ const block = (id: string, tier: 1 | 2 | 3, order: number, sourceIds?: string[])
   summary: { ...summary, title: `title ${id}` },
   fromId: `${id}-from`,
   toId: `${id}-to`,
-  tokensBefore: 100,
-  tokensAfter: 10,
+  sourceTokens: 100,
+  summaryTokens: 10,
   at: order,
   order,
   ...(sourceIds === undefined ? {} : { sourceBlockIds: sourceIds }),
@@ -113,15 +118,21 @@ describe("resolveDecompress（集成）", () => {
   })
 
   it("超过内联上限时写临时文件", async () => {
-    const result = await resolveDecompress({ block: "b5" }, { storage }, "ses_x", {
-      inlineMax: 10,
-      tempCap: 50,
-      showTokens: true,
-    })
-    expect(result.status).toBe("ok")
-    if (result.status === "ok") {
-      expect(result.path).toBeDefined()
-      expect(result.inline).toContain("written to")
+    const directory = mkdtempSync(join(tmpdir(), "cc-decompress-test-"))
+    try {
+      const result = await resolveDecompress({ block: "b5" }, { storage }, "ses_x", {
+        inlineMax: 10,
+        tempCap: 50,
+        showTokens: true,
+        tempFiles: createTempFileStore({ directory }),
+      })
+      expect(result.status).toBe("ok")
+      if (result.status === "ok") {
+        expect(result.path).toBeDefined()
+        expect(result.inline).toContain("written to")
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
     }
   })
 })

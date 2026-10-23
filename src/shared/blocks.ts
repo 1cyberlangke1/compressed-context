@@ -10,8 +10,8 @@ export interface SummaryBlock {
   readonly format: "json" | "markdown" | "babel"
   readonly title: string
   readonly at: number
-  readonly tokensBefore: number
-  readonly tokensAfter: number
+  readonly sourceTokens: number
+  readonly summaryTokens: number
   readonly sourceBlockIds?: readonly string[]
   readonly body: string
 }

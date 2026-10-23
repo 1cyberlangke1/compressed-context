@@ -32,10 +32,33 @@ function block(id: string, order: number): Block {
     summary: summary(id),
     fromId: `m-${id}`,
     toId: `m-${id}`,
-    tokensBefore: 100,
-    tokensAfter: 10,
+    sourceTokens: 100,
+    summaryTokens: 10,
     at: order,
     order,
+  }
+}
+
+/** 输入：id + tier + order + 旧字段；输出：旧版存储形状的块。 */
+function legacyBlock(
+  id: string,
+  tier: 1 | 2 | 3,
+  order: number,
+  tokensBefore: number,
+  tokensAfter: number,
+  sourceBlockIds?: readonly string[],
+): Record<string, unknown> {
+  return {
+    id,
+    tier,
+    summary: summary(id),
+    fromId: `m-${id}`,
+    toId: `m-${id}`,
+    tokensBefore,
+    tokensAfter,
+    at: order,
+    order,
+    ...(sourceBlockIds === undefined ? {} : { sourceBlockIds }),
   }
 }
 
@@ -56,6 +79,18 @@ describe("state transitions", () => {
     expect(next.phase).toBe("t2")
     expect(next.lastError).toBeUndefined()
     expect(next.terminal).toBeUndefined()
+  })
+
+  it("commitPending 保留提醒基线与计数", () => {
+    const next = commitPending({
+      blocks: [block("b1", 1)],
+      pending: block("b2", 2),
+      attempts: 0,
+      nudgeBaselineTokens: 90_000,
+      nudgeCount: 2,
+    })
+    expect(next.nudgeBaselineTokens).toBe(90_000)
+    expect(next.nudgeCount).toBe(2)
   })
 
   it("commitPending 没有 pending 时原样返回", () => {
@@ -113,5 +148,39 @@ describe("state transitions", () => {
       blocks: [],
       attempts: 0,
     })
+  })
+
+  it("旧版 tokensBefore/tokensAfter 迁移为 sourceTokens/summaryTokens", () => {
+    const parsed = parseState({ blocks: [legacyBlock("b1", 1, 1, 100, 10)], attempts: 0 })
+    expect(parsed.blocks[0]).toMatchObject({ sourceTokens: 100, summaryTokens: 10 })
+  })
+
+  it("旧版合并块按 sourceBlockIds 递归求原始 token 总量", () => {
+    const parsed = parseState({
+      blocks: [
+        legacyBlock("b1", 1, 1, 100, 10),
+        legacyBlock("b2", 1, 2, 300, 20),
+        legacyBlock("b3", 2, 1, 30, 5, ["b1", "b2"]),
+      ],
+      attempts: 0,
+    })
+    expect(parsed.blocks.find((item) => item.id === "b3")?.sourceTokens).toBe(400)
+    expect(parsed.blocks.find((item) => item.id === "b3")?.summaryTokens).toBe(5)
+  })
+
+  it("旧版合并块缺子块时保留原值，不丢状态", () => {
+    const parsed = parseState({
+      blocks: [legacyBlock("b3", 2, 1, 30, 5, ["missing"])],
+      attempts: 0,
+    })
+    expect(parsed.blocks[0]).toMatchObject({ sourceTokens: 30, summaryTokens: 5 })
+  })
+
+  it("新字段优先于旧字段", () => {
+    const parsed = parseState({
+      blocks: [{ ...legacyBlock("b1", 1, 1, 100, 10), sourceTokens: 777, summaryTokens: 77 }],
+      attempts: 0,
+    })
+    expect(parsed.blocks[0]).toMatchObject({ sourceTokens: 777, summaryTokens: 77 })
   })
 })

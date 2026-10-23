@@ -33,6 +33,7 @@ describe("buildSettingsOptions", () => {
       "showSummaries",
       "decompressInlineMax",
       "decompressTempCap",
+      "decompressTempMaxAgeHours",
       "decompressShowTokens",
       "language",
     ])

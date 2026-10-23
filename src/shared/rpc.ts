@@ -27,6 +27,7 @@ const SettingsProperties = {
   showBlockTokens: { type: "boolean" },
   decompressInlineMax: { type: "number" },
   decompressTempCap: { type: "number" },
+  decompressTempMaxAgeHours: { type: "number" },
   decompressShowTokens: { type: "boolean" },
 } as const
 
@@ -72,12 +73,12 @@ const BlockJson = {
     format: { type: "string", enum: ["json", "markdown", "babel"] },
     title: { type: "string" },
     at: { type: "number" },
-    tokensBefore: { type: "number" },
-    tokensAfter: { type: "number" },
+    sourceTokens: { type: "number" },
+    summaryTokens: { type: "number" },
     sourceBlockIds: { type: "array", items: { type: "string" } },
     body: { type: "string" },
   },
-  required: ["id", "tier", "format", "title", "at", "tokensBefore", "tokensAfter", "body"],
+  required: ["id", "tier", "format", "title", "at", "sourceTokens", "summaryTokens", "body"],
   additionalProperties: false,
 } as const
 

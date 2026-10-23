@@ -179,7 +179,7 @@ export function SummarySection(props: {
                           <span style={{ fg: props.theme.text.base }}>{block.title}</span>
                           <Show when={props.settings.showBlockTokens}>
                             <span style={{ fg: props.theme.text.muted }}>
-                              {`  ≈${formatTokens(block.tokensAfter)}`}
+                              {`  ≈${formatTokens(block.summaryTokens)}`}
                             </span>
                           </Show>
                         </text>

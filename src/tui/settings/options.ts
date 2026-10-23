@@ -5,6 +5,7 @@ import type { Messages } from "../../i18n/index.ts"
 import {
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
+  effectiveDecompressTempMaxAgeHours,
   effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
@@ -81,6 +82,7 @@ export const SETTINGS_ACTIONS = [
   "showSummaries",
   "decompressInlineMax",
   "decompressTempCap",
+  "decompressTempMaxAgeHours",
   "decompressShowTokens",
   "language",
 ] as const
@@ -220,6 +222,12 @@ export function buildSettingsOptions(input: {
       title: copy.settings.decompressTempCap,
       value: "decompressTempCap",
       footer: effectiveDecompressTempCap(settings).toString(),
+      category: copy.settings.categories.decompress,
+    },
+    {
+      title: copy.settings.decompressTempMaxAgeHours,
+      value: "decompressTempMaxAgeHours",
+      footer: `${effectiveDecompressTempMaxAgeHours(settings).toString()}h`,
       category: copy.settings.categories.decompress,
     },
     {

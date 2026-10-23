@@ -71,8 +71,8 @@ function block(id: string, fromId: string, toId: string): Block {
     summary: { ...summary, title: id },
     fromId,
     toId,
-    tokensBefore: 1,
-    tokensAfter: 1,
+    sourceTokens: 1,
+    summaryTokens: 1,
     at: 1,
     order: 1,
   }

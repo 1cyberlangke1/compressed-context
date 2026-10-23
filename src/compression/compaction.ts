@@ -3,14 +3,16 @@ import type { Plugin } from "@opencode/plugin"
 import { resolveSummaryLimits } from "../shared/settings.ts"
 import { mergeTerminalMetadata } from "../shared/stats.ts"
 import { renderActiveSummary } from "./active-summary-cache.ts"
-import { markCompactionInFlight, resolveLimit } from "./auto.ts"
+import { measuredPromptTokens, resolveLimit } from "./auto.ts"
 import { createT1Block } from "./block.ts"
 import { distillOnce, isTerminal, planT1Phase } from "./distill.ts"
 import { TERMINAL_MESSAGE } from "./events.ts"
+import { markCompactionInFlight } from "./inflight.ts"
 import { activeBlocks } from "./render.ts"
 import { messageRange, olderMessages, textChars, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
-import { loadState, saveState, type Block, type CompactionPhase, type State } from "./state.ts"
+import { loadState, type Block, type CompactionPhase, type State } from "./state.ts"
+import { stateStore } from "./state-store.ts"
 import { buildT1Instruction, sessionGenerator, summarizeInstruction } from "./summarize.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -35,6 +37,8 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
   try {
     const state = await loadState(ctx.storage, event.sessionID)
     if (state.terminal !== undefined) throw new Error(state.terminal)
+    // 压缩成功后 nudge 基线要跟着重置到最近一次真实 usage；在钩子开始时取，避免事后上下文被裁掉。
+    const baseline = await measuredPromptTokens(ctx, event.sessionID)
     const settings = await loadServerSettings(ctx.storage)
     // auto 窗口在运行时解析后钳制摘要上限；数字窗口已在保存时校验，这里统一再钳一次。
     const windowTokens = await resolveLimit(ctx, event.model, settings.contextLimit)
@@ -55,14 +59,15 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         blocks,
         attempts: state.attempts,
         ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+        ...(baseline === undefined ? {} : { nudgeBaselineTokens: baseline }),
+        ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
         ...(phase === undefined ? {} : { phase }),
       }
       const next: State = pending === undefined ? base : { ...base, pending }
-      await saveState(
-        ctx.storage,
-        event.sessionID,
-        error === undefined ? next : { ...next, lastError: error },
-      )
+      await stateStore(ctx.storage).transact(event.sessionID, () => ({
+        next: error === undefined ? next : { ...next, lastError: error },
+        result: undefined,
+      }))
     }
 
     // 第二阶段：T2/T3。older 里没有真实消息，或新消息不足以单独做 T1 时合并块。
@@ -96,12 +101,16 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
           limits.totalChars,
         )
       ) {
-        await saveState(ctx.storage, event.sessionID, {
-          blocks: result.blocks,
-          attempts: 0,
-          lastError: TERMINAL_MESSAGE,
-          terminal: TERMINAL_MESSAGE,
-        })
+        await stateStore(ctx.storage).transact(event.sessionID, () => ({
+          next: {
+            blocks: result.blocks,
+            attempts: 0,
+            lastError: TERMINAL_MESSAGE,
+            terminal: TERMINAL_MESSAGE,
+            ...(baseline === undefined ? {} : { nudgeBaselineTokens: baseline }),
+          },
+          result: undefined,
+        }))
         // 让 TUI 面板能显示终止原因；写失败不影响压缩状态。
         try {
           const session = await ctx.session.get({ sessionID: event.sessionID })
@@ -177,11 +186,13 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
     event.result = { summary }
   } catch (error) {
     // 把钩子里的真实异常留给失败事件和 TUI；不要只留下“compaction failed”。
-    const current = await loadState(ctx.storage, event.sessionID)
-    await saveState(ctx.storage, event.sessionID, {
-      ...current,
-      lastError: error instanceof Error ? (error.stack ?? error.message) : String(error),
-    })
+    await stateStore(ctx.storage).transact(event.sessionID, (current) => ({
+      next: {
+        ...current,
+        lastError: error instanceof Error ? (error.stack ?? error.message) : String(error),
+      },
+      result: undefined,
+    }))
     throw error
   } finally {
     markCompactionInFlight(event.sessionID, false)

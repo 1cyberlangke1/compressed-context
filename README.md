@@ -43,7 +43,7 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 
 ```json
 {
-  "plugin": ["compressed-context"],
+  "plugins": ["compressed-context"],
   "compaction": { "auto": false }
 }
 ```
@@ -52,7 +52,7 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 
 ```json
 {
-  "plugin": ["/absolute/path/to/compressed-context"],
+  "plugins": ["/absolute/path/to/compressed-context"],
   "compaction": { "auto": false }
 }
 ```
@@ -73,6 +73,7 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 | `nudgeGrowthTokens`    | `50000`            | 触发“主动压缩提醒”的 Token 增长阈值，设为 `0` 则关闭；`compress` 工具关闭时跳过 |
 | `enableCompressTool`   | `true`             | 是否允许模型调用 `compress` 工具                               |
 | `enableDecompressTool` | `true`             | 是否允许模型调用 `decompress` 工具                             |
+| `decompressTempMaxAgeHours` | `24`          | 启动时清理超过这个小时数的解压临时文件（1–720）               |
 
 关闭 `compress` 工具后，主动提醒会直接跳过，但不会改写你的 `nudgeGrowthTokens` 设置；重新打开工具后提醒会按原设置恢复。
 

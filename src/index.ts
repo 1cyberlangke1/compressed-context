@@ -4,11 +4,14 @@ import { maybeAutoCompress, maybeAutoCompressStep, maybeNudge } from "./compress
 import { recordCacheHistoryStep } from "./compression/cache-history.ts"
 import { adoptNativeCheckpoint } from "./compression/adopt.ts"
 import { handleCompaction } from "./compression/compaction.ts"
+import { cleanupStaleTempFiles } from "./compression/decompress.ts"
 import { reconcileAll, startSessionEvents } from "./compression/events.ts"
+import { loadServerSettings } from "./compression/settings.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
 import { loadState } from "./compression/state.ts"
 import { registerCompressTool } from "./compression/tool.ts"
 import { registerDecompressTool } from "./compression/decompress-tool.ts"
+import { effectiveDecompressTempMaxAgeHours } from "./shared/settings.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./shared/stats.ts"
 import { estimateCategories } from "./shared/tokens.ts"
 
@@ -23,6 +26,11 @@ export default Plugin.define({
   async setup(ctx) {
     const published = new Map<string, ContextStats>()
     const disposables: Disposable[] = []
+    // 清理上一个进程留下的解压临时文件；保留期由当前设置决定，默认 24 小时。
+    const initialSettings = await loadServerSettings(ctx.storage)
+    cleanupStaleTempFiles({
+      maxAgeMs: effectiveDecompressTempMaxAgeHours(initialSettings) * 60 * 60 * 1000,
+    })
 
     /** 输入：sessionID；输出：无；预期：会话空闲/删除时清掉进程内统计缓存。 */
     const forgetMemory = (sessionID: string): void => {

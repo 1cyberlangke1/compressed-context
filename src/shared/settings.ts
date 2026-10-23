@@ -88,11 +88,14 @@ export const DEFAULT_SUMMARIES_EXPANDED = true
 /** decompress 返回分级与临时文件上限。 */
 export const DEFAULT_DECOMPRESS_INLINE_MAX = 10_000
 export const DEFAULT_DECOMPRESS_TEMP_CAP = 50
+export const DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS = 24
 export const DEFAULT_DECOMPRESS_SHOW_TOKENS = true
 export const MIN_DECOMPRESS_INLINE_MAX = 1_000
 export const MAX_DECOMPRESS_INLINE_MAX = 1_000_000
 export const MIN_DECOMPRESS_TEMP_CAP = 1
 export const MAX_DECOMPRESS_TEMP_CAP = 1_000
+export const MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS = 1
+export const MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS = 720
 
 /** 服务端关心的压缩设置；TUI 的 Settings 在此基础上加显示项。 */
 export interface CompressionSettings {
@@ -124,6 +127,8 @@ export interface CompressionSettings {
   decompressInlineMax: number
   /** decompress 临时文件上限 */
   decompressTempCap: number
+  /** 解压临时文件保留时长（小时）；启动时按 mtime 清理更老的文件 */
+  decompressTempMaxAgeHours: number
   /** decompress 返回是否带估算 token */
   decompressShowTokens: boolean
 }
@@ -176,6 +181,7 @@ export const DEFAULT_SETTINGS: Settings = {
   summariesExpanded: DEFAULT_SUMMARIES_EXPANDED,
   decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
   decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
+  decompressTempMaxAgeHours: DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   decompressShowTokens: DEFAULT_DECOMPRESS_SHOW_TOKENS,
 }
 
@@ -346,6 +352,12 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
       MAX_DECOMPRESS_TEMP_CAP,
       DEFAULT_DECOMPRESS_TEMP_CAP,
     ),
+    decompressTempMaxAgeHours: readInt(
+      value["decompressTempMaxAgeHours"],
+      MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+      MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+      DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+    ),
     decompressShowTokens:
       typeof value["decompressShowTokens"] === "boolean" ? value["decompressShowTokens"] : DEFAULT_DECOMPRESS_SHOW_TOKENS,
   }
@@ -395,6 +407,18 @@ export function effectiveDecompressTempCap(settings: { readonly decompressTempCa
   )
 }
 
+/** 输入：设置；输出：合法的临时文件保留小时数。 */
+export function effectiveDecompressTempMaxAgeHours(settings: {
+  readonly decompressTempMaxAgeHours?: unknown
+}): number {
+  return readInt(
+    settings.decompressTempMaxAgeHours,
+    MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+    MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+    DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+  )
+}
+
 /** 输入：TUI 设置；输出：发给服务端的压缩设置子集；预期：字段列表只在这里维护。 */
 export function serverSettingsPayload(settings: Settings): CompressionSettings {
   return {
@@ -412,6 +436,7 @@ export function serverSettingsPayload(settings: Settings): CompressionSettings {
     showBlockTokens: settings.showBlockTokens,
     decompressInlineMax: effectiveDecompressInlineMax(settings),
     decompressTempCap: effectiveDecompressTempCap(settings),
+    decompressTempMaxAgeHours: effectiveDecompressTempMaxAgeHours(settings),
     decompressShowTokens: settings.decompressShowTokens,
   }
 }

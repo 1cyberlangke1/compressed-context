@@ -17,8 +17,8 @@ export function createT1Block(input: {
     summary: input.summary,
     fromId: input.fromId,
     toId: input.toId,
-    tokensBefore: Math.ceil(input.sourceChars / 4),
-    tokensAfter: Math.ceil(summaryChars(input.summary) / 4),
+    sourceTokens: Math.ceil(input.sourceChars / 4),
+    summaryTokens: Math.ceil(summaryChars(input.summary) / 4),
     at: input.at ?? Date.now(),
     order: nextOrder(input.blocks),
   }

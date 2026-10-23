@@ -3,13 +3,15 @@ import { Schema } from "effect"
 
 import { resolveSummaryLimits, type SummaryFormat } from "../shared/settings.ts"
 import { createT1Block } from "./block.ts"
+import { isCompactionInFlight } from "./inflight.ts"
 import { toSummary } from "./normalize.ts"
 import { summaryInputFor } from "./schema.ts"
 import { RESOLVED_WINDOW_KEY, loadServerSettings, windowKey } from "./settings.ts"
 import { eligibleMessages, messageRange, type MessageLike } from "./select.ts"
 import { sessionMessagesToMessageLikes } from "./session-message.ts"
 import { summaryShape } from "./shape.ts"
-import { loadState, saveState, withPending } from "./state.ts"
+import { loadState, withPending, type Block } from "./state.ts"
+import { stateStore } from "./state-store.ts"
 import type { Disposable } from "./settings-rpc.ts"
 import { buildTranscript } from "./transcript.ts"
 import { saveTranscript } from "./transcript-store.ts"
@@ -94,6 +96,7 @@ export async function registerCompressTool(
       output: Schema.Struct({ block: Schema.String, status: Schema.String }),
       execute: async (input, toolCtx) => {
         const sessionID = toolCtx.sessionID
+        if (isCompactionInFlight(sessionID)) return failure("compression already in progress")
         const state = await loadState(ctx.storage, sessionID)
         if (state.terminal !== undefined) return failure(state.terminal)
         if (state.pending || state.phase !== undefined) return failure("compression already in progress")
@@ -144,26 +147,40 @@ export async function registerCompressTool(
           return failure("messages are missing ids")
         }
 
-        const block = createT1Block({
-          blocks: state.blocks,
-          summary,
-          fromId: range.fromId,
-          toId: range.toId,
-          sourceChars,
+        // 长耗时的摘要校验在锁外完成；落 pending 时重新检查状态并用最新 blocks 生成 id。
+        type SaveOutcome = { readonly error: string } | { readonly block: Block }
+        const saved = await stateStore(ctx.storage).transact<SaveOutcome>(sessionID, (fresh) => {
+          if (fresh.terminal !== undefined) return { result: { error: fresh.terminal } }
+          if (fresh.pending !== undefined || fresh.phase !== undefined) {
+            return { result: { error: "compression already in progress" } }
+          }
+          const block = createT1Block({
+            blocks: fresh.blocks,
+            summary,
+            fromId: range.fromId,
+            toId: range.toId,
+            sourceChars,
+          })
+          return { next: withPending(fresh, block), result: { block } }
         })
+        if ("error" in saved) return failure(saved.error)
+        const block = saved.block
 
         // transcript 落盘失败不应阻断摘要；解压时会降级为占位符。
+        // 先落 pending 再写 transcript：summary 生成前 transcript 一定已经写完。
         try {
           await saveTranscript(ctx.storage, sessionID, block, eligible)
         } catch {
           // best effort
         }
 
-        await saveState(ctx.storage, sessionID, withPending(state, block))
         try {
           await ctx.session.compact({ sessionID })
         } catch (error) {
-          await saveState(ctx.storage, sessionID, { ...state, lastError: String(error) })
+          await stateStore(ctx.storage).transact(sessionID, (fresh) => ({
+            next: { ...fresh, lastError: String(error) },
+            result: undefined,
+          }))
           return failure(`failed to start compaction: ${String(error)}`)
         }
 

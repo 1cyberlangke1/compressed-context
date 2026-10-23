@@ -730,6 +730,8 @@ try {
 
   // case: T1 摘要非法 → compaction failed，state 不产生块
   mode = "invalid-t1"
+  // 强制真实 usage 超阈值，专门测摘要校验失败，不依赖文本估算大小。
+  usagePromptTokens = 90_000
   setSettings(50)
   const invalid = await newSession("e2e-invalid-t1")
   await promptSession(invalid, longText)
@@ -746,10 +748,12 @@ try {
   assert.equal(invalidState?.phase, undefined, "failed T1 must not leave phase")
   // 默认 summaryFormat=markdown，短回复会先被长度校验拒绝，不一定是 JSON 解析错误。
   assert.match(String(invalidState?.lastError ?? ""), /not valid JSON|summary too short/)
+  usagePromptTokens = undefined
   console.log("case passed: invalid T1 fails cleanly")
 
   // case: T1 结构非法（goal 为空）→ failed，state 不残留
   mode = "bad-shape-t1"
+  usagePromptTokens = 90_000
   setSettings(50)
   const badShape = await newSession("e2e-bad-shape-t1")
   await promptSession(badShape, longText)
@@ -765,11 +769,13 @@ try {
   assert.equal(badShapeState?.pending, undefined)
   assert.equal(badShapeState?.phase, undefined)
   assert.match(String(badShapeState?.lastError ?? ""), /empty field: goal/)
+  usagePromptTokens = undefined
   console.log("case passed: bad-shape T1 fails without residue")
 
   // case: 第一次 T1 摘要失败，OpenCode 重试后成功
   mode = "retry-t1"
   t1Attempts = 0
+  usagePromptTokens = 90_000
   setSettings(50)
   const retry = await newSession("e2e-retry-t1")
   await promptSession(retry, longText)
@@ -780,11 +786,13 @@ try {
     retryState = stateFor(retry)
   }
   assert.equal(retryState?.blocks?.length, 1, "T1 retry should create a block")
+  usagePromptTokens = undefined
   console.log("case passed: T1 retry succeeds")
 
   // case: T2 第一次摘要非法，OpenCode 重试后成功
   mode = "retry-t2"
   t2Attempts = 0
+  usagePromptTokens = 90_000
   setSettings(2.5)
   const t2Retry = await newSession("e2e-retry-t2", undefined, "small")
   for (let index = 0; index < 10; index += 1) {
@@ -800,6 +808,7 @@ try {
     (t2RetryState?.blocks ?? []).some((item) => item.tier === 2),
     "T2 retry should create a tier-2 block",
   )
+  usagePromptTokens = undefined
   console.log("case passed: T2 retry succeeds")
 
   // case: compress 工具在真实 OpenCode 里执行并生成 T1

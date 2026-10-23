@@ -9,14 +9,18 @@
  * - copy-paste 语义：不修改任何块状态；块保持折叠，内容只是 tool result 文本。
  */
 
-import { appendFileSync, unlinkSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { appendFileSync } from "node:fs"
 
 import { countText } from "../shared/tokens.ts"
 import type { Block, StorageLike } from "./state.ts"
 import { loadState } from "./state.ts"
 import { renderBlock } from "./render.ts"
+import {
+  DEFAULT_TEMP_FILE_CAP,
+  createTempFileStore,
+  type TempFileStore,
+  type TempFileStoreOptions,
+} from "./temp-files.ts"
 import {
   loadTranscriptManifest,
   loadTranscriptMessage,
@@ -27,13 +31,15 @@ import {
 /** 内联返回的默认字符上限；运行时由设置覆盖。 */
 export const INLINE_MAX = 10_000
 /** 临时文件数量默认上限；运行时由设置覆盖。 */
-export const TEMP_CAP = 50
+export const TEMP_CAP = DEFAULT_TEMP_FILE_CAP
 
 /** decompress 的运行时限制。 */
 export interface DecompressLimits {
   readonly inlineMax: number
   readonly tempCap: number
   readonly showTokens: boolean
+  /** 测试可注入独立目录与时钟；生产使用默认单例。 */
+  readonly tempFiles?: TempFileStore
 }
 
 const DEFAULT_LIMITS: DecompressLimits = {
@@ -47,63 +53,21 @@ export type DecompressResult =
   | { readonly status: "ok"; readonly inline: string; readonly path?: string; readonly tokens?: number }
   | { readonly status: "error"; readonly message: string }
 
-const tempFiles: { path: string; mtimeMs: number; sessionID: string }[] = []
+/** 生产默认临时文件存储；按目录前缀扫描，不维护进程内列表。 */
+const defaultTempFiles = createTempFileStore({ cap: DEFAULT_TEMP_FILE_CAP })
 
-/** 输入：上限；输出：清理过期临时文件。预期：超上限删最老，绝不抛错。 */
-function reapTempFiles(cap: number): void {
-  while (tempFiles.length > cap) {
-    tempFiles.sort((a, b) => a.mtimeMs - b.mtimeMs)
-    const oldest = tempFiles.shift()
-    if (oldest === undefined) break
-    try {
-      unlinkSync(oldest.path)
-    } catch {
-      // 已被外部清理或权限问题：跳过，不阻塞解压
-    }
-  }
+/**
+ * 输入：可选目录/保留期/时钟。
+ * 输出：删除的过期文件数。
+ * 预期：启动时清理上一个进程留下的 compressed-context-* 文件；只删超过保留期的。
+ */
+export function cleanupStaleTempFiles(options: TempFileStoreOptions = {}): number {
+  return createTempFileStore(options).sweep()
 }
 
-/** 输入：会话 + 块 id + 正文 + 上限；输出：临时文件路径。 */
-function writeTempFile(sessionID: string, blockId: string, body: string, cap: number): string {
-  const safeId = blockId.replace(/[^a-zA-Z0-9_-]/g, "-")
-  const path = join(tmpdir(), `compressed-context-decompress-${safeId}-${String(Date.now())}.txt`)
-  writeFileSync(path, body, { encoding: "utf8", mode: 0o600 })
-  tempFiles.push({ path, mtimeMs: Date.now(), sessionID })
-  reapTempFiles(cap)
-  return path
-}
-
-/** 输入：会话；输出：无；预期：删除该会话全部解压临时文件。 */
-export function deleteSessionTempFiles(sessionID: string): void {
-  for (let index = tempFiles.length - 1; index >= 0; index -= 1) {
-    const entry = tempFiles[index]
-    if (entry?.sessionID !== sessionID) continue
-    try {
-      unlinkSync(entry.path)
-    } catch {
-      // best effort
-    }
-    tempFiles.splice(index, 1)
-  }
-}
-
-/** 输入：会话 + 块 + 序号 + base64 + mime + 文件名；输出：媒体临时文件路径。 */
-function writeMediaTempFile(
-  sessionID: string,
-  blockID: string,
-  index: number,
-  data: string,
-  filename: string | undefined,
-  cap: number,
-): string {
-  const safeId = `${blockID}-media-${index.toString()}`.replace(/[^a-zA-Z0-9_-]/g, "-")
-  const safeName = (filename ?? "").replace(/[^a-zA-Z0-9._-]/g, "-")
-  const suffix = safeName.length > 0 ? `-${safeName}` : ""
-  const path = join(tmpdir(), `compressed-context-${safeId}${suffix}-${String(Date.now())}.bin`)
-  writeFileSync(path, Buffer.from(data, "base64"), { mode: 0o600 })
-  tempFiles.push({ path, mtimeMs: Date.now(), sessionID })
-  reapTempFiles(cap)
-  return path
+/** 输入：会话；输出：删除的文件数；预期：按文件名里的会话标记跨进程删除。 */
+export function deleteSessionTempFiles(sessionID: string): number {
+  return defaultTempFiles.deleteSession(sessionID)
 }
 
 /** 输入：任意值；输出：可读 JSON 文本；不可序列化时返回空串。 */
@@ -124,6 +88,7 @@ function renderStoredPart(
   sessionID: string,
   blockID: string,
   index: number,
+  tempFiles: TempFileStore,
   cap: number,
 ): string {
   if (part.type === "text") return part.text ?? ""
@@ -137,7 +102,7 @@ function renderStoredPart(
   const filename = part.filename === undefined ? "" : ` "${part.filename}"`
   const mime = source?.mediaType ?? "unknown"
   if (source?.type === "base64" && source.data !== undefined && source.data.length > 0) {
-    const path = writeMediaTempFile(sessionID, blockID, index, source.data, part.filename, cap)
+    const path = tempFiles.writeMedia(sessionID, blockID, index, source.data, part.filename, cap)
     return `[media ${mime}${filename} saved to: ${path}]`
   }
   const kind = source?.type ?? "unknown"
@@ -150,6 +115,7 @@ function renderStoredMessage(
   sessionID: string,
   blockID: string,
   messageIndex: number,
+  tempFiles: TempFileStore,
   cap: number,
 ): string {
   const lines: string[] = []
@@ -159,6 +125,7 @@ function renderStoredMessage(
       sessionID,
       blockID,
       messageIndex * 1000 + partIndex,
+      tempFiles,
       cap,
     )
     if (text.length === 0) continue
@@ -176,6 +143,7 @@ async function appendStoredTranscript(
   storage: StorageLike,
   sessionID: string,
   block: Block,
+  tempFiles: TempFileStore,
   cap: number,
   append: (text: string) => void,
 ): Promise<void> {
@@ -190,7 +158,7 @@ async function appendStoredTranscript(
       append(`[missing transcript message ${index.toString()} for ${block.id}]`)
       continue
     }
-    const text = renderStoredMessage(message, sessionID, block.id, index, cap)
+    const text = renderStoredMessage(message, sessionID, block.id, index, tempFiles, cap)
     if (text.length > 0) append(text)
   }
 }
@@ -213,6 +181,7 @@ export async function resolveDecompress(
   }
   const blockId = raw.trim()
   const full = args["full"] === true
+  const tempFiles = limits.tempFiles ?? defaultTempFiles
 
   const state = await loadState(ctx.storage, sessionID)
   if (state.blocks.length === 0) {
@@ -245,7 +214,7 @@ export async function resolveDecompress(
     }
     chunks.push(payload)
     if (chars > limits.inlineMax) {
-      filePath = writeTempFile(sessionID, blockId, chunks.join(""), limits.tempCap)
+      filePath = tempFiles.writeText(sessionID, blockId, chunks.join(""), limits.tempCap)
       chunks.length = 0
     }
   }
@@ -256,7 +225,7 @@ export async function resolveDecompress(
     visited.add(block.id)
     const sources = block.sourceBlockIds ?? []
     if (sources.length === 0) {
-      await appendStoredTranscript(ctx.storage, sessionID, block, limits.tempCap, append)
+      await appendStoredTranscript(ctx.storage, sessionID, block, tempFiles, limits.tempCap, append)
       return
     }
     if (!full && depth > 0) {

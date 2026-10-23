@@ -75,6 +75,9 @@ export interface Messages {
     readonly decompressTempCap: string
     readonly decompressTempCapHint: string
     readonly decompressTempCapInvalid: string
+    readonly decompressTempMaxAgeHours: string
+    readonly decompressTempMaxAgeHoursHint: string
+    readonly decompressTempMaxAgeHoursInvalid: string
     readonly decompressShowTokens: string
     readonly submit: string
     readonly language: string

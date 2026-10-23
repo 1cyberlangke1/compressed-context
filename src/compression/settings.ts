@@ -5,6 +5,7 @@ import {
   DEFAULT_DECOMPRESS_INLINE_MAX,
   DEFAULT_DECOMPRESS_SHOW_TOKENS,
   DEFAULT_DECOMPRESS_TEMP_CAP,
+  DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   DEFAULT_ENABLE_COMPRESS_TOOL,
   DEFAULT_ENABLE_DECOMPRESS_TOOL,
   DEFAULT_NUDGE_GROWTH_TOKENS,
@@ -15,12 +16,14 @@ import {
   DEFAULT_SUMMARY_TOTAL_PERCENT,
   MAX_DECOMPRESS_INLINE_MAX,
   MAX_DECOMPRESS_TEMP_CAP,
+  MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MAX_CONTEXT_LIMIT,
   MAX_SUMMARY_PERCENT,
   MAX_TRIGGER_PERCENT,
   MIN_CONTEXT_LIMIT,
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
+  MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MIN_SUMMARY_PERCENT,
   MIN_TRIGGER_PERCENT,
   isSummaryLanguage,
@@ -60,6 +63,7 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
   decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
   decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
+  decompressTempMaxAgeHours: DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   decompressShowTokens: DEFAULT_DECOMPRESS_SHOW_TOKENS,
 }
 
@@ -144,7 +148,21 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     record["decompressTempCap"] === undefined
       ? DEFAULT_DECOMPRESS_TEMP_CAP
       : readOptionalInt(record["decompressTempCap"], MIN_DECOMPRESS_TEMP_CAP, MAX_DECOMPRESS_TEMP_CAP)
-  if (decompressInlineMax === undefined || decompressTempCap === undefined) return undefined
+  const decompressTempMaxAgeHours =
+    record["decompressTempMaxAgeHours"] === undefined
+      ? DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS
+      : readOptionalInt(
+          record["decompressTempMaxAgeHours"],
+          MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+          MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+        )
+  if (
+    decompressInlineMax === undefined ||
+    decompressTempCap === undefined ||
+    decompressTempMaxAgeHours === undefined
+  ) {
+    return undefined
+  }
   return {
     contextLimit: limit,
     triggerPercent: Math.round(percent),
@@ -160,6 +178,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     showBlockTokens,
     decompressInlineMax,
     decompressTempCap,
+    decompressTempMaxAgeHours,
     decompressShowTokens,
   }
 }

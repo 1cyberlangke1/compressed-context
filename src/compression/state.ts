@@ -17,8 +17,10 @@ export interface Block {
   readonly summary: Summary
   readonly fromId: string
   readonly toId: string
-  readonly tokensBefore: number
-  readonly tokensAfter: number
+  /** 这个块代表的原始 token 总量；合并块等于所有子块之和。 */
+  readonly sourceTokens: number
+  /** 这个块摘要的估算 token 量。 */
+  readonly summaryTokens: number
   readonly at: number
   /** active 链中的顺序；合并块占第一个源块的位置。 */
   readonly order: number
@@ -137,7 +139,20 @@ function parseBlock(value: unknown): Block | undefined {
   const tier = block["tier"]
   if (tier !== 1 && tier !== 2 && tier !== 3) return undefined
   if (typeof block["fromId"] !== "string" || typeof block["toId"] !== "string") return undefined
-  if (typeof block["tokensBefore"] !== "number" || typeof block["tokensAfter"] !== "number") return undefined
+  // 旧版字段 tokensBefore/tokensAfter 继续可读；新字段优先。
+  const sourceTokens =
+    typeof block["sourceTokens"] === "number"
+      ? block["sourceTokens"]
+      : typeof block["tokensBefore"] === "number"
+        ? block["tokensBefore"]
+        : undefined
+  const summaryTokens =
+    typeof block["summaryTokens"] === "number"
+      ? block["summaryTokens"]
+      : typeof block["tokensAfter"] === "number"
+        ? block["tokensAfter"]
+        : undefined
+  if (sourceTokens === undefined || summaryTokens === undefined) return undefined
   if (typeof block["at"] !== "number" || typeof block["order"] !== "number") return undefined
   const sourceBlockIds = block["sourceBlockIds"]
   if (sourceBlockIds !== undefined && !isStringArray(sourceBlockIds)) return undefined
@@ -149,11 +164,63 @@ function parseBlock(value: unknown): Block | undefined {
     summary,
     fromId: block["fromId"],
     toId: block["toId"],
-    tokensBefore: block["tokensBefore"],
-    tokensAfter: block["tokensAfter"],
+    sourceTokens,
+    summaryTokens,
     at: block["at"],
     order: block["order"],
     ...(sourceBlockIds === undefined ? {} : { sourceBlockIds }),
+  }
+}
+
+/**
+ * 输入：解析后的块 + pending。
+ * 输出：sourceTokens 统一为「代表的原始 token 总量」的块。
+ * 预期：旧版合并块把子摘要量存进 tokensBefore；这里按 sourceBlockIds 递归求和覆盖。
+ *       子块缺失或成环时保留原值，不阻断状态读取。
+ */
+function normalizeSourceTokens(
+  blocks: readonly Block[],
+  pending: Block | undefined,
+): { blocks: Block[]; pending: Block | undefined } {
+  const byId = new Map<string, Block>()
+  for (const block of blocks) byId.set(block.id, block)
+  if (pending !== undefined) byId.set(pending.id, pending)
+  const memo = new Map<string, number>()
+
+  const compute = (block: Block, visiting: Set<string>): number => {
+    const cached = memo.get(block.id)
+    if (cached !== undefined) return cached
+    const sources = block.sourceBlockIds ?? []
+    if (block.tier === 1 || sources.length === 0) {
+      memo.set(block.id, block.sourceTokens)
+      return block.sourceTokens
+    }
+    if (visiting.has(block.id)) return block.sourceTokens
+    visiting.add(block.id)
+    let total = 0
+    let complete = true
+    for (const id of sources) {
+      const child = byId.get(id)
+      if (child === undefined) {
+        complete = false
+        break
+      }
+      total += compute(child, visiting)
+    }
+    visiting.delete(block.id)
+    const value = complete ? total : block.sourceTokens
+    memo.set(block.id, value)
+    return value
+  }
+
+  const normalize = (block: Block): Block => {
+    const value = compute(block, new Set())
+    return value === block.sourceTokens ? block : { ...block, sourceTokens: value }
+  }
+
+  return {
+    blocks: blocks.map(normalize),
+    pending: pending === undefined ? undefined : normalize(pending),
   }
 }
 
@@ -165,10 +232,13 @@ function parseBlock(value: unknown): Block | undefined {
 export function parseState(value: unknown): State {
   if (typeof value !== "object" || value === null) return EMPTY_STATE
   const record = value as Record<string, unknown>
-  const blocks = Array.isArray(record["blocks"])
+  const parsedBlocks = Array.isArray(record["blocks"])
     ? record["blocks"].map(parseBlock).filter((block): block is Block => block !== undefined)
     : []
-  const pending = parseBlock(record["pending"])
+  const parsedPending = parseBlock(record["pending"])
+  const normalized = normalizeSourceTokens(parsedBlocks, parsedPending)
+  const blocks = normalized.blocks
+  const pending = normalized.pending
   const attempts = typeof record["attempts"] === "number" ? record["attempts"] : 0
   const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
   const nudgeBaselineTokens =
@@ -194,7 +264,10 @@ export async function loadState(storage: StorageLike, sessionID: string): Promis
   return parseState(await storage.get(stateKey(sessionID)))
 }
 
-/** 输入：storage + sessionID + 状态；输出：无；预期：写入 JSON；已删会话直接跳过。 */
+/**
+ * 输入：storage + sessionID + 状态；输出：无；预期：写入 JSON；已删会话直接跳过。
+ * 仅用于测试/初始化。生产代码必须走 StateStore.transact，否则会和并发事务互相覆盖。
+ */
 export async function saveState(storage: StorageLike, sessionID: string, state: State): Promise<void> {
   if (isSessionDeleted(sessionID)) return
   await storage.set(stateKey(sessionID), state as unknown as Schema.Json)
@@ -206,6 +279,7 @@ export function commitPending(state: State): State {
   return {
     blocks: [...state.blocks, state.pending],
     attempts: 0,
+    ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
     ...(state.phase === undefined ? {} : { phase: state.phase }),
   }

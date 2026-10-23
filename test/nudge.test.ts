@@ -113,8 +113,8 @@ describe("主动压缩提醒", () => {
       summary: { format: "markdown", title: "old", text: "old" },
       fromId: "m0",
       toId: "m0",
-      tokensBefore: 10,
-      tokensAfter: 1,
+      sourceTokens: 10,
+      summaryTokens: 1,
       at: 1,
       order: 1,
     }

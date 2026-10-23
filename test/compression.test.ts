@@ -57,8 +57,8 @@ const block: Block = {
   summary,
   fromId: "m1",
   toId: "m9",
-  tokensBefore: 1000,
-  tokensAfter: 100,
+  sourceTokens: 1000,
+  summaryTokens: 100,
   at: 1,
   order: 1,
 }
@@ -298,6 +298,7 @@ describe("服务端设置", () => {
       showBlockTokens: false,
       decompressInlineMax: 10_000,
       decompressTempCap: 50,
+      decompressTempMaxAgeHours: 24,
       decompressShowTokens: true,
     })
     expect(
@@ -323,6 +324,7 @@ describe("服务端设置", () => {
       showBlockTokens: false,
       decompressInlineMax: 10_000,
       decompressTempCap: 50,
+      decompressTempMaxAgeHours: 24,
       decompressShowTokens: true,
     })
     expect(parseServerSettings({ contextLimit: "auto", triggerPercent: 59 })).toBeUndefined()
@@ -694,6 +696,9 @@ describe("自动压缩", () => {
           await new Promise((resolve) => setTimeout(resolve, 50))
           const state = await loadState(storage, "ses_test")
           await saveState(storage, "ses_test", withPending(state, { ...block, id: "b1" }))
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          const pendingState = await loadState(storage, "ses_test")
+          await saveState(storage, "ses_test", commitPending(pendingState))
           markCompactionInFlight("ses_test", false)
         })()
         return Promise.resolve()
@@ -704,12 +709,12 @@ describe("自动压缩", () => {
       sessionID: "ses_test",
       tokens: { input: 1, cache: { read: 90_000, write: 0 } },
     })
-    // 等待由 background 钩子写入的 pending 落盘。
-    for (let index = 0; index < 40 && (await loadState(storage, "ses_test")).pending === undefined; index += 1) {
+    // 等待由 background 钩子把 pending 转正。
+    for (let index = 0; index < 40 && (await loadState(storage, "ses_test")).blocks.length === 0; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     const state = await loadState(storage, "ses_test")
-    expect(state.pending).toBeDefined()
+    expect(state.blocks.map((item) => item.id)).toEqual(["b1"])
   })
 
   it("step.ended usage 低于阈值时不入队", async () => {
@@ -751,6 +756,9 @@ describe("自动压缩", () => {
           await new Promise((resolve) => setTimeout(resolve, 100))
           const state = await loadState(storage, "ses_test")
           await saveState(storage, "ses_test", withPending(state, { ...block, id: "b1" }))
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          const pendingState = await loadState(storage, "ses_test")
+          await saveState(storage, "ses_test", commitPending(pendingState))
           markCompactionInFlight("ses_test", false)
         })()
         return Promise.resolve()
@@ -1597,6 +1605,7 @@ describe("摘要单层合并", () => {
     expect(result.merged).toBe(true)
     expect(result.pending?.tier).toBe(2)
     expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2"])
+    expect(result.pending?.sourceTokens).toBe(2_000)
     expect(result.pending?.order).toBe(1)
     expect(activeBlocks(result.blocks, result.pending).map((item) => item.id)).toEqual([result.pending?.id])
   })

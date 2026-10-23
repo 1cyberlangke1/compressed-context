@@ -101,8 +101,8 @@ export async function registerSettingsRpc(
             : "json",
         title: block.summary.title,
         at: block.at,
-        tokensBefore: block.tokensBefore,
-        tokensAfter: block.tokensAfter,
+        sourceTokens: block.sourceTokens,
+        summaryTokens: block.summaryTokens,
         ...(block.sourceBlockIds === undefined ? {} : { sourceBlockIds: [...block.sourceBlockIds] }),
         body: renderSummary(block.summary),
       }))

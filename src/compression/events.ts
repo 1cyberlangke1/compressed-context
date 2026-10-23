@@ -8,17 +8,17 @@ import { deleteSessionTempFiles } from "./decompress.ts"
 import { markSessionDeleted } from "./deleted-sessions.ts"
 import { blockMarker } from "./render.ts"
 import { deleteTranscriptsForSession } from "./transcript-store.ts"
+import { measuredPromptTokens } from "./auto.ts"
+import { isCompactionInFlight } from "./inflight.ts"
 import {
   STATE_PREFIX,
   commitPending,
   dropPending,
-  loadState,
-  parseState,
   retryPending,
-  saveState,
   stateKey,
   type State,
 } from "./state.ts"
+import { stateStore } from "./state-store.ts"
 
 /** 输入：服务端上下文 + sessionID + 块 id；输出：最新 compaction 是否包含该块。 */
 export async function hasBlockInLatestCompaction(
@@ -63,35 +63,39 @@ export async function handleCompactionEvent(
   sessionID: string,
   eventError?: string,
 ): Promise<void> {
-  const state = await loadState(ctx.storage, sessionID)
-  if (type === "ended") {
-    if (!state.pending) {
-      await saveState(ctx.storage, sessionID, { ...state, attempts: 0 })
-      return
+  await stateStore(ctx.storage).transact(sessionID, async (state) => {
+    if (type === "ended") {
+      if (!state.pending) {
+        return { next: { ...state, attempts: 0 }, result: undefined }
+      }
+      // 事件可能晚到：只有最新 checkpoint 确实包含这个 pending 才转正，
+      // 否则它属于下一层 compaction，留给下一次 ended。
+      if (await hasBlockInLatestCompaction(ctx, sessionID, state.pending.id)) {
+        const committed = commitPending(state)
+        // 压缩成功后把提醒基线重置到最近一次真实 usage；否则基线会停留在压缩前的旧值。
+        const baseline = await measuredPromptTokens(ctx, sessionID)
+        return {
+          next: baseline === undefined ? committed : { ...committed, nudgeBaselineTokens: baseline },
+          result: undefined,
+        }
+      }
+      return { result: undefined }
     }
-    // 事件可能晚到：只有最新 checkpoint 确实包含这个 pending 才转正，
-    // 否则它属于下一层 compaction，留给下一次 ended。
-    if (await hasBlockInLatestCompaction(ctx, sessionID, state.pending.id)) {
-      await saveState(ctx.storage, sessionID, commitPending(state))
-    }
-    return
-  }
 
-  const detail = eventError ?? state.lastError ?? "compaction failed"
-  // 钩子从未运行的失败（state 里没有任何本层错误记录）且已排下一层 phase：
-  // 典型是历史里只剩 checkpoint，OpenCode 在钩子前就判定无可压缩内容。
-  // 这不是本层失败，保留 phase 等下一次带真实消息的压缩，不计 attempts。
-  if (eventError !== undefined && state.lastError === undefined && state.phase !== undefined) {
-    await saveState(ctx.storage, sessionID, { ...state, attempts: 0 })
-    return
-  }
-  // 本层失败：保留 phase，下一次请求由 auto 重新入队；达到上限后 retryPending 会清掉 phase。
-  if (state.phase !== undefined) {
-    await saveState(ctx.storage, sessionID, retryPending(state, detail))
-    return
-  }
-  // T1 没有下一层可重试：丢弃 pending，记录真实原因。
-  await saveState(ctx.storage, sessionID, dropPending(state, detail))
+    const detail = eventError ?? state.lastError ?? "compaction failed"
+    // 钩子从未运行的失败（state 里没有任何本层错误记录）且已排下一层 phase：
+    // 典型是历史里只剩 checkpoint，OpenCode 在钩子前就判定无可压缩内容。
+    // 这不是本层失败，保留 phase 等下一次带真实消息的压缩，不计 attempts。
+    if (eventError !== undefined && state.lastError === undefined && state.phase !== undefined) {
+      return { next: { ...state, attempts: 0 }, result: undefined }
+    }
+    // 本层失败：保留 phase，下一次请求由 auto 重新入队；达到上限后 retryPending 会清掉 phase。
+    if (state.phase !== undefined) {
+      return { next: retryPending(state, detail), result: undefined }
+    }
+    // T1 没有下一层可重试：丢弃 pending，记录真实原因。
+    return { next: dropPending(state, detail), result: undefined }
+  })
 }
 
 export interface SessionEventOptions {
@@ -236,12 +240,12 @@ function isSessionMissing(error: unknown): boolean {
  */
 async function forEachStateEntry(
   ctx: Plugin.Context,
-  visit: (sessionID: string, value: unknown) => Promise<void>,
+  visit: (sessionID: string) => Promise<void>,
 ): Promise<void> {
   await forEachScannedEntry(ctx.storage, STATE_PREFIX, async (entry) => {
     const sessionID = entry.key.slice(STATE_PREFIX.length)
     if (sessionID.length === 0) return
-    await visit(sessionID, entry.value)
+    await visit(sessionID)
   })
 }
 
@@ -264,10 +268,15 @@ async function cleanupOrphanStates(ctx: Plugin.Context): Promise<void> {
 export async function reconcileAll(ctx: Plugin.Context): Promise<void> {
   try {
     await cleanupOrphanStates(ctx)
-    await forEachStateEntry(ctx, async (sessionID, value) => {
-      const state = parseState(value)
-      if (!state.pending) return
-      await saveState(ctx.storage, sessionID, await reconcile(ctx, sessionID, state))
+    await forEachStateEntry(ctx, async (sessionID) => {
+      // 压缩钩子自己会写 state；启动对账跳过它，避免把正在生成的 pending 丢掉。
+      if (isCompactionInFlight(sessionID)) return
+      await stateStore(ctx.storage).transact(sessionID, async (state) => {
+        // 拿到锁后再确认一次：压缩钩子可能刚好在这两步之间启动。
+        if (isCompactionInFlight(sessionID)) return { result: undefined }
+        if (!state.pending) return { result: undefined }
+        return { next: await reconcile(ctx, sessionID, state), result: undefined }
+      })
     })
   } catch {
     // best effort

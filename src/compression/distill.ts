@@ -197,8 +197,9 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     summary: picked.summary,
     fromId: chosen.left.fromId,
     toId: chosen.right.toId,
-    tokensBefore: chosen.left.tokensAfter + chosen.right.tokensAfter,
-    tokensAfter: Math.ceil(summaryChars(picked.summary) / 4),
+    // 合并块代表的是两个子块覆盖的原始内容，不是子摘要的 token 量。
+    sourceTokens: chosen.left.sourceTokens + chosen.right.sourceTokens,
+    summaryTokens: Math.ceil(summaryChars(picked.summary) / 4),
     at: Math.max(chosen.left.at, chosen.right.at),
     order: chosen.left.order,
     sourceBlockIds: [chosen.left.id, chosen.right.id],

@@ -10,11 +10,14 @@ import {
   MAX_DECOMPRESS_INLINE_MAX,
   MAX_NUDGE_GROWTH_TOKENS,
   MAX_DECOMPRESS_TEMP_CAP,
+  MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MIN_CONTEXT_LIMIT,
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
+  MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
+  effectiveDecompressTempMaxAgeHours,
   effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
@@ -301,6 +304,27 @@ export function SettingsCommand(props: {
     ))
   }
 
+  const openDecompressMaxAge = (): void => {
+    props.context.ui.dialog.show(() => (
+      <TokenDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.decompressTempMaxAgeHours}
+        hint={copy().settings.decompressTempMaxAgeHoursHint}
+        invalid={copy().settings.decompressTempMaxAgeHoursInvalid}
+        placeholder="24"
+        initial={effectiveDecompressTempMaxAgeHours(props.settings).toString()}
+        min={MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS}
+        max={MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS}
+        onConfirm={(next) => {
+          void props.updateSettings((draft) => {
+            draft.decompressTempMaxAgeHours = next
+          })
+        }}
+      />
+    ))
+  }
+
   const openLimit = async (): Promise<boolean> => {
     const picked = await props.context.ui.dialog.select<ContextLimit | "custom">({
       title: copy().settings.limit,
@@ -389,6 +413,10 @@ export function SettingsCommand(props: {
     }
     if (picked === "decompressTempCap") {
       openDecompressCap()
+      return
+    }
+    if (picked === "decompressTempMaxAgeHours") {
+      openDecompressMaxAge()
       return
     }
     if (picked === "language") {
