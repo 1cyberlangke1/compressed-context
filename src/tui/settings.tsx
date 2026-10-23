@@ -3,7 +3,7 @@ import { createMemo, createSignal, onMount } from "solid-js"
 
 import { formatTokens } from "../shared/format.ts"
 import { resolveMessages } from "../i18n/index.ts"
-import { contextRpc } from "../shared/rpc.ts"
+import { contextRpc, rpcLocation } from "../shared/rpc.ts"
 import {
   localeArgument,
   MAX_CONTEXT_LIMIT,
@@ -74,6 +74,7 @@ export function SettingsCommand(props: {
     try {
       const got = await contextRpc(props.context.client).settingsGet(
         sessionID === undefined ? {} : { sessionID },
+        rpcLocation(props.context),
       )
       if (typeof got.resolvedWindow === "number" && got.resolvedWindow > 0) setResolvedWindow(got.resolvedWindow)
     } catch {

@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { createStore, reconcile } from "solid-js/store"
 
-import { contextRpc } from "../shared/rpc.ts"
+import { contextRpc, rpcLocation } from "../shared/rpc.ts"
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "../shared/settings.ts"
 import { configFileLayers } from "./config-layers.ts"
 import { maybePromptNativeCompaction } from "./native-compaction-dialog.ts"
@@ -20,9 +20,10 @@ export default Plugin.define({
   async setup(context) {
     const layers = await configFileLayers(context)
     const rpc = contextRpc(context.client)
+    const callOptions = rpcLocation(context)
     let initial = DEFAULT_SETTINGS
     try {
-      initial = normalizeSettings({ ...(await rpc.settingsGet({ layers })) })
+      initial = normalizeSettings({ ...(await rpc.settingsGet({ layers }, callOptions)) })
     } catch {
       // 服务端插件尚未加载：先用默认值，保存时再报错。
     }
@@ -34,7 +35,7 @@ export default Plugin.define({
       const next = normalizeSettings(draft)
       setSettings(reconcile(next))
       try {
-        const result = await rpc.settingsSet({ ...next, layers })
+        const result = await rpc.settingsSet({ ...next, layers }, callOptions)
         if (!result.ok) throw new Error(result.error ?? "settings write failed")
       } catch (error) {
         setSettings(reconcile(previous))

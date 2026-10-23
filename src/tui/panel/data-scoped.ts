@@ -3,7 +3,7 @@ import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 
 import type { SummaryBlock } from "../../shared/blocks.ts"
 import type { CacheSample } from "../../shared/cache.ts"
-import { contextRpc } from "../../shared/rpc.ts"
+import { contextRpc, rpcLocation } from "../../shared/rpc.ts"
 import type { Settings } from "../../shared/settings.ts"
 import { parseStats, STATS_KEY, TERMINAL_KEY, type ContextStats } from "../../shared/stats.ts"
 
@@ -43,7 +43,7 @@ export function usePanelData(input: {
   const refreshCache = async (): Promise<void> => {
     if (!needCache) return
     try {
-      const got = await rpc().cacheHistoryGet({ sessionID: input.sessionID })
+      const got = await rpc().cacheHistoryGet({ sessionID: input.sessionID }, rpcLocation(input.context))
       setCache(got.samples)
     } catch {
       // server plugin not loaded；保留上一次数据
@@ -54,7 +54,7 @@ export function usePanelData(input: {
   const refreshBlocks = async (): Promise<void> => {
     if (!needBlocks || !input.settings().showSummaries) return
     try {
-      const got = await rpc().blocksGet({ sessionID: input.sessionID })
+      const got = await rpc().blocksGet({ sessionID: input.sessionID }, rpcLocation(input.context))
       setBlocks(got.blocks)
     } catch {
       // server plugin not loaded；保留上一次数据

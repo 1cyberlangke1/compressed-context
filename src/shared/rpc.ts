@@ -178,15 +178,28 @@ export interface ContextSettingsResult extends Settings {
 
 /** TUI 侧对 ContextRpc 的类型化视图。 */
 export interface ContextRpcClient {
-  settingsGet(input: { readonly sessionID?: string; readonly layers?: readonly string[] }): Promise<ContextSettingsResult>
-  settingsSet(input: Settings & { readonly layers?: readonly string[] }): Promise<{ readonly ok: boolean; readonly error?: string }>
-  blocksGet(input: { readonly sessionID: string }): Promise<{ readonly blocks: readonly SummaryBlock[] }>
-  cacheHistoryGet(input: {
-    readonly sessionID: string
-  }): Promise<{ readonly samples: readonly CacheSample[] }>
-  nativeCompactionDisable(input: {
-    readonly path: string
-  }): Promise<{ readonly ok: boolean; readonly error?: string }>
+  settingsGet(
+    input: { readonly sessionID?: string; readonly layers?: readonly string[] },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<ContextSettingsResult>
+  settingsSet(
+    input: Settings & { readonly layers?: readonly string[] },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<{ readonly ok: boolean; readonly error?: string }>
+  blocksGet(
+    input: { readonly sessionID: string },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<{ readonly blocks: readonly SummaryBlock[] }>
+  cacheHistoryGet(
+    input: { readonly sessionID: string },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<{ readonly samples: readonly CacheSample[] }>
+  nativeCompactionDisable(
+    input: {
+      readonly path: string
+    },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<{ readonly ok: boolean; readonly error?: string }>
 }
 
 /** 输入：带 rpc 方法的 TUI client；输出：类型化 RPC 客户端。 */
@@ -194,4 +207,13 @@ export function contextRpc(client: {
   rpc(definition: Rpc.PortableDefinition): unknown
 }): ContextRpcClient {
   return client.rpc(ContextRpc) as ContextRpcClient
+}
+
+/** 输入：TUI 上下文；输出：RPC 路由选项。预期：带 location 让请求打到会话所属实例。 */
+export function rpcLocation(context: {
+  readonly location?: { readonly directory: string } | undefined
+}): {
+  readonly location?: { readonly directory: string }
+} | undefined {
+  return context.location === undefined ? undefined : { location: { directory: context.location.directory } }
 }

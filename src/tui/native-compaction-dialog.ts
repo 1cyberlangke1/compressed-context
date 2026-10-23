@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 
 import { resolveMessages } from "../i18n/index.ts"
-import { contextRpc } from "../shared/rpc.ts"
+import { contextRpc, rpcLocation } from "../shared/rpc.ts"
 import { localeArgument, type Settings } from "../shared/settings.ts"
 import type { UpdateSettings } from "./types.ts"
 
@@ -59,7 +59,7 @@ async function disableNativeCompaction(
   context: Context,
   path: string,
 ): Promise<{ readonly ok: boolean; readonly error?: string }> {
-  return contextRpc(context.client).nativeCompactionDisable({ path })
+  return contextRpc(context.client).nativeCompactionDisable({ path }, rpcLocation(context))
 }
 
 /**
