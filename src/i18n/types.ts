@@ -24,6 +24,15 @@ export interface Messages {
     readonly description: string
     readonly group: string
   }
+  readonly nativeCompaction: {
+    readonly title: string
+    readonly description: (path: string) => string
+    readonly disable: string
+    readonly keep: string
+    readonly dismiss: string
+    readonly disabled: string
+    readonly writeFailed: (error: string) => string
+  }
   readonly settings: {
     readonly title: string
     readonly show: string

@@ -134,6 +134,29 @@ describe("estimateCategories", () => {
     expect(result.recent).toBe(2)
   })
 
+  it("多个 checkpoint 只取最新 recent，不累加", () => {
+    const result = estimateCategories({
+      system: [],
+      tools: {},
+      messages: [
+        {
+          content: [
+            {
+              type: "text",
+              text: "<conversation-checkpoint>\n<summary>abcd</summary>\n<recent-context>aaaa</recent-context>\n</conversation-checkpoint>",
+            },
+            {
+              type: "text",
+              text: "<conversation-checkpoint>\n<summary>abcd</summary>\n<recent-context>abcdefgh</recent-context>\n</conversation-checkpoint>",
+            },
+          ],
+        },
+      ],
+    })
+    expect(result.summaries).toBe(2)
+    expect(result.recent).toBe(2)
+  })
+
   it("未知 part 类型不计入任何分类", () => {
     const result = estimateCategories({
       system: [],

@@ -59,6 +59,7 @@
   },
   "dependencies": {
     "effect": "4.0.1",
+    "jsonc-parser": "^3.3.1",
     "jsonrepair": "^3.15.0"
   }
 }

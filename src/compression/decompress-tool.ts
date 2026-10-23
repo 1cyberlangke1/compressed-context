@@ -22,6 +22,7 @@ const DecompressOutput = Schema.Struct({
   inline: Schema.optional(Schema.String),
   path: Schema.optional(Schema.String),
   tokens: Schema.optional(Schema.Number),
+  error: Schema.optional(Schema.String),
 })
 
 /**
@@ -42,7 +43,7 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
         const settings = await loadServerSettings(ctx.storage)
         if (!settings.enableDecompressTool) {
           return {
-            output: {},
+            output: { error: "decompress tool is disabled in settings" },
             content: "ERROR: decompress tool is disabled in settings",
             metadata: { error: true },
           }
@@ -54,7 +55,7 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
         })
         if (result.status === "error") {
           return {
-            output: {},
+            output: { error: result.message },
             content: `ERROR: ${result.message}`,
             metadata: { error: true },
           }

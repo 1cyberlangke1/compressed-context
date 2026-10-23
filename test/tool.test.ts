@@ -6,6 +6,7 @@ import type { SummaryFields, SummaryInput } from "../src/compression/schema.ts"
 import { DEFAULT_SERVER_SETTINGS } from "../src/compression/settings.ts"
 import { saveState, type StorageLike } from "../src/compression/state.ts"
 import { registerCompressTool, type CompressToolHandle } from "../src/compression/tool.ts"
+import { registerDecompressTool } from "../src/compression/decompress-tool.ts"
 import type { MessageLike } from "../src/compression/select.ts"
 import type { SummaryFormat } from "../src/shared/settings.ts"
 
@@ -52,7 +53,15 @@ function summary(): SummaryFields {
 type ToolExecute = (
   input: SummaryInput,
   toolCtx: { sessionID: string },
-) => Promise<{ output: { block: string; status: string }; content: string }>
+) => Promise<{ output: { block?: string; status: string; error?: string }; content: string }>
+
+type DecompressExecute = (
+  input: { block: string; full: boolean },
+  toolCtx: { sessionID: string },
+) => Promise<{
+  output: { inline?: string; path?: string; tokens?: number; error?: string }
+  content: string
+}>
 
 /** 宿主传给 transform 的工具定义；只取本测试关心的字段。 */
 interface CapturedTool {
@@ -128,6 +137,23 @@ async function setup(input: {
   return { execute: tool().execute, reads: input.storage.reads, handle, tool }
 }
 
+/** 输入：storage；输出：decompress 工具的 execute；预期：捕获 transform 注册的定义。 */
+async function setupDecompress(storage: StorageLike): Promise<DecompressExecute> {
+  let execute: DecompressExecute | undefined
+  const ctx = {
+    storage,
+    tool: {
+      transform: (fn: (editor: { add: (tool: { execute: DecompressExecute }) => void }) => void) => {
+        fn({ add: (tool) => (execute = tool.execute) })
+        return Promise.resolve({ dispose: () => Promise.resolve() })
+      },
+    },
+  } as unknown as Plugin.Context
+  await registerDecompressTool(ctx)
+  if (execute === undefined) throw new Error("decompress tool was not registered")
+  return execute
+}
+
 describe("compress tool", () => {
   it("按会话模型窗口算摘要上限，而不是全局 window:last", async () => {
     const storage = createStorage()
@@ -154,7 +180,29 @@ describe("compress tool", () => {
     const { execute } = await setup({ storage, terminal: "stop now" })
     const result = await execute(summary(), { sessionID: "ses_a" })
     expect(result.output.status).toBe("error")
+    expect(result.output.error).toContain("stop now")
+    expect(result.output.block).toBeUndefined()
     expect(result.content).toContain("stop now")
+  })
+})
+
+describe("decompress tool", () => {
+  it("失败时 output 带 error，不返回空壳", async () => {
+    const storage = createStorage()
+    const execute = await setupDecompress(storage)
+    const result = await execute({ block: "", full: false }, { sessionID: "ses_a" })
+    expect(result.output.error).toContain("block is required")
+    expect(result.output.inline).toBeUndefined()
+    expect(result.content).toContain("ERROR:")
+  })
+
+  it("工具关闭时 output 也带 error", async () => {
+    const storage = createStorage()
+    await storage.set("settings", { ...DEFAULT_SERVER_SETTINGS, enableDecompressTool: false })
+    const execute = await setupDecompress(storage)
+    const result = await execute({ block: "b1", full: false }, { sessionID: "ses_a" })
+    expect(result.output.error).toContain("disabled")
+    expect(result.output.inline).toBeUndefined()
   })
 })
 

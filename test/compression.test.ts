@@ -1338,7 +1338,7 @@ describe("compress 工具只做 T1", () => {
     execute: (
       input: SummaryFields,
       ctx: { sessionID: string },
-    ) => Promise<{ content: string; output?: { block: string; status: string } }>
+    ) => Promise<{ content: string; output?: { block?: string; status: string; error?: string } }>
   }
 
   /** 输入：storage；输出：捕获工具定义。 */
@@ -1405,6 +1405,8 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(pending.ctx, new Map([["ses_test", toolMessages()]]))
     const pendingResult = await pending.tool().execute(summary, { sessionID: "ses_test" })
     expect(pendingResult.content).toContain("compression already in progress")
+    expect(pendingResult.output?.error).toContain("compression already in progress")
+    expect(pendingResult.output?.block).toBeUndefined()
 
     const phaseStorage = memoryStorage({
       [stateKey("ses_test")]: withPhase({ blocks: [], attempts: 0 }, "t2"),
@@ -1413,6 +1415,7 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(phase.ctx, new Map([["ses_test", toolMessages()]]))
     const phaseResult = await phase.tool().execute(summary, { sessionID: "ses_test" })
     expect(phaseResult.content).toContain("compression already in progress")
+    expect(phaseResult.output?.error).toContain("compression already in progress")
   })
 
   it("缓存已经是 eligible 时直接使用，不再二次筛选", async () => {
@@ -1445,7 +1448,7 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(ctx, new Map())
     const result = await tool().execute(summary, { sessionID: "ses_test" })
     expect(result.content).toContain("nothing to compress")
-    expect(result.output).toEqual({ block: "", status: "error" })
+    expect(result.output).toEqual({ status: "error", error: "nothing to compress" })
   })
 
   it("内容不足时失败", async () => {
@@ -1457,6 +1460,7 @@ describe("compress 工具只做 T1", () => {
     )
     const result = await tool().execute(summary, { sessionID: "ses_test" })
     expect(result.content).toContain("not enough content")
+    expect(result.output?.error).toContain("not enough content")
   })
 
   it("摘要非法时失败", async () => {
@@ -1465,6 +1469,7 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
     const result = await tool().execute({ ...summary, goal: "" }, { sessionID: "ses_test" })
     expect(result.content).toContain("empty field: goal")
+    expect(result.output?.error).toContain("empty field: goal")
   })
 
   it("消息缺少 id 时失败", async () => {
@@ -1484,6 +1489,7 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(ctx, new Map([["ses_test", noIds]]))
     const result = await tool().execute(summary, { sessionID: "ses_test" })
     expect(result.content).toContain("messages are missing ids")
+    expect(result.output?.error).toContain("messages are missing ids")
   })
 
   it("按设置的单条上限拒绝过长摘要", async () => {
@@ -1503,6 +1509,7 @@ describe("compress 工具只做 T1", () => {
     const bigFacts = { ...summary, facts: ["x".repeat(2_000)] }
     const result = await tool().execute(bigFacts, { sessionID: "ses_test" })
     expect(result.content).toContain("summary too long")
+    expect(result.output?.error).toContain("summary too long")
   })
 
   it("compress 工具关闭时返回明确错误", async () => {
@@ -1513,6 +1520,7 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
     const result = await tool().execute(summary, { sessionID: "ses_test" })
     expect(result.content).toContain("disabled")
+    expect(result.output?.error).toContain("disabled")
   })
 
   it("compact 失败时记录 lastError 并返回失败", async () => {
@@ -1521,6 +1529,7 @@ describe("compress 工具只做 T1", () => {
     await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
     const result = await tool().execute(summary, { sessionID: "ses_test" })
     expect(result.content).toContain("failed to start compaction")
+    expect(result.output?.error).toContain("failed to start compaction")
     expect((await loadState(storage, "ses_test")).lastError).toContain("boom")
   })
 })

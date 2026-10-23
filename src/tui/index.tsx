@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 
 import { initialSettings, normalizeSettings, type Settings } from "../shared/settings.ts"
+import { maybePromptNativeCompaction } from "./native-compaction.ts"
 import { Panel } from "./panel/index.tsx"
 import { SettingsCommand } from "./settings.tsx"
 import type { UpdateSettings } from "./types.ts"
@@ -33,6 +34,7 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     cacheLogExpanded: settings.cacheLogExpanded,
     showSummaries: settings.showSummaries,
     summariesExpanded: settings.summariesExpanded,
+    nativeCompactionPromptDismissed: settings.nativeCompactionPromptDismissed,
     decompressInlineMax: settings.decompressInlineMax,
     decompressTempCap: settings.decompressTempCap,
     decompressShowTokens: settings.decompressShowTokens,
@@ -59,6 +61,7 @@ function migrate(settings: Settings, update: UpdateSettings): void {
     settings.cacheLogExpanded === normalized.cacheLogExpanded &&
     settings.showSummaries === normalized.showSummaries &&
     settings.summariesExpanded === normalized.summariesExpanded &&
+    settings.nativeCompactionPromptDismissed === normalized.nativeCompactionPromptDismissed &&
     settings.decompressInlineMax === normalized.decompressInlineMax &&
     settings.decompressTempCap === normalized.decompressTempCap &&
     settings.decompressShowTokens === normalized.decompressShowTokens
@@ -100,6 +103,11 @@ export default Plugin.define({
       append: "app",
       render: () => <SettingsCommand context={context} settings={settings} updateSettings={updateSettings} />,
     })
+
+    // 等 UI 挂载后再弹；检测或弹窗失败都不阻塞插件启动。
+    setTimeout(() => {
+      void maybePromptNativeCompaction(context, settings, updateSettings).catch(() => undefined)
+    }, 0)
 
     return () => {
       disposePanel()

@@ -28,6 +28,15 @@ export const en: Messages = {
     description: "Open plugin settings",
     group: "Plugins",
   },
+  nativeCompaction: {
+    title: "OpenCode native auto-compaction is still on",
+    description: (path) => `The plugin should own compression. It will modify: ${path}`,
+    disable: "Turn off native auto-compaction",
+    keep: "Keep it on",
+    dismiss: "Don't ask again",
+    disabled: "OpenCode native auto-compaction is now off",
+    writeFailed: (error) => `Could not write config: ${error}`,
+  },
   settings: {
     title: "Compressed context plugin settings",
     show: "Show panel",

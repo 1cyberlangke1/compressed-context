@@ -84,6 +84,7 @@ export const DEFAULT_SHOW_CACHE_LOG = true
 export const DEFAULT_CACHE_LOG_EXPANDED = false
 export const DEFAULT_SHOW_SUMMARIES = true
 export const DEFAULT_SUMMARIES_EXPANDED = true
+export const DEFAULT_NATIVE_COMPACTION_PROMPT_DISMISSED = false
 
 /** decompress 返回分级与临时文件上限。 */
 export const DEFAULT_DECOMPRESS_INLINE_MAX = 10_000
@@ -154,6 +155,8 @@ export interface Settings extends CompressionSettings {
   showSummaries: boolean
   /** 摘要区是否展开 */
   summariesExpanded: boolean
+  /** 已选择不再提醒 OpenCode 原生压缩仍开启 */
+  nativeCompactionPromptDismissed: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -179,6 +182,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cacheLogExpanded: DEFAULT_CACHE_LOG_EXPANDED,
   showSummaries: DEFAULT_SHOW_SUMMARIES,
   summariesExpanded: DEFAULT_SUMMARIES_EXPANDED,
+  nativeCompactionPromptDismissed: DEFAULT_NATIVE_COMPACTION_PROMPT_DISMISSED,
   decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
   decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
   decompressTempMaxAgeHours: DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
@@ -340,6 +344,10 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
     showSummaries: typeof value["showSummaries"] === "boolean" ? value["showSummaries"] : DEFAULT_SHOW_SUMMARIES,
     summariesExpanded:
       typeof value["summariesExpanded"] === "boolean" ? value["summariesExpanded"] : DEFAULT_SUMMARIES_EXPANDED,
+    nativeCompactionPromptDismissed:
+      typeof value["nativeCompactionPromptDismissed"] === "boolean"
+        ? value["nativeCompactionPromptDismissed"]
+        : DEFAULT_NATIVE_COMPACTION_PROMPT_DISMISSED,
     decompressInlineMax: readInt(
       value["decompressInlineMax"],
       MIN_DECOMPRESS_INLINE_MAX,

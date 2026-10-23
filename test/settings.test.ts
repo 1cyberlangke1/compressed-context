@@ -50,6 +50,7 @@ describe("initialSettings / normalizeSettings", () => {
       cacheLogExpanded: false,
       showSummaries: true,
       summariesExpanded: true,
+      nativeCompactionPromptDismissed: false,
       decompressInlineMax: 10_000,
       decompressTempCap: 50,
       decompressTempMaxAgeHours: 24,
@@ -128,6 +129,8 @@ describe("initialSettings / normalizeSettings", () => {
     expect(initialSettings({ enabled: "no", expanded: 1, locale: "fr", contextLimit: "abc" })).toEqual(
       DEFAULT_SETTINGS,
     )
+    expect(initialSettings({ nativeCompactionPromptDismissed: true }).nativeCompactionPromptDismissed).toBe(true)
+    expect(initialSettings({ nativeCompactionPromptDismissed: "yes" }).nativeCompactionPromptDismissed).toBe(false)
     expect(normalizeSettings({ enabled: true, locale: "zh" }).contextLimit).toBe("auto")
     expect(normalizeSettings({ summaryBlockPercent: 200 }).summaryBlockPercent).toBe(10)
     expect(initialSettings({ summaryFormat: "babel" }).summaryFormat).toBe("babel")

@@ -192,7 +192,9 @@ export function estimateCategories(input: {
           if (value.trimStart().startsWith(CHECKPOINT_PREFIX)) {
             const checkpoint = countCheckpoint(value)
             summaries += checkpoint.summary
-            recent += checkpoint.recent
+            // 只保留最后一个 checkpoint 的 recent：旧 checkpoint 的 recent 不应再累加，
+            // 否则同一段最近对话会被算多次。
+            recent = checkpoint.recent
           } else text += countText(value)
           break
         }

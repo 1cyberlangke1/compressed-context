@@ -31,6 +31,13 @@ const CONTENT =
   "repeated status checks. If space is tight, keep objective and constraints first, then decisions and reasons, then " +
   "exact technical facts, then conclusions, then lessons. Write short factual entries, not prose."
 
+/** 输入：无；输出：compress 工具输出；预期：成功带 block，失败带 error，任何情况都不返回空壳。 */
+const CompressOutput = Schema.Struct({
+  block: Schema.optional(Schema.String),
+  status: Schema.String,
+  error: Schema.optional(Schema.String),
+})
+
 /**
  * 输入：摘要格式。
  * 输出：该格式的字段使用规则。
@@ -64,7 +71,7 @@ export function descriptionFor(format: SummaryFormat): string {
 
 function failure(message: string) {
   return {
-    output: { block: "", status: "error" },
+    output: { status: "error", error: message },
     content: `ERROR: ${message}`,
     metadata: { error: true },
   }
@@ -93,7 +100,7 @@ export async function registerCompressTool(
       name: "compress",
       description: descriptionFor(format),
       input: summaryInputFor(format),
-      output: Schema.Struct({ block: Schema.String, status: Schema.String }),
+      output: CompressOutput,
       execute: async (input, toolCtx) => {
         const sessionID = toolCtx.sessionID
         if (isCompactionInFlight(sessionID)) return failure("compression already in progress")

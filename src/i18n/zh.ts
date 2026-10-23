@@ -28,6 +28,15 @@ export const zh: Messages = {
     description: "打开插件设置",
     group: "插件",
   },
+  nativeCompaction: {
+    title: "OpenCode 原生自动压缩仍开启",
+    description: (path) => `建议改由插件接管压缩。将修改：${path}`,
+    disable: "关闭原生自动压缩",
+    keep: "保持开启",
+    dismiss: "不再提醒",
+    disabled: "已关闭 OpenCode 原生自动压缩",
+    writeFailed: (error) => `写入配置失败：${error}`,
+  },
   settings: {
     title: "压缩上下文插件设置",
     show: "显示面板",
