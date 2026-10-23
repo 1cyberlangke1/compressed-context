@@ -1,8 +1,8 @@
 import { Plugin } from "@opencode/plugin/tui"
 
 import { initialSettings, normalizeSettings, type Settings } from "../shared/settings.ts"
-import { maybePromptNativeCompaction } from "./native-compaction.ts"
-import { Panel } from "./panel/index.tsx"
+import { maybePromptNativeCompaction } from "./native-compaction-dialog.ts"
+import { CachePanel, Panel, SummaryPanel } from "./panel/panels.tsx"
 import { SettingsCommand } from "./settings.tsx"
 import type { UpdateSettings } from "./types.ts"
 
@@ -87,10 +87,34 @@ export default Plugin.define({
     })
     migrate(settings, updateSettings)
 
-    const disposePanel = context.ui.slot({
+    const disposeContext = context.ui.slot({
       append: "sidebar.content",
       render: (input) => (
         <Panel
+          context={context}
+          sessionID={input.sessionID}
+          settings={settings}
+          updateSettings={updateSettings}
+        />
+      ),
+    })
+
+    const disposeCache = context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => (
+        <CachePanel
+          context={context}
+          sessionID={input.sessionID}
+          settings={settings}
+          updateSettings={updateSettings}
+        />
+      ),
+    })
+
+    const disposeSummaries = context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => (
+        <SummaryPanel
           context={context}
           sessionID={input.sessionID}
           settings={settings}
@@ -110,7 +134,9 @@ export default Plugin.define({
     }, 0)
 
     return () => {
-      disposePanel()
+      disposeContext()
+      disposeCache()
+      disposeSummaries()
       disposeCommand()
     }
   },

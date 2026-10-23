@@ -7,6 +7,9 @@ import { contextRpc } from "../../shared/rpc.ts"
 import type { Settings } from "../../shared/settings.ts"
 import { parseStats, STATS_KEY, TERMINAL_KEY, type ContextStats } from "../../shared/stats.ts"
 
+/** 面板分区各自需要的数据范围；独立 slot 时只拉自己那份。 */
+export type PanelDataScope = "all" | "context" | "cache" | "summaries"
+
 /** Panel 需要的服务端数据；全部是响应式 accessor。 */
 export interface PanelData {
   readonly stats: Accessor<ContextStats | undefined>
@@ -24,7 +27,12 @@ export function usePanelData(input: {
   readonly context: Context
   readonly sessionID: string
   readonly settings: Accessor<Settings>
+  readonly scope?: PanelDataScope
 }): PanelData {
+  const scope = input.scope ?? "all"
+  const needStats = scope === "all" || scope === "context"
+  const needCache = scope === "all" || scope === "cache"
+  const needBlocks = scope === "all" || scope === "summaries"
   const [stats, setStats] = createSignal<ContextStats>()
   const [terminal, setTerminal] = createSignal<string>()
   const [cache, setCache] = createSignal<readonly CacheSample[]>([])
@@ -33,6 +41,7 @@ export function usePanelData(input: {
 
   /** 输入：无；输出：无；预期：从服务端拉取该会话持久化的缓存历史。 */
   const refreshCache = async (): Promise<void> => {
+    if (!needCache) return
     try {
       const got = await rpc().cacheHistoryGet({ sessionID: input.sessionID })
       setCache(got.samples)
@@ -43,7 +52,7 @@ export function usePanelData(input: {
 
   /** 输入：无；输出：无；预期：从服务端拉取 active 摘要链。 */
   const refreshBlocks = async (): Promise<void> => {
-    if (!input.settings().showSummaries) return
+    if (!needBlocks || !input.settings().showSummaries) return
     try {
       const got = await rpc().blocksGet({ sessionID: input.sessionID })
       setBlocks(got.blocks)
@@ -54,6 +63,7 @@ export function usePanelData(input: {
 
   /** 输入：无；输出：无；预期：从服务端重新拉取 session metadata 里的统计。 */
   const refresh = async (): Promise<void> => {
+    if (!needStats) return
     try {
       const info = await input.context.client.session.get({ sessionID: input.sessionID })
       setStats(parseStats(info.metadata?.[STATS_KEY]))

@@ -1,10 +1,9 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { dirname, join } from "node:path"
-import { applyEdits, modify, parse, printParseErrorCode, type ParseError } from "jsonc-parser"
+import { join } from "node:path"
 
 import { resolveMessages } from "../i18n/index.ts"
+import { contextRpc } from "../shared/rpc.ts"
 import { localeArgument, type Settings } from "../shared/settings.ts"
 import type { UpdateSettings } from "./types.ts"
 
@@ -13,24 +12,19 @@ export type NativeCompactionState =
   | { readonly status: "disabled" }
   | { readonly status: "enabled"; readonly path: string }
 
-/** 写入结果；失败时 error 是可直接展示的原因。 */
-export type NativeCompactionWriteResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly error: string }
-
 /** 输入：无；输出：用户全局 OpenCode 配置路径。 */
 function globalConfigPath(): string {
   return join(homedir(), ".config", "opencode", "opencode.json")
 }
 
-/** 输入：未知异常；输出：人类可读错误。 */
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-/** 输入：未知异常；输出：是否是 ENOENT。 */
-function isNotFound(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
+/** 输入：绝对路径；输出：把用户目录缩成 `~` 的展示路径。 */
+function displayPath(path: string): string {
+  const slash = (value: string): string => value.replaceAll("\\", "/")
+  const home = slash(homedir())
+  const normalized = slash(path)
+  if (normalized === home) return "~"
+  if (normalized.startsWith(`${home}/`)) return `~${normalized.slice(home.length)}`
+  return normalized
 }
 
 /**
@@ -60,44 +54,12 @@ export async function detectNativeCompaction(context: Context): Promise<NativeCo
   return { status: "enabled", path: target ?? lastPath ?? globalConfigPath() }
 }
 
-/**
- * 输入：要修改的配置文件路径。
- * 输出：成功或解析/写入错误。
- * 预期：用 jsonc-parser 保留注释和格式；不做备份；解析失败绝不写文件。
- */
-export async function disableNativeCompaction(path: string): Promise<NativeCompactionWriteResult> {
-  let text: string
-  try {
-    text = await readFile(path, "utf8")
-  } catch (error) {
-    if (!isNotFound(error)) return { ok: false, error: errorMessage(error) }
-    text = "{}"
-  }
-
-  const errors: ParseError[] = []
-  parse(text, errors, { allowTrailingComma: true })
-  const [first] = errors
-  if (first !== undefined) {
-    return {
-      ok: false,
-      error: `JSONC parse failed: ${printParseErrorCode(first.error)} at ${first.offset.toString()}`,
-    }
-  }
-
-  const next = applyEdits(
-    text,
-    modify(text, ["compaction", "auto"], false, {
-      formattingOptions: { insertSpaces: true, tabSize: 2 },
-    }),
-  )
-
-  try {
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, next, "utf8")
-    return { ok: true }
-  } catch (error) {
-    return { ok: false, error: errorMessage(error) }
-  }
+/** 输入：TUI 上下文、路径；输出：服务端写配置结果。预期：jsonc-parser 不进入 TUI 插件依赖图。 */
+async function disableNativeCompaction(
+  context: Context,
+  path: string,
+): Promise<{ readonly ok: boolean; readonly error?: string }> {
+  return contextRpc(context.client).nativeCompactionDisable({ path })
 }
 
 /**
@@ -122,12 +84,11 @@ export async function maybePromptNativeCompaction(
 
   const copy = resolveMessages(localeArgument(settings.locale)).nativeCompaction
   const picked = await context.ui.dialog.select<"disable" | "keep" | "dismiss">({
-    title: copy.title,
+    title: `${copy.title}\n${displayPath(state.path)}`,
     options: [
       {
         title: copy.disable,
         value: "disable",
-        description: copy.description(state.path),
       },
       { title: copy.keep, value: "keep" },
       { title: copy.dismiss, value: "dismiss" },
@@ -135,9 +96,9 @@ export async function maybePromptNativeCompaction(
   })
 
   if (picked === "disable") {
-    const result = await disableNativeCompaction(state.path)
+    const result = await disableNativeCompaction(context, state.path)
     if (!result.ok) {
-      context.ui.toast.show({ message: copy.writeFailed(result.error), variant: "error" })
+      context.ui.toast.show({ message: copy.writeFailed(result.error ?? "unknown error"), variant: "error" })
       return
     }
     context.ui.toast.show({ message: copy.disabled, variant: "success" })

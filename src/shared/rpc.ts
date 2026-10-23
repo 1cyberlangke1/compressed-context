@@ -56,6 +56,24 @@ const OkJson = {
   additionalProperties: false,
 } as const
 
+/** 原生压缩写配置：TUI 只传路径，jsonc-parser 留在服务端。 */
+const NativeCompactionDisableInputJson = {
+  type: "object",
+  properties: { path: { type: "string" } },
+  required: ["path"],
+  additionalProperties: false,
+} as const
+
+const NativeCompactionDisableOutputJson = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" },
+    error: { type: "string" },
+  },
+  required: ["ok"],
+  additionalProperties: false,
+} as const
+
 /** 需要明确指定会话的只读查询。 */
 const SessionInputJson = {
   type: "object",
@@ -119,6 +137,10 @@ export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
     settingsSet: { input: SettingsInputJson, output: OkJson },
     blocksGet: { input: SessionInputJson, output: BlocksOutputJson },
     cacheHistoryGet: { input: SessionInputJson, output: CacheHistoryOutputJson },
+    nativeCompactionDisable: {
+      input: NativeCompactionDisableInputJson,
+      output: NativeCompactionDisableOutputJson,
+    },
   },
   events: {},
 })
@@ -136,6 +158,9 @@ export interface ContextRpcClient {
   cacheHistoryGet(input: {
     readonly sessionID: string
   }): Promise<{ readonly samples: readonly CacheSample[] }>
+  nativeCompactionDisable(input: {
+    readonly path: string
+  }): Promise<{ readonly ok: boolean; readonly error?: string }>
 }
 
 /** 输入：带 rpc 方法的 TUI client；输出：类型化 RPC 客户端。 */

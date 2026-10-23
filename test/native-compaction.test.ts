@@ -5,11 +5,8 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
-import {
-  detectNativeCompaction,
-  disableNativeCompaction,
-  maybePromptNativeCompaction,
-} from "../src/tui/native-compaction.ts"
+import { disableNativeCompaction } from "../src/compression/native-compaction.ts"
+import { detectNativeCompaction, maybePromptNativeCompaction } from "../src/tui/native-compaction-dialog.ts"
 
 /** 输入：无；输出：临时目录路径；预期：测试结束由调用方删除。 */
 async function tempDirectory(): Promise<string> {
@@ -39,6 +36,9 @@ function promptContext(
       config: {
         get: () => Promise.resolve(entries),
       },
+      rpc: () => ({
+        nativeCompactionDisable: (input: { readonly path: string }) => disableNativeCompaction(input.path),
+      }),
     },
     location: undefined,
     ui: {

@@ -156,6 +156,11 @@ try {
     throw new Error("native compaction prompt did not appear")
   }
 
+  assert.ok(
+    plain().includes("~/.config/opencode/opencode.json"),
+    "config path must be visible in the dialog title",
+  )
+
   // 第一个选项就是“关闭原生自动压缩”，回车选中。
   proc.terminal?.write("\r")
   const configPath = join(root, ".config", "opencode", "opencode.json")

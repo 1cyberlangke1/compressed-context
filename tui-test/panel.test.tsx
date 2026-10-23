@@ -7,7 +7,7 @@ import type { JSX } from "solid-js"
 import type { SummaryBlock } from "../src/shared/blocks.ts"
 import type { CacheSample } from "../src/shared/cache.ts"
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
-import { Panel } from "../src/tui/panel/index.tsx"
+import { CachePanel, Panel, SummaryPanel } from "../src/tui/panel/panels.tsx"
 
 /** 输入：无；输出：Panel 需要的最小主题。 */
 function fakeTheme(): Context["theme"] {
@@ -150,13 +150,28 @@ function Fixture(props: { readonly initial?: Partial<Settings>; readonly used?: 
       return draft
     })
   }
+  const context = fakeContext(props.used)
   return (
-    <Panel
-      context={fakeContext(props.used)}
-      sessionID="ses_a"
-      settings={settings()}
-      updateSettings={updateSettings}
-    />
+    <box gap={1}>
+      <Panel
+        context={context}
+        sessionID="ses_a"
+        settings={settings()}
+        updateSettings={updateSettings}
+      />
+      <CachePanel
+        context={context}
+        sessionID="ses_a"
+        settings={settings()}
+        updateSettings={updateSettings}
+      />
+      <SummaryPanel
+        context={context}
+        sessionID="ses_a"
+        settings={settings()}
+        updateSettings={updateSettings}
+      />
+    </box>
   )
 }
 
@@ -175,6 +190,8 @@ describe("Panel", () => {
     try {
       const frame = await app.waitForFrame((value) => value.includes("缓存记录"))
       expect(frame).toContain("上下文构成")
+      expect(frame).toMatch(/\n\s*\n[^\n]*缓存记录/)
+      expect(frame).toMatch(/\n\s*\n[^\n]*摘要块/)
       expect(frame).toContain("缓存记录 (100.00%)")
       expect(frame).toContain("摘要块 (2)")
       expect(frame).toContain("折线图")

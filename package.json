@@ -23,7 +23,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./tui": "./src/tui/index.tsx"
+    "./tui": "./src/tui/main.tsx"
   },
   "files": [
     "src"

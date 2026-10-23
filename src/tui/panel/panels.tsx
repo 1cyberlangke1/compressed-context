@@ -8,7 +8,7 @@ import { scaleCategories } from "../../shared/stats.ts"
 import { mix, toHex, toRgb, type Rgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
 import { CacheSection } from "./cache.tsx"
-import { usePanelData } from "./data.ts"
+import { usePanelData } from "./data-scoped.ts"
 import { SummarySection } from "./summaries.tsx"
 
 /**
@@ -36,11 +36,7 @@ function percentWidth(value: number): `${number}%` {
   return `${clamped.toString()}%` as `${number}%`
 }
 
-/**
- * 输入：TUI 上下文 + sessionID + 设置。
- * 输出：侧栏里的上下文分类面板（可折叠），外加缓存命中与摘要块。
- * 预期：分类条总量交给内置 Context 区块；缓存历史由服务端持久化，TUI 只读。
- */
+/** 侧栏上下文分区；缓存与摘要各自返回独立 slot 组件。 */
 export function Panel(props: {
   readonly context: Context
   readonly sessionID: string
@@ -53,6 +49,7 @@ export function Panel(props: {
     context: props.context,
     sessionID: props.sessionID,
     settings: () => props.settings,
+    scope: "context",
   })
 
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
@@ -154,23 +151,64 @@ export function Panel(props: {
             </For>
           </box>
         </Show>
-
-        <CacheSection
-          theme={theme}
-          copy={copy()}
-          settings={props.settings}
-          updateSettings={props.updateSettings}
-          samples={data.cache()}
-        />
-        <SummarySection
-          context={props.context}
-          theme={theme}
-          copy={copy()}
-          settings={props.settings}
-          updateSettings={props.updateSettings}
-          blocks={data.blocks()}
-        />
       </box>
+    </Show>
+  )
+}
+
+/** 输入：TUI 上下文 + 设置；输出：缓存记录分区。预期：独立 slot，空行交给宿主 gap。 */
+export function CachePanel(props: {
+  readonly context: Context
+  readonly sessionID: string
+  readonly settings: Settings
+  readonly updateSettings: UpdateSettings
+}) {
+  const theme = props.context.theme
+  const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
+  const data = usePanelData({
+    context: props.context,
+    sessionID: props.sessionID,
+    settings: () => props.settings,
+    scope: "cache",
+  })
+  return (
+    <Show when={props.settings.enabled}>
+      <CacheSection
+        theme={theme}
+        copy={copy()}
+        settings={props.settings}
+        updateSettings={props.updateSettings}
+        samples={data.cache()}
+      />
+    </Show>
+  )
+}
+
+/** 输入：TUI 上下文 + 设置；输出：摘要块分区。预期：独立 slot，空行交给宿主 gap。 */
+export function SummaryPanel(props: {
+  readonly context: Context
+  readonly sessionID: string
+  readonly settings: Settings
+  readonly updateSettings: UpdateSettings
+}) {
+  const theme = props.context.theme
+  const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
+  const data = usePanelData({
+    context: props.context,
+    sessionID: props.sessionID,
+    settings: () => props.settings,
+    scope: "summaries",
+  })
+  return (
+    <Show when={props.settings.enabled}>
+      <SummarySection
+        context={props.context}
+        theme={theme}
+        copy={copy()}
+        settings={props.settings}
+        updateSettings={props.updateSettings}
+        blocks={data.blocks()}
+      />
     </Show>
   )
 }

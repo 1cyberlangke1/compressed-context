@@ -26,7 +26,6 @@ export interface Messages {
   }
   readonly nativeCompaction: {
     readonly title: string
-    readonly description: (path: string) => string
     readonly disable: string
     readonly keep: string
     readonly dismiss: string

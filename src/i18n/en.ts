@@ -30,7 +30,6 @@ export const en: Messages = {
   },
   nativeCompaction: {
     title: "OpenCode native auto-compaction is still on",
-    description: (path) => `The plugin should own compression. It will modify: ${path}`,
     disable: "Turn off native auto-compaction",
     keep: "Keep it on",
     dismiss: "Don't ask again",
