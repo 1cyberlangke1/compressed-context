@@ -166,6 +166,10 @@ export async function maybeAutoCompressStep(input: {
   }
 }): Promise<void> {
   try {
+    // 插件按 location 各加载一份；只让 session 所属 location 处理，
+    // 会话查不到（别的实例的会话）也拒绝，避免同一事件被多实例重复入队压缩。
+    const session = await input.ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
+    if (session?.location.directory !== input.ctx.location.directory) return
     if (isCompactionInFlight(input.sessionID)) return
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (blockedByState(state)) return

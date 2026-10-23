@@ -160,6 +160,8 @@ function fakeCtx(
     session: {
       compact,
       generate: (input: { sessionID: string; prompt: string }) => text({ prompt: input.prompt }),
+      // 默认会话属于本实例目录（守卫放行）；个别用例可覆盖成别的目录或 undefined。
+      get: () => Promise.resolve({ location: { directory: configDirectories.get(storage) ?? tmpdir() } }),
       ...measured,
     },
   } as unknown as Plugin.Context
@@ -771,6 +773,48 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
+  it("会话属于别的 location 时 step.ended 不入队", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    // 会话在其他目录：本实例必须拒绝，否则跨实例事件重复入队压缩。
+    ctx.session.get = () =>
+      Promise.resolve({ location: { directory: "/other" } }) as unknown as ReturnType<typeof ctx.session.get>
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 90_000, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("会话查不到（undefined）时 step.ended 不入队", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    // 会话查不到说明不是本实例目录的会话；放行 undefined 会导致 home 实例重复入队。
+    ctx.session.get = () => Promise.resolve(undefined) as unknown as ReturnType<typeof ctx.session.get>
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 90_000, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
   it("压缩成功后没有新 user 消息时 step.ended 不再入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
