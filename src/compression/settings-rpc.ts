@@ -11,6 +11,7 @@ import {
   RESOLVED_WINDOW_KEY,
   loadServerSettings,
   parseServerSettings,
+  resolvedWindowKey,
   saveServerSettings,
   type ServerSettings,
   windowKey,
@@ -54,7 +55,11 @@ export async function registerSettingsRpc(
             if (typeof stored === "number" && stored > 0) resolvedWindow = stored
           }
         } catch {
-          // 会话不存在或模型未知：回退到最近一次解析值
+          // 会话不存在或模型未知：回退到该会话/全局最近一次解析值
+        }
+        if (resolvedWindow === undefined) {
+          const scoped = await ctx.storage.get(resolvedWindowKey(sessionID))
+          if (typeof scoped === "number" && scoped > 0) resolvedWindow = scoped
         }
       }
       if (resolvedWindow === undefined) {

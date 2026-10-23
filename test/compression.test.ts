@@ -6,7 +6,7 @@ import { markCompactionInFlight, maybeAutoCompress, maybeAutoCompressStep } from
 import { distillOnce, isTerminal, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
 import { handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
-import { EFFECTIVE_WINDOW_KEY, parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
+import { EFFECTIVE_WINDOW_KEY, effectiveWindowKey, parseServerSettings, SETTINGS_KEY } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
 import { isBabelSummary, isMarkdownSummary, type Summary, type SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
@@ -792,6 +792,32 @@ describe("自动压缩", () => {
       tokens: { input: 1, cache: { read: 500_000, write: 0 } },
     })
     expect(compacts).toBe(0)
+  })
+
+  it("多会话各自使用自己的生效窗口，不串线", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { contextLimit: 100_000, triggerPercent: 80 },
+      // 全局值模拟另一个会话刚写入的 100k；ses_a 自己是 50k。
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [effectiveWindowKey("ses_a")]: 50_000,
+      [stateKey("ses_a")]: { blocks: [], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        // 抛错终止 waitForCompaction，测试只关心是否越过阈值。
+        return Promise.reject(new Error("stop after enqueue"))
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_a",
+      tokens: { input: 1, cache: { read: 45_000, write: 0 } },
+    })
+    expect(compacts).toBe(1)
   })
 
   it("窗口小到放不下最小摘要时 step.ended 不入队", async () => {

@@ -43,6 +43,16 @@ export const RESOLVED_WINDOW_KEY = "window:last"
 /** 最近一次解析到的「生效窗口」＝ min(settings.contextLimit, 原生窗口)；自动压缩用它折算阈值。 */
 export const EFFECTIVE_WINDOW_KEY = "window:effective"
 
+/** 输入：会话 ID；输出：该会话最近一次解析到的原生窗口 key。 */
+export function resolvedWindowKey(sessionID: string): string {
+  return `window:last:${sessionID}`
+}
+
+/** 输入：会话 ID；输出：该会话生效窗口 key。多会话并行时不能共用全局值。 */
+export function effectiveWindowKey(sessionID: string): string {
+  return `window:effective:${sessionID}`
+}
+
 /** 输入：模型标识；输出：该模型原生窗口在 storage 里的 key。 */
 export function windowKey(providerID: string, modelID: string): string {
   return `window:${providerID}/${modelID}`

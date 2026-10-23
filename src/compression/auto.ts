@@ -5,7 +5,14 @@ import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/setti
 import { estimateCategories, totalCategories } from "../shared/tokens.ts"
 import { isCompactionInFlight } from "./inflight.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
-import { EFFECTIVE_WINDOW_KEY, RESOLVED_WINDOW_KEY, windowKey, loadServerSettings } from "./settings.ts"
+import {
+  EFFECTIVE_WINDOW_KEY,
+  RESOLVED_WINDOW_KEY,
+  effectiveWindowKey,
+  loadServerSettings,
+  resolvedWindowKey,
+  windowKey,
+} from "./settings.ts"
 import { MAX_COMPRESSION_ATTEMPTS, loadState, type State } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import type { ModelRefLike } from "./summarize.ts"
@@ -67,7 +74,13 @@ export async function waitForCompaction(
  * 预期：`resolveLimit` 在缓存里保存的是原生窗口，settings 里的数字上限
  *       `contextLimit=100000` 只有在生效窗口里才体现；缺失时 undefined。
  */
-async function effectiveLimit(storage: Plugin.Context["storage"]): Promise<number | undefined> {
+async function effectiveLimit(
+  storage: Plugin.Context["storage"],
+  sessionID: string,
+): Promise<number | undefined> {
+  const scoped = await storage.get(effectiveWindowKey(sessionID))
+  if (typeof scoped === "number" && scoped > 0) return scoped
+  // 兼容旧数据：没有会话级值时退回旧的全局值。
   const stored = await storage.get(EFFECTIVE_WINDOW_KEY)
   return typeof stored === "number" && stored > 0 ? stored : undefined
 }
@@ -134,7 +147,7 @@ export async function maybeAutoCompressStep(input: {
     if (!settings.autoCompress) return
     // 事件里没有 model 引用；用生效窗口缓存（min(settings, native)）折算阈值。
     // 原生窗口单独是 1M 时阈值会变成 800k，压缩永远不会触发。
-    const effective = await effectiveLimit(input.ctx.storage)
+    const effective = await effectiveLimit(input.ctx.storage, input.sessionID)
     if (effective === undefined || effective <= 0) return
     if (effective - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
 
@@ -185,10 +198,12 @@ async function rememberWindow(
   providerID: string,
   modelID: string,
   limit: number,
+  sessionID?: string,
 ): Promise<void> {
   try {
     await ctx.storage.set(windowKey(providerID, modelID), limit)
     await ctx.storage.set(RESOLVED_WINDOW_KEY, limit)
+    if (sessionID !== undefined) await ctx.storage.set(resolvedWindowKey(sessionID), limit)
   } catch {
     // best effort：写不进去只影响 TUI 显示，不影响压缩
   }
@@ -202,6 +217,7 @@ export async function resolveLimit(
   ctx: Plugin.Context,
   model: ModelRefLike,
   setting: "auto" | number,
+  sessionID?: string,
 ): Promise<number | undefined> {
   const key = `${model.providerID}/${model.id}`
   const cached = limitCache.get(key)
@@ -214,7 +230,7 @@ export async function resolveLimit(
       if (typeof limit === "number" && limit > 0) {
         native = limit
         limitCache.set(key, { at: Date.now(), limit })
-        await rememberWindow(ctx, model.providerID, model.id, limit)
+        await rememberWindow(ctx, model.providerID, model.id, limit, sessionID)
       }
     } catch {
       // 原生窗口未知：数字设置按原值使用，auto 则关闭自动压缩
@@ -224,6 +240,7 @@ export async function resolveLimit(
   if (typeof effective === "number" && effective > 0) {
     try {
       await ctx.storage.set(EFFECTIVE_WINDOW_KEY, effective)
+      if (sessionID !== undefined) await ctx.storage.set(effectiveWindowKey(sessionID), effective)
     } catch {
       // best effort：写不进去只影响 step.ended 兜底
     }
@@ -288,7 +305,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
 
     const settings = await loadServerSettings(input.ctx.storage)
     if (!settings.autoCompress) return
-    const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit)
+    const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)
     if (limit === undefined || limit <= 0) return
     // 窗口小到连最小摘要都放不下：压缩必然失败，别反复入队空压缩。
     if (limit - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return

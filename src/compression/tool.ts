@@ -6,7 +6,7 @@ import { createT1Block } from "./block.ts"
 import { isCompactionInFlight } from "./inflight.ts"
 import { toSummary } from "./normalize.ts"
 import { summaryInputFor } from "./schema.ts"
-import { RESOLVED_WINDOW_KEY, loadServerSettings, windowKey } from "./settings.ts"
+import { RESOLVED_WINDOW_KEY, loadServerSettings, resolvedWindowKey, windowKey } from "./settings.ts"
 import { eligibleMessages, messageRange, type MessageLike } from "./select.ts"
 import { sessionMessagesToMessageLikes } from "./session-message.ts"
 import { summaryShape } from "./shape.ts"
@@ -138,6 +138,10 @@ export async function registerCompressTool(
           if (typeof stored === "number" && stored > 0) windowTokens = stored
         } catch {
           // 会话或模型未知：回退到最近一次解析值
+        }
+        if (windowTokens === undefined) {
+          const scoped = await ctx.storage.get(resolvedWindowKey(sessionID))
+          if (typeof scoped === "number" && scoped > 0) windowTokens = scoped
         }
         if (windowTokens === undefined) {
           const resolved = await ctx.storage.get(RESOLVED_WINDOW_KEY)
