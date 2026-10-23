@@ -98,6 +98,7 @@ export async function registerCompressTool(
   const registration = await ctx.tool.transform((tools) => {
     tools.add({
       name: "compress",
+      options: { codemode: false },
       description: descriptionFor(format),
       input: summaryInputFor(format),
       output: CompressOutput,
