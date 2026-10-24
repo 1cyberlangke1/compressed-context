@@ -463,21 +463,21 @@ try {
     await Bun.sleep(1_100)
   }
   await writeSettingsFile({
-    contextLimit: 50_000,
+    models: { small: { contextLimit: 50_000 }, fake: { contextLimit: 50_000 } },
     triggerPercent: 60,
     summaryBlockPercent: 20,
     summaryTotalPercent: 10,
   })
   console.log("seeded plugin settings")
 
-  /**
-   * 输入：全部摘要百分比 + 窗口 + 阈值 + 额外字段。
+  /** 输入：全部摘要百分比 + 窗口 + 阈值 + 额外字段。
    * 输出：无。
    * 预期：只改隔离配置目录的插件 JSONC；单条默认 20%，可用 extra.summaryBlockPercent 覆盖。
+   *       全局 contextLimit 已移除：窗口覆盖走 models[模型]。
    */
   const setSettings = async (totalPercent, contextLimit = 50_000, triggerPercent = 60, extra = {}) => {
     await writeSettingsFile({
-      contextLimit,
+      models: { small: { contextLimit }, fake: { contextLimit } },
       triggerPercent,
       summaryBlockPercent: 20,
       summaryTotalPercent: totalPercent,
@@ -586,13 +586,20 @@ try {
   assert.ok(sessionID, "session id missing")
   console.log("session:", sessionID)
 
-  // 小窗口模型（20k）下，真实参数 60% 的阈值是 12k，3 条 6k 字符消息就能压出多个 T1；
-  // 之后发短消息让 older 收敛，T2 自然执行。没有预置 state，也没有改插件参数。
+  // 小窗口模型（50k 覆盖）下，60% 阈值 = 30k token。假 provider 必须报真实 usage：
+  // 没有usage 时插件回退 estimateTotal，而 compact 后历史被替换、估算骤降，
+  // 永远到不了阈值，第二个 T1 压不出来，合并也就永远没有候选。
+  usagePromptTokens = 40_000
   await setSettings(10, 50_000, 60)
   for (let index = 0; index < 8; index += 1) {
     const state = stateFor(sessionID)
     if ((state?.blocks ?? []).some((block) => block.tier === 2)) break
     await promptSession(sessionID, index < 4 ? longText : "continue")
+  }
+  // phase 排好后需要新请求驱动合并：轮询不产生请求，持续发短消息直到 T2 出现。
+  for (let index = 0; index < 10; index += 1) {
+    if ((stateFor(sessionID)?.blocks ?? []).some((block) => block.tier === 2)) break
+    await promptSession(sessionID, "continue")
   }
   await waitForState(
     sessionID,
@@ -790,9 +797,22 @@ try {
     await promptSession(t2Retry, index < 5 ? longText : "continue")
   }
   let t2RetryState = stateFor(t2Retry)
-  for (let index = 0; index < 40 && !(t2RetryState?.blocks ?? []).some((item) => item.tier === 2); index += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 500))
+  // 纯轮询不产生请求：phase 排好后要靠新请求驱动合并，持续发短消息直到 T2 出现。
+  for (let index = 0; index < 10 && !(t2RetryState?.blocks ?? []).some((item) => item.tier === 2); index += 1) {
+    await promptSession(t2Retry, "continue")
     t2RetryState = stateFor(t2Retry)
+  }
+  if (!(t2RetryState?.blocks ?? []).some((item) => item.tier === 2)) {
+    console.error(
+      "t2 retry state:",
+      JSON.stringify({
+        blocks: t2RetryState?.blocks?.map((block) => `${block.id}:T${block.tier}`),
+        pending: t2RetryState?.pending?.id,
+        phase: t2RetryState?.phase,
+        attempts: t2RetryState?.attempts,
+        lastError: t2RetryState?.lastError,
+      }),
+    )
   }
   assert.ok(
     (t2RetryState?.blocks ?? []).some((item) => item.tier === 2),
@@ -957,7 +977,7 @@ try {
   assert.equal(stateFor(noAuto)?.blocks?.length, 1, "manual compact must still work")
   console.log("case passed: autoCompress off keeps manual compaction")
 
-  // case: 终止状态拒绝新输入，并带回终止原因
+  // case: 旧版本的 terminal 字段被忽略，不再拒绝新输入（终止机制已整套移除）
   mode = "normal"
   await setSettings(50)
   const terminalSession = await newSession("e2e-terminal")
@@ -967,15 +987,10 @@ try {
     attempts: 0,
     terminal: "compression cannot reduce this context further: start a new session or use native compaction",
   })
-  let rejected = false
-  try {
-    await api("POST", `/api/session/${terminalSession}/prompt`, { text: "hello" })
-  } catch (error) {
-    rejected = true
-    console.log("terminal prompt rejected:", String(error).slice(0, 200))
-  }
-  assert.equal(rejected, true, "terminal session must reject new input")
-  console.log("case passed: terminal session rejects input")
+  // terminal 不再被读取：发消息应该正常走完，而不是被插件抛错拒绝。
+  await api("POST", `/api/session/${terminalSession}/prompt`, { text: "hello" })
+  await waitSession(terminalSession)
+  console.log("case passed: legacy terminal field ignored, input not rejected")
 
   const child = await newSession("e2e-iso-child", sessionA)
   usagePromptTokens = 90_000
@@ -1045,37 +1060,52 @@ try {
   assert.equal(t2Blocks[0]?.sourceBlockIds?.length, 2, "T2 block merges two T1 sources")
   console.log("case passed: T2 merge runs on the next model request")
 
-  // 第一次 T3：T3+T1 → T3；仍超预算，phase 继续 t3。
-  await promptSession(t3Session, "continue")
+  // 第一次 T3：需要两个 T2（b5=b1+b2，b6=b3+b4）先存在，再同层合并 b5+b6 → T3。
+  // 期间链一直超预算，phase 保持 t3；每步都要发新请求驱动。
+  for (let index = 0; index < 12; index += 1) {
+    const current = stateFor(t3Session)
+    const hasT3 = (current?.blocks ?? []).some((block) => block.tier === 3)
+    const t2Count = (current?.blocks ?? []).filter((block) => block.tier === 2).length
+    if (hasT3 && t2Count >= 2) break
+    await promptSession(t3Session, "continue")
+  }
   t3State = await waitForState(
     t3Session,
-    (state) => state?.phase === "t3" && (state?.blocks ?? []).some((block) => block.tier === 3),
+    (state) => (state?.blocks ?? []).filter((block) => block.tier === 3).length >= 1,
     "first T3 merge",
   )
-  assert.equal(t3State.blocks.length, 6, "first T3 merges exactly one pair")
   const firstT3 = t3State.blocks.filter((block) => block.tier === 3)
   assert.equal(firstT3.length, 1, "first T3 produces one merged block")
-  assert.equal(firstT3[0]?.sourceBlockIds?.length, 2, "T3 block merges the T2 block with a T1 block")
-  console.log("case passed: first T3 merge keeps phase=t3 while over budget")
+  assert.equal(firstT3[0]?.sourceBlockIds?.length, 2, "T3 block merges two T2 blocks")
+  console.log("case passed: T2+T2 merges into first T3")
 
-  // 第二次 T3：T3+T1 → T3；链进预算，phase 消失。
-  await promptSession(t3Session, "continue")
+  // 继续同层合并直到 active 链收敛到单个 T3；预算内后 phase 消失。
+  for (let index = 0; index < 12; index += 1) {
+    const current = stateFor(t3Session)
+    const consumed = new Set((current?.blocks ?? []).flatMap((block) => block.sourceBlockIds ?? []))
+    const activeCount = (current?.blocks ?? []).filter((block) => !consumed.has(block.id)).length
+    if (activeCount <= 1 && current?.phase === undefined) break
+    await promptSession(t3Session, "continue")
+  }
   t3State = await waitForState(
     t3Session,
-    (state) => state?.phase === undefined && (state?.blocks ?? []).length === 7,
-    "second T3 merge",
+    (state) => {
+      const consumed = new Set((state?.blocks ?? []).flatMap((block) => block.sourceBlockIds ?? []))
+      const active = (state?.blocks ?? []).filter((block) => !consumed.has(block.id))
+      return active.length === 1 && active[0]?.tier === 3 && state?.phase === undefined
+    },
+    "T3 chain convergence",
   )
   const t3Blocks = t3State.blocks.filter((block) => block.tier === 3)
   assert.equal(t3State.pending, undefined, "T3 pending must be committed")
-  assert.equal(t3Blocks.length, 2, "two T3 merges produce two merged blocks")
+  assert.ok(t3Blocks.length >= 1, "at least one T3 merged block exists")
   const consumed = new Set(t3State.blocks.flatMap((block) => block.sourceBlockIds ?? []))
   const activeTiers = t3State.blocks
     .filter((block) => !consumed.has(block.id))
     .sort((left, right) => left.order - right.order)
     .map((block) => block.tier)
   assert.deepEqual(activeTiers, [3], "active chain collapses to one T3")
-  assert.equal(t3State.terminal, undefined, "under budget must not be terminal")
-  console.log("case passed: T3 keeps merging until the chain fits")
+  console.log("case passed: same-tier merges converge the chain")
 
   // case: Babel T1→T2→T3；验证首行 T/G、c=N 候选和层级合并都能落盘。
   mode = "babel-t3"
@@ -1114,18 +1144,37 @@ try {
   assert.equal(babelT2[0]?.summary?.format, "babel", "Babel T2 must keep format=babel")
   assert.equal(babelT2[0]?.sourceBlockIds?.length, 2, "Babel T2 merges two T1 blocks")
 
+  // 同层规则：先凑齐两个 T2（b5、b6），再合并出第一个 T3。
+  for (let index = 0; index < 12; index += 1) {
+    const current = stateFor(babelSession)
+    const t2Count = (current?.blocks ?? []).filter((block) => block.tier === 2).length
+    if (t2Count >= 2) break
+    await promptSession(babelSession, "continue")
+  }
   await promptSession(babelSession, "continue")
   babelState = await waitForState(
     babelSession,
     (state) => (state?.blocks ?? []).some((block) => block.tier === 3),
     "Babel first T3 merge",
   )
-  assert.equal(babelState?.phase, "t3", "Babel first T3 must keep phase=t3 while over budget")
+  // babel 合并摘要恒为 6000 CJK = 6000 token，预算 1% × 1M = 10k → 链可能已进预算，
+  // phase 是否保留取决于合并后是否仍超预算，不作为硬断言。
 
-  await promptSession(babelSession, "continue")
+  // 继续驱动直到 active 收敛到单个 T3 且 phase 清空。
+  for (let index = 0; index < 12; index += 1) {
+    const current = stateFor(babelSession)
+    const consumedSet = new Set((current?.blocks ?? []).flatMap((block) => block.sourceBlockIds ?? []))
+    const activeCount = (current?.blocks ?? []).filter((block) => !consumedSet.has(block.id)).length
+    if (activeCount <= 1 && current?.phase === undefined) break
+    await promptSession(babelSession, "continue")
+  }
   babelState = await waitForState(
     babelSession,
-    (state) => state?.phase === undefined && (state?.blocks ?? []).length === 7,
+    (state) => {
+      const consumedSet = new Set((state?.blocks ?? []).flatMap((block) => block.sourceBlockIds ?? []))
+      const active = (state?.blocks ?? []).filter((block) => !consumedSet.has(block.id))
+      return active.length === 1 && active[0]?.tier === 3 && state?.phase === undefined
+    },
     "Babel second T3 merge",
   )
   const babelConsumed = new Set((babelState?.blocks ?? []).flatMap((block) => block.sourceBlockIds ?? []))
@@ -1137,7 +1186,7 @@ try {
 
   // case: 走真实 RPC 切换摘要格式后，compress 工具的描述与参数跟着换。
   await api("POST", "/api/rpc/compressed-context/settingsSet", {
-    input: { contextLimit: 1_000_000, triggerPercent: 95, summaryFormat: "babel" },
+    input: { models: { small: { contextLimit: 1_000_000 }, fake: { contextLimit: 1_000_000 } }, triggerPercent: 95, summaryFormat: "babel" },
   })
   lastCompressTool = undefined
   const formatSession = await newSession("e2e-format-tool")
@@ -1182,10 +1231,15 @@ try {
     "phase:",
     longState?.phase,
   )
-  assert.equal(longBlocks.length, longTurns * 2 - 1, "6 turns must produce 6 T1 + 5 merged blocks")
+  // 同层规则下的链会保留更多 active 块（T3 只吃 T2，不吃 T1），
+  // 断言改为结构不变量而不是精确块数：tier 单调、链持续合并、无错误残留。
   assert.ok(longMerged.length >= 4, "long session must merge multiple pairs")
-  assert.equal(longActive.length, 1, "merged chain must collapse to a single active block")
-  assert.equal(longActive[0]?.tier, 3, "repeated merges must reach tier 3")
+  assert.ok(longActive.length >= 1, "merged chain must not be empty")
+  assert.ok(
+    longActive.every((block, index) => index === 0 || block.tier <= longActive[index - 1].tier),
+    "active chain tiers must be non-increasing",
+  )
+  assert.ok(longActive.some((block) => block.tier === 3), "repeated same-tier merges must reach tier 3")
   assert.equal(longState?.phase, undefined, "chain must be under budget after the last merge")
   assert.equal(longState?.attempts, 0, "no failed attempts may linger")
   assert.equal(longState?.lastError, undefined, "no compression error may linger")

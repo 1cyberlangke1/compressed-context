@@ -267,11 +267,12 @@ const pluginHex = Array.from("compressed-context")
   .join("")
 const dbPath = join(root, "opencode.db")
 // 插件设置现在只读自己的 JSONC；写 DB 的旧 seed 已被忽略。
+// 全局 contextLimit 已移除：窗口覆盖必须走按模型设置。
 await writeFile(
   join(configDir, "compressed-context.json"),
   `${JSON.stringify(
     {
-      contextLimit: 100_000,
+      models: { fake: { contextLimit: 100_000 } },
       triggerPercent: 80,
       summaryBlockPercent: 10,
       summaryTotalPercent: 50,

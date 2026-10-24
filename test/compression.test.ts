@@ -1873,6 +1873,9 @@ describe("摘要单层合并", () => {
       model: { providerID: "fake", id: "model" },
       messages: [
         message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
+        // older 超过 MIN_SOURCE_CHARS：phase 分支让位给 T1 会走这里？不会——
+        // 这 3 条消息里只有 checkpoint 之后的两条短消息，不足 MIN_SOURCE_CHARS，
+        // 所以仍走合并分支：这是「新消息不够长也必须能合并」的回归用例。
         message("user", "continue", "m1"),
         message("assistant", "ok", "m2"),
       ],
@@ -1884,7 +1887,7 @@ describe("摘要单层合并", () => {
     expect(event.result?.summary).toContain("T2")
   })
 
-  it("没有可合并候选时不写终止态，phase 清空等待下一轮", async () => {
+  it("没有可合并候选时保留 phase 等下一个 T1 入链", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {
       models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
@@ -1916,7 +1919,9 @@ describe("摘要单层合并", () => {
     await handleCompaction(ctx, event)
     const state = await loadState(storage, "ses_terminal")
     expect(state.lastError).toBeUndefined()
-    expect(state.phase).toBeUndefined()
+    // 摘要仍超预算且没有候选：phase 保留，等下一个 T1 入链后自然能合并。
+    expect(state.phase).toBe("t3")
+    expect(state.blocks).toHaveLength(1)
     expect(state.blocks).toHaveLength(1)
   })
 
@@ -2097,8 +2102,8 @@ describe("摘要单层合并", () => {
     await handleCompaction(ctx, event)
 
     const state = await loadState(storage, "ses_t3_ceiling")
-    // T3 旁边只有更低层：没有合法候选，不合并、不终止、phase 清掉。
-    expect(state.phase).toBeUndefined()
+    // T3 旁边只有更低层：没有合法候选，不合并、不终止；phase 保留等下一个 T1。
+    expect(state.phase).toBe("t3")
     expect(state.pending).toBeUndefined()
     expect(state.blocks).toHaveLength(2)
   })
