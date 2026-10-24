@@ -44,6 +44,16 @@ export function toolResult(part: ToolPartLike): unknown {
 }
 
 /**
+ * 原生 checkpoint 的形状。
+ *
+ * 前缀用于判断一条消息是不是 checkpoint；两个标签用于取出摘要与逐字保留的最近对话。
+ * 两段正则不带 `\n?`：调用方需要时自己 `trim()`，这样 token 计数的切片保持原样。
+ */
+export const CHECKPOINT_PREFIX = "<conversation-checkpoint>"
+export const SUMMARY_TAG = /<summary>([\s\S]*?)<\/summary>/
+export const RECENT_TAG = /<recent-context>([\s\S]*?)<\/recent-context>/
+
+/**
  * 输入：工具结果（v2 state.content 数组、字符串、对象或旧 result.value）。
  * 输出：可读文本；数组只拼 text 项，其余项退回 JSON。
  * 预期：不丢工具输出，同时避免把媒体 base64 当普通文本展开。

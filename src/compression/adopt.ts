@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { createT1Block } from "./block.ts"
+import { CHECKPOINT_PREFIX, RECENT_TAG, SUMMARY_TAG } from "../shared/parts.ts"
 import { isCompactionInFlight } from "./inflight.ts"
 import { toMarkdownSummary } from "./markdown.ts"
 import { isCheckpoint, messageText, type MessageLike } from "./select.ts"
@@ -18,10 +19,10 @@ export interface NativeCheckpoint {
  * 预期：只做只读解析，不改原文。
  */
 export function extractCheckpoint(text: string): NativeCheckpoint | undefined {
-  if (!text.trimStart().startsWith("<conversation-checkpoint>")) return undefined
-  const summary = /<summary>\n?([\s\S]*?)\n?<\/summary>/.exec(text)?.[1]?.trim()
+  if (!text.trimStart().startsWith(CHECKPOINT_PREFIX)) return undefined
+  const summary = SUMMARY_TAG.exec(text)?.[1]?.trim()
   if (summary === undefined || summary.length === 0) return undefined
-  const recent = /<recent-context>\n?([\s\S]*?)\n?<\/recent-context>/.exec(text)?.[1]?.trim()
+  const recent = RECENT_TAG.exec(text)?.[1]?.trim()
   return recent === undefined || recent.length === 0 ? { summary } : { summary, recent }
 }
 

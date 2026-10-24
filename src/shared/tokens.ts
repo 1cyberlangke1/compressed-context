@@ -1,5 +1,5 @@
 import { attachmentTokens } from "./media.ts"
-import { stringify, toolInput, toolResult, toolResultText } from "./parts.ts"
+import { CHECKPOINT_PREFIX, RECENT_TAG, SUMMARY_TAG, stringify, toolInput, toolResult, toolResultText } from "./parts.ts"
 
 /**
  * 上下文分类 token 估算。
@@ -133,10 +133,6 @@ function countToolResult(result: unknown): number {
   }
   return countText(toolResultText(result))
 }
-
-const CHECKPOINT_PREFIX = "<conversation-checkpoint>"
-const SUMMARY_TAG = /<summary>([\s\S]*?)<\/summary>/
-const RECENT_TAG = /<recent-context>([\s\S]*?)<\/recent-context>/
 
 /**
  * 输入：checkpoint 文本。

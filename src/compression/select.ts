@@ -1,4 +1,4 @@
-import { stringify, toolInput, toolResult, toolResultText } from "../shared/parts.ts"
+import { CHECKPOINT_PREFIX, stringify, toolInput, toolResult, toolResultText } from "../shared/parts.ts"
 
 /** 媒体 source 的最小结构；bytes/base64 可落盘，url/ref 只保留引用。 */
 export interface MediaSourceLike {
@@ -50,8 +50,6 @@ export interface MessageLike {
   /** v2 用户消息把正文放在 text，而不是 content 数组。 */
   readonly text?: string | null | undefined
 }
-
-export const CHECKPOINT_PREFIX = "<conversation-checkpoint>"
 
 /** 输入：消息；输出：纯文本（只拼 text part）。 */
 export function messageText(message: MessageLike): string {

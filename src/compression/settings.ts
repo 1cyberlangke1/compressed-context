@@ -1,3 +1,5 @@
+import type { Plugin } from "@opencode/plugin"
+
 import {
   DEFAULT_AUTO_COMPRESS,
   DEFAULT_DECOMPRESS_INLINE_MAX,
@@ -88,6 +90,35 @@ export function effectiveWindowKey(sessionID: string): string {
 /** 输入：模型标识；输出：该模型原生窗口在 storage 里的 key。 */
 export function windowKey(providerID: string, modelID: string): string {
   return `window:${providerID}/${modelID}`
+}
+
+/**
+ * 输入：插件上下文 + 可选的会话 ID。
+ * 输出：缓存里的原生窗口 token 数；都没有时 undefined。
+ * 预期：有会话时先按会话模型、再按该会话解析值；最后回退全局最近解析值。
+ *       每一级只接受正数。
+ */
+export async function readStoredWindow(
+  ctx: Plugin.Context,
+  sessionID?: string,
+): Promise<number | undefined> {
+  const read = async (key: string): Promise<number | undefined> => {
+    const value = await ctx.storage.get(key).catch(() => undefined)
+    return typeof value === "number" && value > 0 ? value : undefined
+  }
+  if (sessionID !== undefined) {
+    const model = await ctx.session
+      .get({ sessionID })
+      .then((session) => session.model)
+      .catch(() => undefined)
+    if (model !== undefined) {
+      const stored = await read(windowKey(model.providerID, model.id))
+      if (stored !== undefined) return stored
+    }
+    const scoped = await read(resolvedWindowKey(sessionID))
+    if (scoped !== undefined) return scoped
+  }
+  return read(RESOLVED_WINDOW_KEY)
 }
 
 export const DEFAULT_SERVER_SETTINGS: ServerSettings = {

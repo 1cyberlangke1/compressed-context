@@ -9,13 +9,11 @@ import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
 import { loadState } from "./state.ts"
 import { normalizeSettings } from "../shared/settings.ts"
 import {
-  RESOLVED_WINDOW_KEY,
   loadSettings,
   parseServerSettings,
-  resolvedWindowKey,
+  readStoredWindow,
   saveSettings,
   type ServerSettings,
-  windowKey,
 } from "./settings.ts"
 
 /** 注册句柄的最小结构。 */
@@ -56,27 +54,8 @@ export async function registerSettingsRpc(
       const requested = (input as { readonly sessionID?: unknown }).sessionID
       const sessionID = typeof requested === "string" && requested.length > 0 ? requested : undefined
       // 优先返回当前会话模型自己的窗口；拿不到再退回最近一次解析值。
-      let resolvedWindow: number | undefined
-      if (sessionID !== undefined) {
-        try {
-          const session = await ctx.session.get({ sessionID })
-          const model = session.model
-          if (model !== undefined) {
-            const stored = await ctx.storage.get(windowKey(model.providerID, model.id))
-            if (typeof stored === "number" && stored > 0) resolvedWindow = stored
-          }
-        } catch {
-          // 会话不存在或模型未知：回退到该会话/全局最近一次解析值
-        }
-        if (resolvedWindow === undefined) {
-          const scoped = await ctx.storage.get(resolvedWindowKey(sessionID))
-          if (typeof scoped === "number" && scoped > 0) resolvedWindow = scoped
-        }
-      }
-      if (resolvedWindow === undefined) {
-        const stored = await ctx.storage.get(RESOLVED_WINDOW_KEY)
-        if (typeof stored === "number" && stored > 0) resolvedWindow = stored
-      }
+      // 没有 sessionID 时只读全局值——这是设置面板在会话创建前的行为。
+      const resolvedWindow = await readStoredWindow(ctx, sessionID)
       return {
         ...settings,
         ...(resolvedWindow === undefined ? {} : { resolvedWindow }),

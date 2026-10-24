@@ -6,7 +6,7 @@ import { createT1Block } from "./block.ts"
 import { isCompactionInFlight } from "./inflight.ts"
 import { toSummary } from "./normalize.ts"
 import { summaryInputFor } from "./schema.ts"
-import { RESOLVED_WINDOW_KEY, loadServerSettings, resolvedWindowKey, windowKey } from "./settings.ts"
+import { loadServerSettings, readStoredWindow } from "./settings.ts"
 import { eligibleMessages, messageRange, type MessageLike } from "./select.ts"
 import { sessionMessagesToMessageLikes } from "./session-message.ts"
 import { isSubagentSession } from "./session-role.ts"
@@ -135,24 +135,7 @@ export async function registerCompressTool(
         const settings = await loadServerSettings(ctx)
         if (!settings.enableCompressTool) return failure("compress tool is disabled in settings")
         // 优先用当前会话模型自己的窗口；取不到再回退最近一次解析值。
-        let windowTokens: number | undefined
-        try {
-          const session = await ctx.session.get({ sessionID })
-          const model = session.model
-          const stored =
-            model === undefined ? undefined : await ctx.storage.get(windowKey(model.providerID, model.id))
-          if (typeof stored === "number" && stored > 0) windowTokens = stored
-        } catch {
-          // 会话或模型未知：回退到最近一次解析值
-        }
-        if (windowTokens === undefined) {
-          const scoped = await ctx.storage.get(resolvedWindowKey(sessionID))
-          if (typeof scoped === "number" && scoped > 0) windowTokens = scoped
-        }
-        if (windowTokens === undefined) {
-          const resolved = await ctx.storage.get(RESOLVED_WINDOW_KEY)
-          if (typeof resolved === "number" && resolved > 0) windowTokens = resolved
-        }
+        const windowTokens = await readStoredWindow(ctx, sessionID)
         const limits = resolveSummaryLimits(settings, windowTokens)
         const summary = toSummary(input, settings.summaryFormat)
         if (summary === undefined) return failure("invalid summary shape")
