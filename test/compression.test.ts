@@ -377,6 +377,23 @@ describe("服务端设置", () => {
     }
     expect(parseServerSettings({ ...base, summaryLanguage: "fr" })).toBeUndefined()
   })
+
+  it("nudge 与触发百分比的边界按闭区间判定", () => {
+    const base = { contextLimit: "auto", triggerPercent: 80 }
+    // 0 表示关闭提醒；1k / 200k 是闭区间端点。
+    expect(parseServerSettings({ ...base, nudgeGrowthTokens: 0 })?.nudgeGrowthTokens).toBe(0)
+    expect(parseServerSettings({ ...base, nudgeGrowthTokens: 1_000 })?.nudgeGrowthTokens).toBe(1_000)
+    expect(parseServerSettings({ ...base, nudgeGrowthTokens: 200_000 })?.nudgeGrowthTokens).toBe(200_000)
+    expect(parseServerSettings({ ...base, nudgeGrowthTokens: 999 })).toBeUndefined()
+    expect(parseServerSettings({ ...base, nudgeGrowthTokens: 200_001 })).toBeUndefined()
+    // 不做取整：小数越界仍然拒绝。
+    expect(parseServerSettings({ ...base, nudgeGrowthTokens: 200_000.4 })).toBeUndefined()
+
+    expect(parseServerSettings({ ...base, triggerPercent: 60 })?.triggerPercent).toBe(60)
+    expect(parseServerSettings({ ...base, triggerPercent: 95 })?.triggerPercent).toBe(95)
+    expect(parseServerSettings({ ...base, triggerPercent: 59.9 })).toBeUndefined()
+    expect(parseServerSettings({ ...base, triggerPercent: 95.1 })).toBeUndefined()
+  })
 })
 
 describe("transcript", () => {
