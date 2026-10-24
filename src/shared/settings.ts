@@ -58,6 +58,7 @@ export const DEFAULT_TRIGGER_PERCENT = 80
 
 /** 主动压缩提醒的默认增长量；0 表示关闭。 */
 export const DEFAULT_NUDGE_GROWTH_TOKENS = 50_000
+export const MIN_NUDGE_GROWTH_TOKENS = 1_000
 export const MAX_NUDGE_GROWTH_TOKENS = 200_000
 
 /** 可用窗口下限：低于它连最小摘要都放不下。 */
@@ -203,7 +204,7 @@ export function readNudgeGrowthTokens(value: unknown, fallback: number): number 
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback
   const rounded = Math.round(value)
   if (rounded === 0) return 0
-  if (rounded < 1_000 || rounded > MAX_NUDGE_GROWTH_TOKENS) return fallback
+  if (rounded < MIN_NUDGE_GROWTH_TOKENS || rounded > MAX_NUDGE_GROWTH_TOKENS) return fallback
   return rounded
 }
 

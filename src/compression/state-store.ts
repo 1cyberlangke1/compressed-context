@@ -1,6 +1,7 @@
 import type { Schema } from "effect"
 
 import { isSessionDeleted } from "./deleted-sessions.ts"
+import { sessionChains, withSessionLock } from "./session-lock.ts"
 import { parseState, stateKey, type State, type StorageLike } from "./state.ts"
 
 /** 一次状态事务的结果；next 缺省表示只读，不写回。 */
@@ -51,7 +52,7 @@ export function createStateStore(storage: StorageLike): StateStore {
    * 链表挂在进程级 globalThis 上：插件按 location 各加载一份，每份的 storage 包装对象可能
    * 不同，但写入的是同一份全局 storage key，所以锁必须跨实例共享，否则并发读改写会互相覆盖。
    */
-  const tails = stateChains()
+  const tails = sessionChains(CHAINS_KEY)
 
   const read = async (sessionID: string): Promise<State> =>
     parseState(await storage.get(stateKey(sessionID)))
@@ -59,40 +60,18 @@ export function createStateStore(storage: StorageLike): StateStore {
   const transact = async <T>(
     sessionID: string,
     mutate: (state: State) => StateMutation<T> | Promise<StateMutation<T>>,
-  ): Promise<T> => {
-    const previous = tails.get(sessionID) ?? Promise.resolve()
-    let release!: () => void
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    // previous 理论上永不 reject；仍兜一层，避免坏事务把后续请求永久卡住。
-    const tail = previous.then(() => gate, () => gate)
-    tails.set(sessionID, tail)
-    await previous.catch(() => undefined)
-    try {
+  ): Promise<T> =>
+    withSessionLock(tails, sessionID, async () => {
       const state = await read(sessionID)
       const mutation = await mutate(state)
       if (mutation.next !== undefined && !isSessionDeleted(sessionID)) {
         await storage.set(stateKey(sessionID), mutation.next as unknown as Schema.Json)
       }
       return mutation.result
-    } finally {
-      release()
-      if (tails.get(sessionID) === tail) tails.delete(sessionID)
-    }
-  }
+    })
 
   return { read, transact }
 }
 
 /** 进程级会话锁表；同一个进程里的所有 StateStore 共用。 */
 const CHAINS_KEY = Symbol.for("compressed-context.state-chains")
-
-function stateChains(): Map<string, Promise<void>> {
-  const holder = globalThis as unknown as Record<symbol, Map<string, Promise<void>> | undefined>
-  const existing = holder[CHAINS_KEY]
-  if (existing !== undefined) return existing
-  const created = new Map<string, Promise<void>>()
-  holder[CHAINS_KEY] = created
-  return created
-}

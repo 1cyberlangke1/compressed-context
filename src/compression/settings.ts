@@ -16,12 +16,14 @@ import {
   MAX_DECOMPRESS_TEMP_CAP,
   MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MAX_CONTEXT_LIMIT,
+  MAX_NUDGE_GROWTH_TOKENS,
   MAX_SUMMARY_PERCENT,
   MAX_TRIGGER_PERCENT,
   MIN_CONTEXT_LIMIT,
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
   MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+  MIN_NUDGE_GROWTH_TOKENS,
   MIN_SUMMARY_PERCENT,
   MIN_TRIGGER_PERCENT,
   isSummaryLanguage,
@@ -108,6 +110,17 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
 }
 
 /**
+ * 输入：任意值 + 闭区间 + 是否允许 0。
+ * 输出：是否落在区间内；为 true 时同时把类型收窄成 number。
+ * 预期：先判原始值再决定，不做取整——`200000.4` 仍算越界，保持既有拒绝语义。
+ */
+function inRange(value: unknown, min: number, max: number, allowZero = false): value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false
+  if (allowZero && value === 0) return true
+  return value >= min && value <= max
+}
+
+/**
  * 输入：storage 里的原始值。
  * 输出：合法设置；非法返回 undefined。
  * 预期：范围外的值一律拒绝，不静默修正。
@@ -122,46 +135,11 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   const totalPercent = record["summaryTotalPercent"] ?? DEFAULT_SUMMARY_TOTAL_PERCENT
   const language = record["summaryLanguage"] ?? "auto"
   const summaryFormat = record["summaryFormat"] ?? DEFAULT_SUMMARY_FORMAT
-  if (
-    limit !== "auto" &&
-    (typeof limit !== "number" ||
-      !Number.isFinite(limit) ||
-      limit < MIN_CONTEXT_LIMIT ||
-      limit > MAX_CONTEXT_LIMIT)
-  ) {
-    return undefined
-  }
-  if (
-    typeof percent !== "number" ||
-    !Number.isFinite(percent) ||
-    percent < MIN_TRIGGER_PERCENT ||
-    percent > MAX_TRIGGER_PERCENT
-  ) {
-    return undefined
-  }
-  if (
-    typeof nudge !== "number" ||
-    !Number.isFinite(nudge) ||
-    (nudge !== 0 && (nudge < 1_000 || nudge > 200_000))
-  ) {
-    return undefined
-  }
-  if (
-    typeof blockPercent !== "number" ||
-    !Number.isFinite(blockPercent) ||
-    blockPercent < MIN_SUMMARY_PERCENT ||
-    blockPercent > MAX_SUMMARY_PERCENT
-  ) {
-    return undefined
-  }
-  if (
-    typeof totalPercent !== "number" ||
-    !Number.isFinite(totalPercent) ||
-    totalPercent < MIN_SUMMARY_PERCENT ||
-    totalPercent > MAX_SUMMARY_PERCENT
-  ) {
-    return undefined
-  }
+  if (limit !== "auto" && !inRange(limit, MIN_CONTEXT_LIMIT, MAX_CONTEXT_LIMIT)) return undefined
+  if (!inRange(percent, MIN_TRIGGER_PERCENT, MAX_TRIGGER_PERCENT)) return undefined
+  if (!inRange(nudge, MIN_NUDGE_GROWTH_TOKENS, MAX_NUDGE_GROWTH_TOKENS, true)) return undefined
+  if (!inRange(blockPercent, MIN_SUMMARY_PERCENT, MAX_SUMMARY_PERCENT)) return undefined
+  if (!inRange(totalPercent, MIN_SUMMARY_PERCENT, MAX_SUMMARY_PERCENT)) return undefined
   if (!isSummaryLanguage(language)) return undefined
   if (!isSummaryFormat(summaryFormat)) return undefined
   const autoCompress = readStrictBoolean(record["autoCompress"], DEFAULT_AUTO_COMPRESS)
