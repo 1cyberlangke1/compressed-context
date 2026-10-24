@@ -1,7 +1,7 @@
 import type { Schema } from "effect"
 
 import { isSessionDeleted } from "./deleted-sessions.ts"
-import { forEachScannedEntry } from "../shared/scan.ts"
+import { forEachScannedEntry, type ScanStorageLike } from "../shared/scan.ts"
 import type { Block, StorageLike } from "./state.ts"
 import type { MediaSourceLike, MessageLike } from "./select.ts"
 
@@ -235,12 +235,7 @@ export async function loadTranscriptMessage(
 
 /** 输入：storage + 会话；输出：无；预期：删掉该会话所有 manifest/message key。 */
 export async function deleteTranscriptsForSession(
-  storage: StorageLike & {
-    scan?: (options: { prefix: string; limit: number; after?: string }) => Promise<{
-      entries: readonly { key: string; value: unknown }[]
-      next?: string
-    }>
-  },
+  storage: StorageLike & ScanStorageLike,
   sessionID: string,
 ): Promise<void> {
   await forEachScannedEntry(storage, transcriptSessionPrefix(sessionID), async (entry) => {

@@ -27,6 +27,20 @@ const DecompressOutput = Schema.Struct({
 })
 
 /**
+ * 输入：错误文案。
+ * 输出：工具失败返回体。
+ * 预期：`output.error`、`content` 前缀、`metadata.error` 三处形状固定；
+ *       不含 `status` 字段——decompress 的输出契约与 compress 不同。
+ */
+function failure(message: string) {
+  return {
+    output: { error: message },
+    content: `ERROR: ${message}`,
+    metadata: { error: true },
+  }
+}
+
+/**
  * 输入：服务端插件上下文。
  * 输出：注册 decompress 工具，返回注销句柄。
  * 预期：只读操作——不修改块状态；内容作为 tool result 返回。
@@ -42,20 +56,12 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
       execute: async (input, toolCtx) => {
         // 第二道防线：context 钩子已经对子代理隐藏工具，这里再挡一次直接调用。
         if (await isSubagentSession(ctx, toolCtx.sessionID)) {
-          return {
-            output: { error: "decompress is unavailable in subagent sessions" },
-            content: "ERROR: decompress is unavailable in subagent sessions",
-            metadata: { error: true },
-          }
+          return failure("decompress is unavailable in subagent sessions")
         }
         const { resolveDecompress } = await import("./decompress.ts")
         const settings = await loadServerSettings(ctx)
         if (!settings.enableDecompressTool) {
-          return {
-            output: { error: "decompress tool is disabled in settings" },
-            content: "ERROR: decompress tool is disabled in settings",
-            metadata: { error: true },
-          }
+          return failure("decompress tool is disabled in settings")
         }
         const result = await resolveDecompress(input, ctx, toolCtx.sessionID, {
           inlineMax: effectiveDecompressInlineMax(settings),
@@ -63,11 +69,7 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
           showTokens: settings.decompressShowTokens,
         })
         if (result.status === "error") {
-          return {
-            output: { error: result.message },
-            content: `ERROR: ${result.message}`,
-            metadata: { error: true },
-          }
+          return failure(result.message)
         }
         const output: { inline?: string; path?: string; tokens?: number } = {
           ...(result.path === undefined ? {} : { path: result.path }),

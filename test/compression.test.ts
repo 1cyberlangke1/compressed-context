@@ -10,7 +10,8 @@ import { CONFIG_FILE } from "../src/shared/config-paths.ts"
 /** 测试里只作为 JSONC 的旧键名，插件本身不再读 storage 设置。 */
 const SETTINGS_KEY = "settings"
 
-import { markCompactionInFlight, maybeAutoCompress, maybeAutoCompressStep } from "../src/compression/auto.ts"
+import { maybeAutoCompress, maybeAutoCompressStep } from "../src/compression/auto.ts"
+import { markCompactionInFlight } from "../src/compression/inflight.ts"
 import { distillOnce, isTerminal, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
 import { handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"

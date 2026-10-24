@@ -23,9 +23,6 @@ import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
 import { MIN_SOURCE_CHARS } from "./validate.ts"
 
-// 旧测试与外部调用仍从 auto 导入；实现已抽到 inflight。
-export { isCompactionInFlight, markCompactionInFlight } from "./inflight.ts"
-
 /** 模型窗口缓存时长。 */
 const LIMIT_TTL = 60_000
 
