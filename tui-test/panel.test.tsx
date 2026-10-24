@@ -81,6 +81,8 @@ function fakeBlocks(): SummaryBlock[] {
 }
 
 let capturedDialog: (() => JSX.Element) | undefined
+/** 面板发出的 RPC 调用；用于断言路由 location 是否随请求带上。 */
+const rpcCalls: { method: string; options: unknown }[] = []
 
 /** 输入：无；输出：Panel 需要的最小上下文。 */
 function fakeContext(input = 100): Context {
@@ -89,6 +91,7 @@ function fakeContext(input = 100): Context {
   return {
     theme: fakeTheme(),
     renderer: { height: 40 },
+    location: { directory: "/work" },
     ui: {
       dialog: {
         show: (render: () => JSX.Element) => {
@@ -128,8 +131,14 @@ function fakeContext(input = 100): Context {
           }),
       },
       rpc: () => ({
-        cacheHistoryGet: () => Promise.resolve({ samples }),
-        blocksGet: () => Promise.resolve({ blocks }),
+        cacheHistoryGet: (_input: unknown, options: unknown) => {
+          rpcCalls.push({ method: "cacheHistoryGet", options })
+          return Promise.resolve({ samples })
+        },
+        blocksGet: (_input: unknown, options: unknown) => {
+          rpcCalls.push({ method: "blocksGet", options })
+          return Promise.resolve({ blocks })
+        },
       }),
     },
   } as unknown as Context
@@ -321,6 +330,28 @@ describe("Panel", () => {
       expect(frame).not.toContain("缓存记录")
       expect(frame).not.toContain("折线图")
       expect(frame).not.toContain("摘要块")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("面板 RPC 带上 location，避免路由到 home 实例", async () => {
+    rpcCalls.length = 0
+    const app = await testRender(() => <Fixture initial={{ cacheLogExpanded: true }} />, {
+      width: 42,
+      height: 80,
+    })
+    app.renderer.start()
+    try {
+      await app.waitForFrame((value) => value.includes("缓存记录"))
+      for (let attempt = 0; attempt < 100 && rpcCalls.length < 2; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(rpcCalls.map((call) => call.method).sort()).toContain("blocksGet")
+      expect(rpcCalls.map((call) => call.method).sort()).toContain("cacheHistoryGet")
+      for (const call of rpcCalls) {
+        expect(call.options).toEqual({ location: { directory: "/work" } })
+      }
     } finally {
       app.renderer.destroy()
     }
