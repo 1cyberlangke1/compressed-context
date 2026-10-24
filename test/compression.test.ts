@@ -13,7 +13,7 @@ const SETTINGS_KEY = "settings"
 import { maybeAutoCompress, maybeAutoCompressStep } from "../src/compression/auto.ts"
 import { markCompactionInFlight } from "../src/compression/inflight.ts"
 import { distillOnce, isTerminal, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
-import { handleCompactionEvent } from "../src/compression/events.ts"
+import { TERMINAL_MESSAGE, handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
 import { EFFECTIVE_WINDOW_KEY, effectiveWindowKey, parseServerSettings } from "../src/compression/settings.ts"
 import { activeBlocks, blockMarker, renderAll, renderBlock } from "../src/compression/render.ts"
@@ -1771,6 +1771,44 @@ describe("摘要单层合并", () => {
     expect(activeBlocks(state.blocks, state.pending).some((item) => item.tier === 2)).toBe(true)
     expect(state.lastError).toBeUndefined()
     expect(event.result?.summary).toContain("T2")
+  })
+
+  it("没有可合并候选且仍超预算时写入终止态", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_terminal", {
+      // 只有一个 T3：没有下一层可合并，摘要又超预算 → 判定终止。
+      blocks: [longBlock("b1", 3, 1)],
+      attempts: 2,
+      phase: "t3",
+    })
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_terminal",
+      model: { providerID: "fake", id: "model" },
+      messages: [
+        message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
+        message("user", "continue", "m1"),
+        message("assistant", "ok", "m2"),
+      ],
+    }
+    await handleCompaction(ctx, event)
+    const state = await loadState(storage, "ses_terminal")
+    expect(state.terminal).toBe(TERMINAL_MESSAGE)
+    expect(state.lastError).toBe(TERMINAL_MESSAGE)
+    expect(state.attempts).toBe(0)
+    expect(state.pending).toBeUndefined()
+    expect(state.phase).toBeUndefined()
   })
 
   it("两个实例同时处理同一 compaction 只生成一次摘要", async () => {

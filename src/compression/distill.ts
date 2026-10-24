@@ -114,17 +114,25 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
   }
   const active = activeBlocks(input.state.blocks, input.pending)
   const currentSummary = renderAll(input.state.blocks, input.pending, renderOptions)
+  /** 输入：可选错误原因；输出：未合并的结果。预期：所有「状态没变」分支共用同一形状。 */
+  const unchanged = (error?: string): DistillOnceResult => ({
+    blocks: input.state.blocks,
+    pending: input.pending,
+    summary: currentSummary,
+    merged: false,
+    ...(error === undefined ? {} : { error }),
+  })
   const totalChars = input.summaryTotalChars ?? Number.POSITIVE_INFINITY
   if (
     active.length < 2 ||
     (countText(currentSummary) <= input.budgetTokens && currentSummary.length <= totalChars)
   ) {
-    return { blocks: input.state.blocks, pending: input.pending, summary: currentSummary, merged: false }
+    return unchanged()
   }
 
   const candidates = mergeCandidates(active)
   if (candidates.length === 0) {
-    return { blocks: input.state.blocks, pending: input.pending, summary: currentSummary, merged: false }
+    return unchanged()
   }
 
   const choices: SummaryChoiceCandidate[] = candidates.map((candidate, index) => ({
@@ -153,24 +161,12 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     },
   })
   if (picked === undefined) {
-    return {
-      blocks: input.state.blocks,
-      pending: input.pending,
-      summary: currentSummary,
-      merged: false,
-      error: failure,
-    }
+    return unchanged(failure)
   }
 
   const chosen = candidates[picked.candidate.index - 1]
   if (chosen === undefined) {
-    return {
-      blocks: input.state.blocks,
-      pending: input.pending,
-      summary: currentSummary,
-      merged: false,
-      error: "model picked an unknown candidate",
-    }
+    return unchanged("model picked an unknown candidate")
   }
 
   const validation = validateSummary(
@@ -180,13 +176,7 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     input.summaryBlockChars,
   )
   if (!validation.ok) {
-    return {
-      blocks: input.state.blocks,
-      pending: input.pending,
-      summary: currentSummary,
-      merged: false,
-      error: validation.message,
-    }
+    return unchanged(validation.message)
   }
 
   // 上一层 pending 先转成已落盘块，新合并块保持 pending，交给 compaction 事件转正。

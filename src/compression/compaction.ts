@@ -52,24 +52,26 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       showBlockTokens: settings.showBlockTokens,
     }
 
-    /** 保存这一层的结果；pending 可选，phase 由下一层决定。 */
+    /** 保存这一层的结果；pending 可选，phase 由下一层决定，overrides 只给终止分支用。 */
     const save = async (
       blocks: readonly Block[],
       pending: Block | undefined,
       phase: CompactionPhase | undefined,
       error: string | undefined,
+      overrides: { attempts?: number; terminal?: string } = {},
     ): Promise<void> => {
       await stateStore(ctx.storage).transact(event.sessionID, (current) => {
         // 以锁内的最新状态为基准。钩子开头拿到的快照可能已经过时：
         // 期间别的分支会改写 nudgeCount / terminal / lastError，用旧快照整体覆盖会丢更新。
         const lastError = error ?? current.lastError
+        const terminal = overrides.terminal ?? current.terminal
         const next: State = {
           blocks,
-          attempts: current.attempts,
+          attempts: overrides.attempts ?? current.attempts,
           ...(pending === undefined ? {} : { pending }),
           ...(phase === undefined ? {} : { phase }),
           ...(lastError === undefined ? {} : { lastError }),
-          ...(current.terminal === undefined ? {} : { terminal: current.terminal }),
+          ...(terminal === undefined ? {} : { terminal }),
           ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
           ...(baseline !== undefined
             ? { nudgeBaselineTokens: baseline }
@@ -112,20 +114,9 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
           limits.totalChars,
         )
       ) {
-        await stateStore(ctx.storage).transact(event.sessionID, (current) => {
-          const next: State = {
-            blocks: result.blocks,
-            attempts: 0,
-            lastError: TERMINAL_MESSAGE,
-            terminal: TERMINAL_MESSAGE,
-            ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
-            ...(baseline !== undefined
-              ? { nudgeBaselineTokens: baseline }
-              : current.nudgeBaselineTokens === undefined
-                ? {}
-                : { nudgeBaselineTokens: current.nudgeBaselineTokens }),
-          }
-          return { next, result: undefined }
+        await save(result.blocks, undefined, undefined, TERMINAL_MESSAGE, {
+          attempts: 0,
+          terminal: TERMINAL_MESSAGE,
         })
         // 让 TUI 面板能显示终止原因；写失败不影响压缩状态。
         try {

@@ -180,12 +180,7 @@ export async function maybeAutoCompressStep(input: {
     if (effective - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
 
     if (state.phase !== undefined) {
-      if (!tryBeginCompactionRequest(input.sessionID)) return
-      try {
-        await input.ctx.session.compact({ sessionID: input.sessionID })
-      } finally {
-        endCompactionRequest(input.sessionID)
-      }
+      await requestCompaction(input.ctx, input.sessionID)
       return
     }
 
@@ -196,16 +191,32 @@ export async function maybeAutoCompressStep(input: {
 
     // 入队后同步等压缩落地，对齐 OpenCode 原生压缩的语义：
     // 下一个 step 的模型请求一定从压缩后的上下文开始，而不是继续放大。
-    if (!tryBeginCompactionRequest(input.sessionID)) return
-    try {
-      const before = { blocks: state.blocks.length, lastError: state.lastError }
-      await input.ctx.session.compact({ sessionID: input.sessionID })
-      await waitForCompaction(input.ctx, input.sessionID, before)
-    } finally {
-      endCompactionRequest(input.sessionID)
-    }
+    await requestCompaction(input.ctx, input.sessionID, {
+      blocks: state.blocks.length,
+      lastError: state.lastError,
+    })
   } catch (error) {
     await recordCompressionFailure(input.ctx, input.sessionID, error)
+  }
+}
+
+/**
+ * 输入：服务端上下文 + sessionID + 可选的压缩前快照。
+ * 输出：是否真的发起了 compaction；被别的请求抢走发起权时为 false。
+ * 预期：抢到发起权后入队一次 compact，finally 一定释放；给了 before 就等压缩落地。
+ */
+async function requestCompaction(
+  ctx: Plugin.Context,
+  sessionID: string,
+  before?: { blocks: number; lastError: string | undefined },
+): Promise<boolean> {
+  if (!tryBeginCompactionRequest(sessionID)) return false
+  try {
+    await ctx.session.compact({ sessionID })
+    if (before !== undefined) await waitForCompaction(ctx, sessionID, before)
+    return true
+  } finally {
+    endCompactionRequest(sessionID)
   }
 }
 
@@ -359,12 +370,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     // 已排下一层蒸馏：下一次模型请求就入队 compaction，由 compaction 钩子合并。
     // 不能在 T1 刚结束时入队——那时历史里只剩 checkpoint，OpenCode 会拒绝压缩。
     if (state.phase !== undefined) {
-      if (!tryBeginCompactionRequest(input.sessionID)) return
-      try {
-        await input.ctx.session.compact({ sessionID: input.sessionID })
-      } finally {
-        endCompactionRequest(input.sessionID)
-      }
+      await requestCompaction(input.ctx, input.sessionID)
       return
     }
 
@@ -374,12 +380,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const sourceChars = buildTranscript(eligible).length
     if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
 
-    if (!tryBeginCompactionRequest(input.sessionID)) return
-    try {
-      await input.ctx.session.compact({ sessionID: input.sessionID })
-    } finally {
-      endCompactionRequest(input.sessionID)
-    }
+    await requestCompaction(input.ctx, input.sessionID)
   } catch (error) {
     await recordCompressionFailure(input.ctx, input.sessionID, error)
   }
