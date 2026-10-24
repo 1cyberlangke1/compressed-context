@@ -11,6 +11,7 @@ interface Captured {
   run?: () => void
   readonly answers: unknown[]
   selects: number
+  shows: number
   readonly sent: Settings[]
   readonly toasts: string[]
 }
@@ -44,7 +45,9 @@ function fakeContext(captured: Captured): Context {
           captured.selects += 1
           return Promise.resolve(captured.answers.shift())
         },
-        show: () => {},
+        show: () => {
+          captured.shows += 1
+        },
         clear: () => {},
       },
       router: { current: () => ({ type: "session", sessionID: "ses_a" }) },
@@ -74,7 +77,7 @@ function fakeContext(captured: Captured): Context {
  * 预期：updateSettings 与 main.tsx 用同一套 applySettingsMutation / snapshotSettings。
  */
 async function mount(answers: unknown[], initial?: Partial<Settings>) {
-  const captured: Captured = { answers, selects: 0, sent: [], toasts: [] }
+  const captured: Captured = { answers, selects: 0, shows: 0, sent: [], toasts: [] }
   const context = fakeContext(captured)
   const [settings, setSettings] = createStore<Settings>({
     ...DEFAULT_SETTINGS,
@@ -184,6 +187,41 @@ describe("按模型设置的 TUI 路径", () => {
       captured.run?.()
       await Bun.sleep(150)
       expect(captured.sent.at(-1)?.models["openrouter/gemini-3-pro"]?.triggerPercent).toBe(90)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("点自定义会打开输入弹窗，且不会立刻被编辑屏顶掉", async () => {
+    const { app, captured } = await mount([
+      "models",
+      "current",
+      { kind: "field", field: "triggerPercent" },
+      "custom",
+    ])
+    try {
+      captured.run?.()
+      await Bun.sleep(150)
+      expect(captured.shows).toBe(1)
+      // 选完自定义后编辑屏不能再弹一次，否则会把输入框盖掉。
+      expect(captured.selects).toBe(4)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("点自定义走到「全部摘要上限」时也是输入弹窗", async () => {
+    const { app, captured } = await mount([
+      "models",
+      "current",
+      { kind: "field", field: "summaryTotalPercent" },
+      "custom",
+    ])
+    try {
+      captured.run?.()
+      await Bun.sleep(150)
+      expect(captured.shows).toBe(1)
+      expect(captured.selects).toBe(4)
     } finally {
       app.renderer.destroy()
     }

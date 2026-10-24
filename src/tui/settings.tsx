@@ -434,7 +434,13 @@ export function SettingsCommand(props: {
   }
 
   /** 输入：键 + 字段；输出：无。预期：继承 / 预设 / 自定义三选一，写完回到编辑屏。 */
-  const openOverrideField = async (key: string, field: ModelOverrideField): Promise<void> => {
+  /**
+   * 输入：键 + 字段。
+   * 输出：是否已打开输入弹窗。
+   * 预期：继承与预设当场写回并返回 false（调用方重开编辑屏）；自定义返回 true，
+   *       因为输入框已经在屏幕上，重开编辑屏会把它顶掉。
+   */
+  const openOverrideField = async (key: string, field: ModelOverrideField): Promise<boolean> => {
     const labels: Record<ModelOverrideField, string> = {
       contextLimit: copy().settings.limit,
       triggerPercent: copy().settings.threshold,
@@ -464,7 +470,7 @@ export function SettingsCommand(props: {
         { title: copy().settings.overrideCustom, value: "custom" },
       ],
     })
-    if (picked === undefined) return
+    if (picked === undefined) return false
     if (picked === "inherit") {
       await props.updateSettings((draft) => {
         const bucket = { ...(draft.models[key] ?? {}) }
@@ -472,13 +478,14 @@ export function SettingsCommand(props: {
         if (Object.keys(bucket).length === 0) Reflect.deleteProperty(draft.models, key)
         else draft.models[key] = bucket
       })
-      return
+      return false
     }
     if (picked === "custom") {
       openOverrideCustom(key, field)
-      return
+      return true
     }
     await writeOverride(key, field, picked)
+    return false
   }
 
   /** 输入：键 + 字段；输出：无。预期：弹输入框，确认后写回并回到编辑屏。 */
@@ -583,8 +590,9 @@ export function SettingsCommand(props: {
       void openOverrides()
       return
     }
-    await openOverrideField(key, picked.field)
-    void openEditor(key)
+    const openedDialog = await openOverrideField(key, picked.field)
+    // 自定义输入框已经在屏幕上，这时再重开编辑屏会把它顶掉。
+    if (!openedDialog) void openEditor(key)
   }
 
   /** 输入：无；输出：无。预期：已有覆盖列表 + 新增入口。 */
