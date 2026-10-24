@@ -4,7 +4,11 @@ import { resolveMessages } from "../src/i18n/index.ts"
 import { DEFAULT_SETTINGS } from "../src/shared/settings.ts"
 import {
   SETTINGS_ACTIONS,
+  buildGroupOptions,
+  buildModelSectionOptions,
+  buildSectionOptions,
   buildSettingsOptions,
+  itemsOfGroup,
   limitLabel,
   percentLabel,
 } from "../src/tui/settings/options.ts"
@@ -36,8 +40,6 @@ describe("buildSettingsOptions", () => {
       "decompressTempMaxAgeHours",
       "decompressShowTokens",
       "language",
-      "modelCurrent",
-      "modelOverrides",
     ])
     expect([...new Set(options.map((option) => option.category))]).toEqual([
       "压缩",
@@ -45,7 +47,6 @@ describe("buildSettingsOptions", () => {
       "面板",
       "解压",
       "界面",
-      "按模型",
     ])
   })
 
@@ -87,5 +88,58 @@ describe("limitLabel / percentLabel", () => {
   it("百分比标签带窗口换算", () => {
     expect(percentLabel(10, 200_000)).toBe("10% ≈ 20k")
     expect(percentLabel(10, undefined)).toBe("10%")
+  })
+})
+
+describe("三层菜单", () => {
+  it("第一层只有全局默认与按模型", () => {
+    const sections = buildSectionOptions({
+      settings: DEFAULT_SETTINGS,
+      copy,
+      currentModel: "[google]gemini-3-pro",
+    })
+    expect(sections.map((section) => section.value)).toEqual(["global", "models"])
+    expect(sections[0]?.footer).toBe("压缩阈值 80% · 全部摘要上限 50%")
+    expect(sections[1]?.footer).toBe("[google]gemini-3-pro")
+  })
+
+  it("第二层是五个分组，每组带摘要", () => {
+    const groups = buildGroupOptions({ settings: DEFAULT_SETTINGS, copy, window: 200_000 })
+    expect(groups.map((group) => group.value)).toEqual([
+      "compress",
+      "summary",
+      "panel",
+      "decompress",
+      "interface",
+    ])
+    expect(groups[0]?.footer).toBe("80% · 50k · 开")
+  })
+
+  it("第三层按分组过滤，且不漏项", () => {
+    const all = buildSettingsOptions({ settings: DEFAULT_SETTINGS, copy, window: 200_000 })
+    const compress = itemsOfGroup(all, "compress")
+    expect(compress.map((option) => option.value)).toEqual([
+      "limit",
+      "threshold",
+      "nudge",
+      "autoCompress",
+      "enableCompressTool",
+      "enableDecompressTool",
+    ])
+    const total = (["compress", "summary", "panel", "decompress", "interface"] as const).reduce(
+      (sum, group) => sum + itemsOfGroup(all, group).length,
+      0,
+    )
+    expect(total).toBe(all.length)
+  })
+
+  it("按模型第一层显示当前模型与覆盖数量", () => {
+    const options = buildModelSectionOptions({
+      settings: { ...DEFAULT_SETTINGS, models: { "google/gemini-3-pro": { triggerPercent: 85 } } },
+      copy,
+      currentModel: "[google]gemini-3-pro",
+    })
+    expect(options.map((option) => option.value)).toEqual(["current", "overrides"])
+    expect(options[1]?.footer).toBe("已配置 1 条")
   })
 })

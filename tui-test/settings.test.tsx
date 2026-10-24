@@ -12,7 +12,9 @@ interface Captured {
   options?: DialogSelectOptions<string>
   run?: () => void
   readonly answers: (string | undefined)[]
-  /** 主菜单 select 调用次数（用于断言“弹窗型动作不重开菜单”）。 */
+  /** 每次 select 的选项快照，按调用顺序；用于断言三层菜单的每一层。 */
+  readonly history: DialogSelectOptions<string>[]
+  /** select 调用次数（用于断言“弹窗型动作不重开菜单”）。 */
   selects: number
   /** dialog.show 调用次数。 */
   shows: number
@@ -40,6 +42,7 @@ function fakeContext(captured: Captured): Context {
         select: (options: DialogSelectOptions<string>) => {
           captured.selects += 1
           captured.options = options
+          captured.history.push(options)
           return Promise.resolve(captured.answers.shift())
         },
         show: () => {
@@ -67,7 +70,7 @@ function fakeContext(captured: Captured): Context {
 
 /** 输入：每次 select 的返回值队列；输出：渲染好的 app + 捕获对象 + 设置信号。 */
 async function mount(answers: (string | undefined)[]) {
-  const captured: Captured = { answers, selects: 0, shows: 0 }
+  const captured: Captured = { answers, history: [], selects: 0, shows: 0 }
   const context = fakeContext(captured)
   const [settings, setSettings] = createSignal<Settings>({
     ...DEFAULT_SETTINGS,
@@ -91,25 +94,48 @@ async function mount(answers: (string | undefined)[]) {
 }
 
 describe("SettingsCommand", () => {
-  test("打开菜单时按分类分组", async () => {
+  test("第一层只有全局默认与按模型", async () => {
     const { app, captured } = await mount([])
     try {
       captured.run?.()
-      await app.waitFor(() => captured.options !== undefined)
-      const options = captured.options?.options ?? []
-      expect(options.map((option) => option.value)).toContain("showCacheChart")
-      expect(options.map((option) => option.value)).toContain("showCacheLog")
-      expect(options.map((option) => option.value)).toContain("showSummaries")
-      expect(options.map((option) => option.value)).toContain("summaryFormat")
-      expect(options.map((option) => option.value)).toContain("modelCurrent")
-      expect(options.map((option) => option.value)).toContain("modelOverrides")
-      expect([...new Set(options.map((option) => option.category))]).toEqual([
-        "压缩",
-        "摘要",
-        "面板",
-        "解压",
-        "界面",
-        "按模型",
+      await app.waitFor(() => captured.history.length >= 1)
+      const options = captured.history[0]?.options ?? []
+      expect(options.map((option) => option.value)).toEqual(["global", "models"])
+      expect(options.map((option) => option.title)).toEqual(["全局默认", "按模型"])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("全局默认第二层是六个分组里的五个", async () => {
+    const { app, captured } = await mount(["global"])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.history.length >= 2)
+      const options = captured.history[1]?.options ?? []
+      expect(options.map((option) => option.value)).toEqual([
+        "compress",
+        "summary",
+        "panel",
+        "decompress",
+        "interface",
+      ])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("第三层只显示该分组的项", async () => {
+    const { app, captured } = await mount(["global", "panel"])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.history.length >= 3)
+      const options = captured.history[2]?.options ?? []
+      expect(options.map((option) => option.value)).toEqual([
+        "show",
+        "showCacheChart",
+        "showCacheLog",
+        "showSummaries",
       ])
     } finally {
       app.renderer.destroy()
@@ -117,7 +143,7 @@ describe("SettingsCommand", () => {
   })
 
   test("选择 showCacheChart 会翻转设置", async () => {
-    const { app, captured, settings } = await mount(["showCacheChart", undefined])
+    const { app, captured, settings } = await mount(["global", "panel", "showCacheChart", undefined])
     try {
       captured.run?.()
       await app.waitFor(() => settings().showCacheChart === false)
@@ -128,7 +154,7 @@ describe("SettingsCommand", () => {
   })
 
   test("选择 summaryFormat 会切到 json", async () => {
-    const { app, captured, settings } = await mount(["summaryFormat", "json", undefined])
+    const { app, captured, settings } = await mount(["global", "summary", "summaryFormat", "json", undefined])
     try {
       captured.run?.()
       await app.waitFor(() => settings().summaryFormat === "json")
@@ -138,7 +164,7 @@ describe("SettingsCommand", () => {
     }
   })
 
-  test("取消主菜单时不写设置也不重开", async () => {
+  test("取消第一层时不写设置也不重开", async () => {
     const { app, captured, settings } = await mount([undefined])
     try {
       captured.run?.()
@@ -151,33 +177,33 @@ describe("SettingsCommand", () => {
     }
   })
 
-  test("弹窗型动作只开弹窗，不重开主菜单", async () => {
-    const { app, captured } = await mount(["nudge"])
+  test("弹窗型动作只开弹窗，不重开菜单", async () => {
+    const { app, captured } = await mount(["global", "compress", "nudge"])
     try {
       captured.run?.()
       await app.waitFor(() => captured.shows === 1)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(captured.selects).toBe(1)
+      expect(captured.selects).toBe(3)
     } finally {
       app.renderer.destroy()
     }
   })
 
   test("limit 选自定义时只继续开输入框", async () => {
-    const { app, captured } = await mount(["limit", "custom"])
+    const { app, captured } = await mount(["global", "compress", "limit", "custom"])
     try {
       captured.run?.()
       await app.waitFor(() => captured.shows === 1)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      // 主菜单一次 + limit 选择一次；自定义输入框已经打开，不能再弹主菜单。
-      expect(captured.selects).toBe(2)
+      // 第一层 + 分组 + limit 选择 + limit 自己的选项；自定义输入框已打开，不能再弹菜单。
+      expect(captured.selects).toBe(4)
     } finally {
       app.renderer.destroy()
     }
   })
 
   test("nudge 间隔 0 是合法值，不显示 invalid", async () => {
-    const captured: Captured = { answers: [] }
+    const captured: Captured = { answers: [], history: [], selects: 0, shows: 0 }
     const context = fakeContext(captured)
     const copy = resolveMessages("zh")
     const app = await testRender(

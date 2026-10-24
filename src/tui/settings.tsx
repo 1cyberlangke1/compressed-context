@@ -48,7 +48,16 @@ import {
   type OverrideAction,
   type PickerValue,
 } from "./settings/models.ts"
-import { buildSettingsOptions, type SettingsAction, type ToggleSetting } from "./settings/options.ts"
+import {
+  buildGroupOptions,
+  buildModelSectionOptions,
+  buildSectionOptions,
+  buildSettingsOptions,
+  itemsOfGroup,
+  type SettingsAction,
+  type SettingsGroup,
+  type ToggleSetting,
+} from "./settings/options.ts"
 import type { UpdateSettings } from "./types.ts"
 
 /** 可选上限预设；菜单里只出现合法值（最低 50k）。 */
@@ -302,7 +311,7 @@ export function SettingsCommand(props: {
     await props.updateSettings((draft) => {
       draft[key] = !draft[key]
     })
-    void openSettings()
+    reopenCurrent()
   }
 
   const openDecompressInline = (): void => {
@@ -642,19 +651,20 @@ export function SettingsCommand(props: {
   }
 
   /**
-   * 每个菜单项自己的处理，包含「谁重开主菜单」：
-   * 选择型（语言/格式/总开关/上限）重开，弹窗型不重开，避免把对话框顶掉。
-   */  const handlers: Partial<Record<SettingsAction, () => void | Promise<void>>> = {
+   * 每个菜单项自己的处理，包含「谁重开」：
+   * 选择型重开当前分组；弹窗型不重开，避免把对话框顶掉。
+   */
+  const handlers: Partial<Record<SettingsAction, () => void | Promise<void>>> = {
     show: async () => {
       await props.updateSettings((draft) => {
         draft.enabled = !draft.enabled
       })
-      void openSettings()
+      reopenCurrent()
     },
     limit: async () => {
       const custom = await openLimit()
-      // 自定义对话框已经打开时不要再弹主菜单，否则会把它顶掉。
-      if (!custom) void openSettings()
+      // 自定义对话框已经打开时不要再弹菜单，否则会把它顶掉。
+      if (!custom) reopenCurrent()
     },
     threshold: openThreshold,
     nudge: openNudge,
@@ -662,11 +672,11 @@ export function SettingsCommand(props: {
     totalPercent: openSummaryTotal,
     summaryLanguage: async () => {
       await openSummaryLanguage()
-      void openSettings()
+      reopenCurrent()
     },
     summaryFormat: async () => {
       await openSummaryFormat()
-      void openSettings()
+      reopenCurrent()
     },
     autoCompress: () => toggleSetting("autoCompress"),
     enableCompressTool: () => toggleSetting("enableCompressTool"),
@@ -682,28 +692,84 @@ export function SettingsCommand(props: {
     decompressTempMaxAgeHours: openDecompressMaxAge,
     language: async () => {
       await openLocale()
-      void openSettings()
+      reopenCurrent()
     },
-    modelCurrent: openCurrentModel,
-    modelOverrides: openOverrides,
   }
 
-  async function openSettings(): Promise<void> {
-    // 每次打开菜单都按当前会话模型刷新窗口，避免显示成别的模型。
-    await fetchWindow(routeSessionID())
-    const window = currentWindow()
-    const currentKey = currentKeyOf(modelEntries(), currentModel())
+  /** 当前浏览的分组；动作完成后回到这一组，而不是回到第一层。 */
+  let activeGroup: SettingsGroup = "compress"
+
+  /** 输入：无；输出：无。预期：重开当前分组。 */
+  const reopenCurrent = (): void => {
+    void openGroup(activeGroup)
+  }
+
+  /** 输入：分组；输出：是否返回上一层。预期：动作处理完返回 false（已重开或已弹窗）。 */
+  async function openGroup(group: SettingsGroup): Promise<boolean> {
+    activeGroup = group
     const picked = await props.context.ui.dialog.select<SettingsAction>({
-      title: copy().settings.title,
-      options: buildSettingsOptions({
+      title: copy().settings.categories[group],
+      options: itemsOfGroup(
+        buildSettingsOptions({ settings: props.settings, copy: copy(), window: currentWindow() }),
+        group,
+      ),
+    })
+    if (picked === undefined) return true
+    await handlers[picked]?.()
+    return false
+  }
+
+  /** 输入：无；输出：是否返回第一层。预期：全局默认的五组循环。 */
+  async function openGlobalSection(): Promise<boolean> {
+    for (;;) {
+      const group = await props.context.ui.dialog.select<SettingsGroup>({
+        title: copy().settings.sectionGlobal,
+        options: buildGroupOptions({ settings: props.settings, copy: copy(), window: currentWindow() }),
+      })
+      if (group === undefined) return true
+      if (!(await openGroup(group))) return false
+    }
+  }
+
+  /** 输入：无；输出：是否返回第一层。预期：按模型的第一层。 */
+  async function openModelSection(): Promise<boolean> {
+    const currentKey = currentKeyOf(modelEntries(), currentModel())
+    const picked = await props.context.ui.dialog.select<"current" | "overrides">({
+      title: copy().settings.sectionModel,
+      options: buildModelSectionOptions({
         settings: props.settings,
         copy: copy(),
-        window,
         ...(currentKey === undefined ? {} : { currentModel: keyLabel(currentKey) }),
       }),
     })
-    if (picked === undefined) return
-    await handlers[picked]?.()
+    if (picked === undefined) return true
+    if (picked === "current") await openCurrentModel()
+    else await openOverrides()
+    return false
+  }
+
+  /**
+   * 输入：无。
+   * 输出：无。
+   * 预期：设置第一层只给「全局默认 / 按模型」两项；esc 逐层返回。
+   */
+  async function openSettings(): Promise<void> {
+    for (;;) {
+      // 每次打开菜单都按当前会话模型刷新窗口，避免显示成别的模型。
+      await fetchWindow(routeSessionID())
+      const currentKey = currentKeyOf(modelEntries(), currentModel())
+      const section = await props.context.ui.dialog.select<"global" | "models">({
+        title: copy().settings.title,
+        options: buildSectionOptions({
+          settings: props.settings,
+          copy: copy(),
+          ...(currentKey === undefined ? {} : { currentModel: keyLabel(currentKey) }),
+        }),
+      })
+      if (section === undefined) return
+      const back = section === "models" ? await openModelSection() : await openGlobalSection()
+      if (!back) return
+    }
   }
 
   props.context.keymap.layer(() => ({

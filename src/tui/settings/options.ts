@@ -85,11 +85,142 @@ export const SETTINGS_ACTIONS = [
   "decompressTempMaxAgeHours",
   "decompressShowTokens",
   "language",
-  "modelCurrent",
-  "modelOverrides",
 ] as const
 
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number]
+
+/** 全局默认下的五个分组；顺序即菜单顺序。 */
+export const SETTINGS_GROUPS = ["compress", "summary", "panel", "decompress", "interface"] as const
+
+export type SettingsGroup = (typeof SETTINGS_GROUPS)[number]
+
+/** 每个动作属于哪个分组；用于三层菜单里过滤。 */
+export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
+  limit: "compress",
+  threshold: "compress",
+  nudge: "compress",
+  autoCompress: "compress",
+  enableCompressTool: "compress",
+  enableDecompressTool: "compress",
+  blockPercent: "summary",
+  totalPercent: "summary",
+  summaryLanguage: "summary",
+  summaryFormat: "summary",
+  showTimeline: "summary",
+  showBlockTokens: "summary",
+  show: "panel",
+  showCacheChart: "panel",
+  showCacheLog: "panel",
+  showSummaries: "panel",
+  decompressInlineMax: "decompress",
+  decompressTempCap: "decompress",
+  decompressTempMaxAgeHours: "decompress",
+  decompressShowTokens: "decompress",
+  language: "interface",
+}
+
+/** 输入：全部选项 + 分组；输出：该分组的选项。预期：保持原有顺序。 */
+export function itemsOfGroup(
+  options: readonly DialogSelectOption<SettingsAction>[],
+  group: SettingsGroup,
+): readonly DialogSelectOption<SettingsAction>[] {
+  return options.filter((option) => ACTION_GROUPS[option.value] === group)
+}
+
+/**
+ * 输入：设置 + 文案 + 当前模型。
+ * 输出：设置第一层：全局默认 / 按模型。
+ * 预期：两项都带摘要，打开后一眼能看到当前阈值与当前模型。
+ */
+export function buildSectionOptions(input: {
+  readonly settings: Settings
+  readonly copy: Messages
+  readonly currentModel?: string
+}): readonly DialogSelectOption<"global" | "models">[] {
+  const { settings, copy } = input
+  const total = effectiveSummaryTotalPercent(settings)
+  return [
+    {
+      title: copy.settings.sectionGlobal,
+      value: "global",
+      footer: `${copy.settings.threshold} ${settings.triggerPercent.toString()}% · ${copy.settings.summaryTotalPercent} ${total.toString()}%`,
+    },
+    {
+      title: copy.settings.sectionModel,
+      value: "models",
+      footer: input.currentModel ?? copy.settings.overrideNone,
+    },
+  ]
+}
+
+/**
+ * 输入：设置 + 文案 + 窗口。
+ * 输出：全局默认下的五个分组，每组带一行摘要。
+ * 预期：只显示分组，不显示具体项，避免一屏二十多行。
+ */
+export function buildGroupOptions(input: {
+  readonly settings: Settings
+  readonly copy: Messages
+  readonly window: number | undefined
+}): readonly DialogSelectOption<SettingsGroup>[] {
+  const { settings, copy } = input
+  const onOff = (value: boolean): string => (value ? copy.settings.on : copy.settings.off)
+  const block = effectiveSummaryBlockPercent(settings)
+  const total = effectiveSummaryTotalPercent(settings)
+  const nudge = settings.nudgeGrowthTokens === 0 ? copy.settings.off : formatTokens(settings.nudgeGrowthTokens)
+  return [
+    {
+      title: copy.settings.categories.compress,
+      value: "compress",
+      footer: `${settings.triggerPercent.toString()}% · ${nudge} · ${onOff(settings.autoCompress)}`,
+    },
+    {
+      title: copy.settings.categories.summary,
+      value: "summary",
+      footer: `${block.toString()}% / ${total.toString()}% · ${summaryFormatLabel(settings, copy)} · ${summaryLanguageLabel(settings, copy)}`,
+    },
+    {
+      title: copy.settings.categories.panel,
+      value: "panel",
+      footer: [onOff(settings.enabled), onOff(settings.showCacheChart), onOff(settings.showSummaries)].join(" · "),
+    },
+    {
+      title: copy.settings.categories.decompress,
+      value: "decompress",
+      footer: `${formatTokens(effectiveDecompressInlineMax(settings))} · ${effectiveDecompressTempCap(settings).toString()} · ${effectiveDecompressTempMaxAgeHours(settings).toString()}h`,
+    },
+    {
+      title: copy.settings.categories.interface,
+      value: "interface",
+      footer: localeLabel(settings, copy),
+    },
+  ]
+}
+
+/**
+ * 输入：设置 + 文案 + 当前模型。
+ * 输出：按模型第一层的两项。
+ * 预期：没有当前模型时右侧显示「未识别」，点进去退回选择器。
+ */
+export function buildModelSectionOptions(input: {
+  readonly settings: Settings
+  readonly copy: Messages
+  readonly currentModel?: string
+}): readonly DialogSelectOption<"current" | "overrides">[] {
+  const { settings, copy } = input
+  return [
+    {
+      title: copy.settings.modelCurrent,
+      value: "current",
+      footer: input.currentModel ?? copy.settings.overrideNone,
+    },
+    {
+      title: copy.settings.modelOverrides,
+      value: "overrides",
+      footer: copy.settings.modelsConfigured(Object.keys(settings.models).length),
+    },
+  ]
+}
 
 /** 设置菜单里可切换的布尔项。 */
 export type ToggleSetting = Extract<
@@ -114,7 +245,6 @@ export function buildSettingsOptions(input: {
   readonly settings: Settings
   readonly copy: Messages
   readonly window: number | undefined
-  readonly currentModel?: string
 }): readonly DialogSelectOption<SettingsAction>[] {
   const { settings, copy, window } = input
   const onOff = (value: boolean): string => (value ? copy.settings.on : copy.settings.off)
@@ -246,18 +376,6 @@ export function buildSettingsOptions(input: {
       value: "language",
       footer: localeLabel(settings, copy),
       category: copy.settings.categories.interface,
-    },
-    {
-      title: copy.settings.modelCurrent,
-      value: "modelCurrent",
-      footer: input.currentModel ?? copy.settings.overrideNone,
-      category: copy.settings.categories.models,
-    },
-    {
-      title: copy.settings.modelOverrides,
-      value: "modelOverrides",
-      footer: copy.settings.modelsConfigured(Object.keys(settings.models).length),
-      category: copy.settings.categories.models,
     },
   ]
 }

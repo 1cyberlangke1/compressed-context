@@ -82,6 +82,8 @@ export const zh: Messages = {
       interface: "界面",
       models: "按模型",
     },
+    sectionGlobal: "全局默认",
+    sectionModel: "按模型",
     modelCurrent: "当前模型",
     modelOverrides: "模型覆盖",
     modelsConfigured: (count) => `已配置 ${count.toString()} 条`,

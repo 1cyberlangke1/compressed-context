@@ -78,6 +78,8 @@ export interface Messages {
       readonly interface: string
       readonly models: string
     }
+    readonly sectionGlobal: string
+    readonly sectionModel: string
     readonly modelCurrent: string
     readonly modelOverrides: string
     readonly modelsConfigured: (count: number) => string

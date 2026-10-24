@@ -82,6 +82,8 @@ export const en: Messages = {
       interface: "Interface",
       models: "Per model",
     },
+    sectionGlobal: "Global default",
+    sectionModel: "Per model",
     modelCurrent: "Current model",
     modelOverrides: "Model overrides",
     modelsConfigured: (count) => `${count.toString()} configured`,
