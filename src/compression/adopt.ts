@@ -47,7 +47,7 @@ export async function adoptNativeCheckpoint(
 
   const summary = toMarkdownSummary(parsed.summary)
   return stateStore(ctx.storage).transact(sessionID, (state) => {
-    if (state.blocks.length > 0 || state.pending !== undefined || state.terminal !== undefined) {
+    if (state.blocks.length > 0 || state.pending !== undefined) {
       return { result: false }
     }
     const block = createT1Block({

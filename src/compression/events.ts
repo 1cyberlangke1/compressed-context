@@ -45,10 +45,6 @@ async function reconcile(ctx: Plugin.Context, sessionID: string, state: State): 
 
 export type CompactionEventType = "ended" | "failed"
 
-/** 摘要链仍超预算且没有任何合法合并候选时的终止提示。 */
-export const TERMINAL_MESSAGE =
-  "compression cannot reduce this context further: start a new session or use native compaction"
-
 /**
  * 输入：服务端上下文 + 事件类型 + sessionID + 事件自带错误（仅 failed 有）。
  * 输出：无。

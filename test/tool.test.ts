@@ -97,13 +97,12 @@ function decodes(schema: unknown, value: unknown): boolean {
 }
 
 /**
- * 输入：storage + 可选 terminal + 可选摘要格式。
+ * 输入：storage + 可选摘要格式。
  * 输出：捕获的 execute、工具定义读取器、注册句柄。
  * 预期：transform 替身会在 reload 时重跑回调，用来验证 setFormat 真的换了工具。
  */
 async function setup(input: {
   storage: StorageLike & { readonly reads: string[] }
-  terminal?: string
   format?: SummaryFormat
 }): Promise<{
   execute: ToolExecute
@@ -137,10 +136,9 @@ async function setup(input: {
   await saveState(input.storage, "ses_a", {
     blocks: [],
     attempts: 0,
-    ...(input.terminal === undefined ? {} : { terminal: input.terminal }),
   })
   if (input.format !== undefined) {
-    await input.storage.set("settings", { ...DEFAULT_SERVER_SETTINGS, summaryFormat: input.format })
+    await input.storage.set("settings", { ...DEFAULT_SERVER_SETTINGS, summaryFormat: input.format } as unknown as Schema.Json)
   }
   const cache = new Map<string, readonly MessageLike[]>([
     ["ses_a", [message("m1", "a".repeat(6_000))]],
@@ -196,15 +194,14 @@ describe("compress tool", () => {
     expect(result.output.status).toBe("queued")
   })
 
-  it("终止态拒绝压缩", async () => {
+  it("存储里的旧 terminal 字段不再阻止压缩", async () => {
     const storage = createStorage()
     await storage.set("window:fake/model", 100_000)
-    const { execute } = await setup({ storage, terminal: "stop now" })
+    // 旧版本写入的 terminal 已不再读取：工具照常入队。
+    await saveState(storage, "ses_a", { blocks: [], attempts: 0 })
+    const { execute } = await setup({ storage })
     const result = await execute(summary(), { sessionID: "ses_a" })
-    expect(result.output.status).toBe("error")
-    expect(result.output.error).toContain("stop now")
-    expect(result.output.block).toBeUndefined()
-    expect(result.content).toContain("stop now")
+    expect(result.output.status).toBe("queued")
   })
 })
 
@@ -220,7 +217,7 @@ describe("decompress tool", () => {
 
   it("工具关闭时 output 也带 error", async () => {
     const storage = createStorage()
-    await storage.set("settings", { ...DEFAULT_SERVER_SETTINGS, enableDecompressTool: false })
+    await storage.set("settings", { ...DEFAULT_SERVER_SETTINGS, enableDecompressTool: false } as unknown as Schema.Json)
     const execute = await setupDecompress(storage)
     const result = await execute({ block: "b1", full: false }, { sessionID: "ses_a" })
     expect(result.output.error).toContain("disabled")

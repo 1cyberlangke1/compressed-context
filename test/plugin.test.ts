@@ -101,7 +101,7 @@ describe("服务端插件入口", () => {
 
     await plugin.setup(ctx)
 
-    expect(hooks.map((hook) => hook.name)).toEqual(["context", "compaction", "prompt"])
+    expect(hooks.map((hook) => hook.name)).toEqual(["context", "compaction"])
     expect(tools).toEqual(["compress", "decompress"])
   })
 

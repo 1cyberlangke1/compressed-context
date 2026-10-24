@@ -1,13 +1,10 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { resolveForModel, resolveSummaryLimits } from "../shared/settings.ts"
-import { mergeTerminalMetadata } from "../shared/stats.ts"
-import { updateSessionMetadata } from "./session-metadata.ts"
 import { renderActiveSummary } from "./active-summary-cache.ts"
 import { measuredPromptTokens, resolveLimit } from "./auto.ts"
 import { createT1Block } from "./block.ts"
-import { distillOnce, isTerminal, planT1Phase } from "./distill.ts"
-import { TERMINAL_MESSAGE } from "./events.ts"
+import { distillOnce, planT1Phase } from "./distill.ts"
 import { endCompaction, tryBeginCompaction } from "./inflight.ts"
 import { activeBlocks } from "./render.ts"
 import { messageRange, olderMessages, type MessageLike } from "./select.ts"
@@ -31,7 +28,7 @@ export interface CompactionEvent {
 /**
  * 输入：插件上下文 + compaction 事件。
  * 输出：无；预期：T1 生成摘要或 T2/T3 合并块，把结果写回 event.result。
- *       终止时记录 terminal；异常写入 lastError 后重新抛出，交给失败事件。
+ *       异常写入 lastError 后重新抛出，交给失败事件。
  */
 export async function handleCompaction(ctx: Plugin.Context, event: CompactionEvent): Promise<void> {
   // 另一个实例已经给出摘要时不要覆盖；同一事件在多个 hook 间共享 result。
@@ -40,7 +37,6 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
   if (!tryBeginCompaction(event.sessionID)) return
   try {
     const state = await loadState(ctx.storage, event.sessionID)
-    if (state.terminal !== undefined) throw new Error(state.terminal)
     // 压缩成功后 nudge 基线要跟着重置到最近一次真实 usage；在钩子开始时取，避免事后上下文被裁掉。
     const baseline = await measuredPromptTokens(ctx, event.sessionID)
     const settings = resolveForModel(await loadServerSettings(ctx), event.model)
@@ -52,26 +48,23 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       showBlockTokens: settings.showBlockTokens,
     }
 
-    /** 保存这一层的结果；pending 可选，phase 由下一层决定，overrides 只给终止分支用。 */
+    /** 保存这一层的结果；pending 可选，phase 由下一层决定。 */
     const save = async (
       blocks: readonly Block[],
       pending: Block | undefined,
       phase: CompactionPhase | undefined,
       error: string | undefined,
-      overrides: { attempts?: number; terminal?: string } = {},
     ): Promise<void> => {
       await stateStore(ctx.storage).transact(event.sessionID, (current) => {
         // 以锁内的最新状态为基准。钩子开头拿到的快照可能已经过时：
-        // 期间别的分支会改写 nudgeCount / terminal / lastError，用旧快照整体覆盖会丢更新。
+        // 期间别的分支会改写 nudgeCount / lastError，用旧快照整体覆盖会丢更新。
         const lastError = error ?? current.lastError
-        const terminal = overrides.terminal ?? current.terminal
         const next: State = {
           blocks,
-          attempts: overrides.attempts ?? current.attempts,
+          attempts: current.attempts,
           ...(pending === undefined ? {} : { pending }),
           ...(phase === undefined ? {} : { phase }),
           ...(lastError === undefined ? {} : { lastError }),
-          ...(terminal === undefined ? {} : { terminal }),
           ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
           ...(baseline !== undefined
             ? { nudgeBaselineTokens: baseline }
@@ -113,29 +106,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         result.error,
       )
       event.result = { summary: result.summary }
-      // 摘要链仍超预算且没有合法候选：无法再压，记录终止原因并停止自动压缩。
-      // pending 必须保留，否则刚合并出的块会从状态里丢掉。
-      if (
-        isTerminal(
-          result,
-          activeBlocks(result.blocks, result.pending),
-          limits.budgetTokens,
-          limits.totalChars,
-        )
-      ) {
-        await save(result.blocks, result.pending, undefined, TERMINAL_MESSAGE, {
-          attempts: 0,
-          terminal: TERMINAL_MESSAGE,
-        })
-        // 让 TUI 面板能显示终止原因；写失败不影响压缩状态。
-        try {
-          await updateSessionMetadata(ctx, event.sessionID, (metadata) =>
-            mergeTerminalMetadata(metadata, TERMINAL_MESSAGE),
-          )
-        } catch {
-          // best effort
-        }
-      }
+      // 预算内不会再排下一层；没有合法候选时 distill 自己返回未合并，phase 随之清空。
       return
     }
 
@@ -200,7 +171,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       { ...state, pending },
       renderOptions,
     )
-    const nextPhase = planT1Phase(summary, active, limits.budgetTokens, limits.totalChars)
+    const nextPhase = planT1Phase(summary, active, limits.budgetTokens)
     await save(state.blocks, pending, nextPhase, undefined)
     event.result = { summary }
   } catch (error) {

@@ -1,13 +1,14 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { formatTokens } from "../shared/format.ts"
-import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE, resolveForModel, triggerTokens } from "../shared/settings.ts"
-import { estimateCategories, totalCategories } from "../shared/tokens.ts"
+import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE, resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
+import { countText, estimateCategories, totalCategories } from "../shared/tokens.ts"
 import {
   endCompactionRequest,
   isCompactionInFlight,
   tryBeginCompactionRequest,
 } from "./inflight.ts"
+import { renderAll } from "./render.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
 import {
   EFFECTIVE_WINDOW_KEY,
@@ -17,7 +18,7 @@ import {
   resolvedWindowKey,
   windowKey,
 } from "./settings.ts"
-import { MAX_COMPRESSION_ATTEMPTS, loadState, type State } from "./state.ts"
+import { MAX_COMPRESSION_ATTEMPTS, clearPhase, loadState, type State } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -89,14 +90,49 @@ async function effectiveLimit(
 /**
  * 输入：会话状态。
  * 输出：本轮自动压缩是否必须跳过。
- * 预期：有 pending、已达尝试上限、或已进入终止态时都不再入队。
+ * 预期：有 pending 或已达尝试上限时不再入队；没有「终止态」——
+ *       摘要压不动只是这一次没有候选，新消息进来后仍会继续压缩。
  */
 function blockedByState(state: State): boolean {
-  return (
-    state.pending !== undefined ||
-    state.attempts >= MAX_COMPRESSION_ATTEMPTS ||
-    state.terminal !== undefined
-  )
+  return state.pending !== undefined || state.attempts >= MAX_COMPRESSION_ATTEMPTS
+}
+
+/**
+ * 输入：会话状态 + 合并后的设置 + 生效窗口。
+ * 输出：摘要链是否真的超过 token 预算。
+ * 预期：只按 countText 判断。窗口百分比是 token 口径，字符数不能拿来比较。
+ */
+function summaryOverBudget(
+  state: State,
+  settings: ReturnType<typeof resolveForModel>,
+  windowTokens: number | undefined,
+): boolean {
+  const limits = resolveSummaryLimits(settings, windowTokens)
+  const summary = renderAll(state.blocks, state.pending, {
+    showTimeline: settings.showTimeline,
+    showBlockTokens: settings.showBlockTokens,
+  })
+  return countText(summary) > limits.budgetTokens
+}
+
+/**
+ * 输入：插件上下文 + sessionID + 会话状态 + 设置 + 窗口。
+ * 输出：无。
+ * 预期：摘要回到预算内时清掉残留的 phase。phase 不清会让每个 step 都入队一次压缩，
+ *       完全绕过 triggerPercent（之前的「疯狂触发」）。
+ */
+async function clearStalePhaseIfWithinBudget(
+  ctx: Plugin.Context,
+  sessionID: string,
+  state: State,
+  settings: ReturnType<typeof resolveForModel>,
+  windowTokens: number | undefined,
+): Promise<void> {
+  if (summaryOverBudget(state, settings, windowTokens)) return
+  await stateStore(ctx.storage).transact(sessionID, (current) => {
+    if (current.phase === undefined) return { result: undefined }
+    return { next: clearPhase(current), result: undefined }
+  })
 }
 
 /**
@@ -180,8 +216,12 @@ export async function maybeAutoCompressStep(input: {
     if (effective - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
 
     if (state.phase !== undefined) {
-      await requestCompaction(input.ctx, input.sessionID)
-      return
+      // 预算已经回落就不要再压：清掉 phase 后照常走阈值判断。
+      if (summaryOverBudget(state, settings, effective)) {
+        await requestCompaction(input.ctx, input.sessionID)
+        return
+      }
+      await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
     }
 
     const threshold = triggerTokens(settings, effective)
@@ -369,11 +409,14 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     // 窗口小到连最小摘要都放不下：压缩必然失败，别反复入队空压缩。
     if (limit - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
 
-    // 已排下一层蒸馏：下一次模型请求就入队 compaction，由 compaction 钩子合并。
+    // 已排下一层蒸馏：只有摘要确实还超预算才入队；预算已回落就清掉 phase。
     // 不能在 T1 刚结束时入队——那时历史里只剩 checkpoint，OpenCode 会拒绝压缩。
     if (state.phase !== undefined) {
-      await requestCompaction(input.ctx, input.sessionID)
-      return
+      if (summaryOverBudget(state, settings, limit)) {
+        await requestCompaction(input.ctx, input.sessionID)
+        return
+      }
+      await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
     }
 
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)

@@ -63,7 +63,7 @@ function legacyBlock(
 }
 
 describe("state transitions", () => {
-  it("commitPending 转正 pending，清 lastError/terminal，保留 phase", () => {
+  it("commitPending 转正 pending，清 lastError，保留 phase", () => {
     const pending = block("b2", 2)
     const next = commitPending({
       blocks: [block("b1", 1)],
@@ -71,14 +71,12 @@ describe("state transitions", () => {
       phase: "t2",
       attempts: 2,
       lastError: "old error",
-      terminal: "old terminal",
     })
     expect(next.blocks.map((item) => item.id)).toEqual(["b1", "b2"])
     expect(next.pending).toBeUndefined()
     expect(next.attempts).toBe(0)
     expect(next.phase).toBe("t2")
     expect(next.lastError).toBeUndefined()
-    expect(next.terminal).toBeUndefined()
   })
 
   it("commitPending 保留提醒基线与计数", () => {
@@ -98,14 +96,13 @@ describe("state transitions", () => {
     expect(commitPending(state)).toBe(state)
   })
 
-  it("dropPending 清 pending/phase，保留 terminal，attempts+1", () => {
+  it("dropPending 清 pending/phase，attempts+1", () => {
     const next = dropPending(
       {
         blocks: [block("b1", 1)],
         pending: block("b2", 2),
         phase: "t3",
         attempts: 1,
-        terminal: "stop",
       },
       "failed",
     )
@@ -114,7 +111,6 @@ describe("state transitions", () => {
     expect(next.phase).toBeUndefined()
     expect(next.attempts).toBe(2)
     expect(next.lastError).toBe("failed")
-    expect(next.terminal).toBe("stop")
   })
 
   it("retryPending 保留 phase 到上限，第 3 次失败后清掉", () => {
@@ -132,7 +128,7 @@ describe("state transitions", () => {
 
   it("withPending 保留其他字段", () => {
     const next = withPending(
-      { blocks: [block("b1", 1)], attempts: 2, phase: "t2", lastError: "x", terminal: "stop" },
+      { blocks: [block("b1", 1)], attempts: 2, phase: "t2", lastError: "x" },
       block("b2", 2),
     )
     expect(next.blocks.map((item) => item.id)).toEqual(["b1"])
@@ -140,7 +136,6 @@ describe("state transitions", () => {
     expect(next.attempts).toBe(2)
     expect(next.phase).toBe("t2")
     expect(next.lastError).toBe("x")
-    expect(next.terminal).toBe("stop")
   })
 
   it("parseState 忽略旧 autoInFlight 字段", () => {

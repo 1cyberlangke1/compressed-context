@@ -17,11 +17,9 @@ import {
   MAX_DECOMPRESS_INLINE_MAX,
   MAX_DECOMPRESS_TEMP_CAP,
   MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
-  MAX_CONTEXT_LIMIT,
   MAX_NUDGE_GROWTH_TOKENS,
   MAX_SUMMARY_PERCENT,
   MAX_TRIGGER_PERCENT,
-  MIN_CONTEXT_LIMIT,
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
   MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
@@ -30,6 +28,7 @@ import {
   MIN_TRIGGER_PERCENT,
   isSummaryLanguage,
   isSummaryFormat,
+  normalizeModelOverrides,
   normalizeSettings,
   pruneModelOverride,
   resolveForModel,
@@ -67,8 +66,11 @@ async function readMergedConfigCached(paths: readonly string[]): Promise<ConfigR
   return result
 }
 
-/** 服务端从 TUI 收到的设置；字段与 shared 的 CompressionSettings 一致。 */
-export type ServerSettings = CompressionSettings
+/**
+ * 服务端需要的设置：全局字段 + 按模型覆盖。
+ * 必须带上 `models`，否则按模型设置只在面板生效、压缩时退回全局值。
+ */
+export type ServerSettings = CompressionSettings & { readonly models: Record<string, ModelOverride> }
 
 /** 读取/写入插件配置需要的上下文；只用到项目目录。 */
 export interface SettingsContext {
@@ -125,7 +127,7 @@ export async function readStoredWindow(
 }
 
 export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
-  contextLimit: "auto",
+  models: {},
   triggerPercent: 80,
   nudgeGrowthTokens: DEFAULT_NUDGE_GROWTH_TOKENS,
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
@@ -162,14 +164,14 @@ function inRange(value: unknown, min: number, max: number, allowZero = false): v
 export function parseServerSettings(value: unknown): ServerSettings | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const record = value as Record<string, unknown>
-  const limit = record["contextLimit"]
   const percent = record["triggerPercent"]
   const nudge = record["nudgeGrowthTokens"] ?? DEFAULT_NUDGE_GROWTH_TOKENS
   const blockPercent = record["summaryBlockPercent"] ?? DEFAULT_SUMMARY_BLOCK_PERCENT
   const totalPercent = record["summaryTotalPercent"] ?? DEFAULT_SUMMARY_TOTAL_PERCENT
   const language = record["summaryLanguage"] ?? "auto"
   const summaryFormat = record["summaryFormat"] ?? DEFAULT_SUMMARY_FORMAT
-  if (limit !== "auto" && !inRange(limit, MIN_CONTEXT_LIMIT, MAX_CONTEXT_LIMIT)) return undefined
+  // 按模型覆盖必须一起带过来，否则服务端永远只看到全局值，TUI 面板上的按模型设置形同虚设。
+  const models = normalizeModelOverrides(record["models"])
   if (!inRange(percent, MIN_TRIGGER_PERCENT, MAX_TRIGGER_PERCENT)) return undefined
   if (!inRange(nudge, MIN_NUDGE_GROWTH_TOKENS, MAX_NUDGE_GROWTH_TOKENS, true)) return undefined
   if (!inRange(blockPercent, MIN_SUMMARY_PERCENT, MAX_SUMMARY_PERCENT)) return undefined
@@ -216,7 +218,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     return undefined
   }
   return {
-    contextLimit: limit,
+    models,
     triggerPercent: Math.round(percent),
     nudgeGrowthTokens: Math.round(nudge),
     summaryBlockPercent: Math.round(blockPercent * 10) / 10,
@@ -296,4 +298,11 @@ export async function saveSettings(
   }
   // 写盘后立刻失效，避免随后的 settingsGet 读到旧缓存。
   configCache.delete(configCacheKey(paths))
+  // 旧版本写过全局 contextLimit：保存时顺手删掉，配置里不再留一个不生效的键。
+  const legacyKeys: (readonly string[])[] = merged.values["contextLimit"] === undefined ? [] : [["contextLimit"]]
+  if (legacyKeys.length > 0) {
+    const result = await removeConfigValues(target, legacyKeys)
+    if (!result.ok) throw new Error(result.error)
+    configCache.delete(configCacheKey(paths))
+  }
 }

@@ -10,7 +10,6 @@ import { loadServerSettings } from "./compression/settings.ts"
 import { hideTools, isSubagentSession } from "./compression/session-role.ts"
 import { updateSessionMetadata } from "./compression/session-metadata.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
-import { loadState } from "./compression/state.ts"
 import { registerCompressTool } from "./compression/tool.ts"
 import { registerDecompressTool } from "./compression/decompress-tool.ts"
 import { effectiveDecompressTempMaxAgeHours } from "./shared/settings.ts"
@@ -112,14 +111,6 @@ export default Plugin.define({
 
     disposables.push(
       await ctx.session.hook("compaction", (event) => handleCompaction(ctx, event)),
-    )
-
-    // 终止后拒绝一切新输入：把真实原因直接抛给宿主，TUI 会显示这条错误。
-    disposables.push(
-      await ctx.session.hook("prompt", async (event) => {
-        const state = await loadState(ctx.storage, event.sessionID)
-        if (state.terminal !== undefined) throw new Error(state.terminal)
-      }),
     )
 
     return () => {

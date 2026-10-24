@@ -111,7 +111,6 @@ export async function registerCompressTool(
         }
         if (isCompactionInFlight(sessionID)) return failure("compression already in progress")
         const state = await loadState(ctx.storage, sessionID)
-        if (state.terminal !== undefined) return failure(state.terminal)
         if (state.pending || state.phase !== undefined) return failure("compression already in progress")
 
         let eligible: readonly MessageLike[] | undefined
@@ -150,7 +149,6 @@ export async function registerCompressTool(
         // 长耗时的摘要校验在锁外完成；落 pending 时重新检查状态并用最新 blocks 生成 id。
         type SaveOutcome = { readonly error: string } | { readonly block: Block }
         const saved = await stateStore(ctx.storage).transact<SaveOutcome>(sessionID, (fresh) => {
-          if (fresh.terminal !== undefined) return { result: { error: fresh.terminal } }
           if (fresh.pending !== undefined || fresh.phase !== undefined) {
             return { result: { error: "compression already in progress" } }
           }

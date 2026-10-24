@@ -45,14 +45,23 @@ export interface DistillOnceResult {
   readonly error?: string
 }
 
-/** 输入：active 链；输出：所有保持 tier 单调不增的相邻合并候选。 */
+/** 当前最高层级；以后加 T4/T5 时改这里和 Tier 类型即可。 */
+const TOP_TIER = 3
+
+/**
+ * 输入：active 链；输出：所有保持 tier 单调不增的相邻合并候选。
+ * 预期：只有同层相邻块才能合并——T1+T1→T2、T2+T2→T3、T3+T3→T3；
+ *       跨层合并（T3 吞 T2/T1）会让高层顺着链把低层全部吃掉，禁止。
+ */
 export function mergeCandidates(blocks: readonly Block[]): readonly MergeCandidate[] {
   const candidates: MergeCandidate[] = []
   for (let index = 0; index < blocks.length - 1; index += 1) {
     const left = blocks[index]
     const right = blocks[index + 1]
     if (left === undefined || right === undefined) continue
-    const tier = Math.min(3, Math.max(left.tier, right.tier) + 1) as Tier
+    // 同层才合法；产物是上一层，最高层合完还是最高层。
+    if (left.tier !== right.tier) continue
+    const tier = Math.min(TOP_TIER, left.tier + 1) as Tier
     const previous = blocks[index - 1]
     const next = blocks[index + 2]
     if (previous !== undefined && previous.tier < tier) continue
@@ -62,34 +71,17 @@ export function mergeCandidates(blocks: readonly Block[]): readonly MergeCandida
   return candidates
 }
 
-/** 输入：T1 后的摘要链；输出：是否要自动排 T2。 */
+/**
+ * 输入：T1 后的摘要链 + 摘要 token 预算。
+ * 输出：是否要自动排 T2。
+ * 预期：只按 token 判断——摘要窗口百分比本身就是 token 口径，字符长度不能拿来和它比。
+ */
 export function planT1Phase(
   summary: string,
   active: readonly Block[],
   budgetTokens: number,
-  totalChars: number = Number.POSITIVE_INFINITY,
 ): CompactionPhase | undefined {
-  return (countText(summary) > budgetTokens || summary.length > totalChars) &&
-    mergeCandidates(active).length > 0
-    ? "t2"
-    : undefined
-}
-
-/**
- * 输入：一次蒸馏结果 + active 链 + 预算。
- * 输出：是否已经无法继续压缩（仍超预算，且没有任何合法合并候选）。
- * 预期：与层级无关——全 T3 只要还有两块可合并，或链本身没超预算，都不算终止；
- *       这次刚合并完但已经压不动，也算终止，否则下一次压缩会空转。
- */
-export function isTerminal(
-  result: DistillOnceResult,
-  active: readonly Block[],
-  budgetTokens: number,
-  totalChars: number,
-): boolean {
-  if (result.error !== undefined) return false
-  if (countText(result.summary) <= budgetTokens && result.summary.length <= totalChars) return false
-  return mergeCandidates(active).length === 0
+  return countText(summary) > budgetTokens && mergeCandidates(active).length > 0 ? "t2" : undefined
 }
 
 /** 输入：块；输出：候选列表里的简短描述。 */
@@ -123,14 +115,9 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     merged: false,
     ...(error === undefined ? {} : { error }),
   })
-  const totalChars = input.summaryTotalChars ?? Number.POSITIVE_INFINITY
-  if (
-    active.length < 2 ||
-    (countText(currentSummary) <= input.budgetTokens && currentSummary.length <= totalChars)
-  ) {
+  if (active.length < 2 || countText(currentSummary) <= input.budgetTokens) {
     return unchanged()
   }
-
   const candidates = mergeCandidates(active)
   if (candidates.length === 0) {
     return unchanged()
@@ -196,8 +183,8 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     sourceBlockIds: [chosen.left.id, chosen.right.id],
   }
   const summary = renderAll(working, merged, renderOptions)
-  const stillOver =
-    countText(summary) > input.budgetTokens || summary.length > totalChars
+  // 预算只按 token 判断：窗口百分比是 token 口径，字符长度不能拿来和它比。
+  const stillOver = countText(summary) > input.budgetTokens
   // 只要还超预算且还有合法候选就继续合并；T3+T3 产出仍是 T3，直到没有候选或压进预算。
   const nextPhase: CompactionPhase | undefined =
     stillOver && mergeCandidates(activeBlocks(working, merged)).length > 0 ? "t3" : undefined

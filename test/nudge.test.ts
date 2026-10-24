@@ -153,14 +153,6 @@ describe("主动压缩提醒", () => {
     expect(buildNudgeText(10_000, false, false)).toContain("Call compress when convenient")
   })
 
-  it("终止态下不追加提醒", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
-    await saveState(storage, "ses_test", { blocks: [], attempts: 0, terminal: "no candidate" })
-    const messages = context("x".repeat(20_000))
-    await maybeNudge(input(storage, messages))
-    expect(messages).toHaveLength(3)
-  })
-
   it("尝试次数达上限后不追加提醒", async () => {
     const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
     await saveState(storage, "ses_test", { blocks: [], attempts: MAX_COMPRESSION_ATTEMPTS })

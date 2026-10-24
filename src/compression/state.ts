@@ -40,8 +40,6 @@ export interface State {
   readonly nudgeBaselineTokens?: number
   /** 已发出的主动压缩提醒次数。 */
   readonly nudgeCount?: number
-  /** 全 T3 且无法继续压缩时的终止原因；存在时停止自动压缩。 */
-  readonly terminal?: string
 }
 
 /** 服务端 storage 的最小接口，便于测试替身。 */
@@ -244,7 +242,6 @@ export function parseState(value: unknown): State {
   const nudgeBaselineTokens =
     typeof record["nudgeBaselineTokens"] === "number" ? record["nudgeBaselineTokens"] : undefined
   const nudgeCount = typeof record["nudgeCount"] === "number" ? record["nudgeCount"] : undefined
-  const terminal = typeof record["terminal"] === "string" ? record["terminal"] : undefined
   const rawPhase = record["phase"]
   const phase: CompactionPhase | undefined = rawPhase === "t2" || rawPhase === "t3" ? rawPhase : undefined
   return {
@@ -254,7 +251,6 @@ export function parseState(value: unknown): State {
     ...(lastError === undefined ? {} : { lastError }),
     ...(nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens }),
     ...(nudgeCount === undefined ? {} : { nudgeCount }),
-    ...(terminal === undefined ? {} : { terminal }),
     ...(phase === undefined ? {} : { phase }),
   }
 }
@@ -273,7 +269,7 @@ export async function saveState(storage: StorageLike, sessionID: string, state: 
   await storage.set(stateKey(sessionID), state as unknown as Schema.Json)
 }
 
-/** 输入：状态；输出：pending 转正后的新状态；预期：成功时清 lastError/terminal，保留下一层 phase。 */
+/** 输入：状态；输出：pending 转正后的新状态；预期：成功时清 lastError，保留下一层 phase。 */
 export function commitPending(state: State): State {
   if (!state.pending) return state
   return {
@@ -285,7 +281,7 @@ export function commitPending(state: State): State {
   }
 }
 
-/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清 pending/phase，保留 terminal。 */
+/** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清 pending/phase。 */
 export function dropPending(state: State, error: string): State {
   return {
     blocks: state.blocks,
@@ -293,7 +289,6 @@ export function dropPending(state: State, error: string): State {
     lastError: error,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
-    ...(state.terminal === undefined ? {} : { terminal: state.terminal }),
   }
 }
 
@@ -312,7 +307,21 @@ export function retryPending(state: State, error: string): State {
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
     ...(keepPhase ? { phase: state.phase } : {}),
-    ...(state.terminal === undefined ? {} : { terminal: state.terminal }),
+  }
+}
+
+/**
+ * 输入：状态；输出：清掉已排层级后的新状态。
+ * 预期：摘要回到预算内时用——否则 phase 会每个 step 都触发一次压缩。
+ */
+export function clearPhase(state: State): State {
+  return {
+    blocks: state.blocks,
+    attempts: state.attempts,
+    ...(state.pending === undefined ? {} : { pending: state.pending }),
+    ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+    ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
+    ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
   }
 }
 
