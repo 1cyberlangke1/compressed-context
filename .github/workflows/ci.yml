@@ -54,7 +54,7 @@ jobs:
       - id: opencode
         run: echo "version=$(npm view @opencode/cli version)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         id: opencode-cache
         with:
           path: .ci/opencode
