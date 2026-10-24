@@ -3,7 +3,7 @@ import { createMemo, For } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
 import { modelTint, tintAt } from "../../shared/model-color.ts"
-import { summarySegments, usedLayers, type Layer } from "../../shared/model-summary.ts"
+import { fieldLayers, layerLabel, summarySegments, type Layer } from "../../shared/model-summary.ts"
 import { localeArgument, resolveForModel, type Settings } from "../../shared/settings.ts"
 import { toHex, toRgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
@@ -11,7 +11,8 @@ import type { UpdateSettings } from "../types.ts"
 /**
  * 输入：TUI 上下文 + 设置。
  * 输出：侧栏「当前模型设置」分区——两行常驻，不折叠。
- * 预期：第一行是带品牌色的模型名 + 来源标签；第二行是完整字段名与折算后的数值。
+ * 预期：第一行是带品牌色的模型名 + 来源标签；第二行按字段来源上色，
+ *       全局灰、同名黄、精确绿。
  */
 export function ModelPanel(props: {
   readonly context: Context
@@ -41,21 +42,30 @@ export function ModelPanel(props: {
       : resolveForModel(props.settings, { providerID: model.providerID, id: model.modelID })
   })
 
-  /** 来源标签，例如「全局 + 精确」。 */
-  const sourceLabel = createMemo(() => {
+  /** 每个字段来自哪一层。 */
+  const layers = createMemo(() => {
     const model = current()
-    const exact = model === undefined ? undefined : props.settings.models[`${model.providerID}/${model.modelID}`]
-    const name = model === undefined ? undefined : props.settings.models[model.modelID]
-    const names: Record<Layer, string> = {
-      default: copy().modelPanel.sourceDefault,
-      global: copy().modelPanel.sourceGlobal,
-      name: copy().modelPanel.sourceName,
-      exact: copy().modelPanel.sourceExact,
-    }
-    return usedLayers(props.settings, exact, name)
-      .map((layer) => names[layer])
-      .join(" + ")
+    return fieldLayers(
+      model === undefined ? undefined : props.settings.models[`${model.providerID}/${model.modelID}`],
+      model === undefined ? undefined : props.settings.models[model.modelID],
+    )
   })
+
+  /** 来源标签，例如「全局 + 同名」。 */
+  const sourceLabel = createMemo(() => layerLabel(layers(), copy()))
+
+  /** 第二行的片段（文本 + 来源层）。 */
+  const segments = createMemo(() =>
+    summarySegments({ scoped: scoped(), native: entry()?.limit.context, layers: layers(), copy: copy() }),
+  )
+
+  /** 输入：来源层；输出：该层对应的字段颜色。预期：全局灰、同名黄、精确绿。 */
+  const colorOf = (layer: Layer) =>
+    layer === "exact"
+      ? theme.text.feedback.success.base
+      : layer === "name"
+        ? theme.text.feedback.warning.base
+        : theme.text.muted
 
   /** 输入：无；输出：主题文字色的纯色序列。预期：主题色解析不出来时用近白。 */
   const themeSolid = (): readonly string[] => {
@@ -89,8 +99,8 @@ export function ModelPanel(props: {
         <span style={{ fg: theme.text.muted }}>{`  ${sourceLabel()}`}</span>
       </text>
       <box flexDirection="row" flexWrap="wrap" columnGap={1}>
-        <For each={summarySegments({ scoped: scoped(), native: entry()?.limit.context, copy: copy() })}>
-          {(segment) => <text fg={theme.text.muted}>{segment}</text>}
+        <For each={segments()}>
+          {(segment) => <text fg={colorOf(segment.layer)}>{segment.text}</text>}
         </For>
       </box>
     </box>

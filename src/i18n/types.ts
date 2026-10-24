@@ -117,7 +117,6 @@ export interface Messages {
     readonly window: string
     readonly windowNative: (native: string) => string
     readonly windowUnknown: string
-    readonly sourceDefault: string
     readonly sourceGlobal: string
     readonly sourceName: string
     readonly sourceExact: string

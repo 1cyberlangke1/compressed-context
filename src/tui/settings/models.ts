@@ -189,7 +189,7 @@ export function buildFieldRows(input: {
       label: labels[field],
       overridden,
       value: formatFieldValue(field, raw, copy),
-      preview: formatPreview(field, limit, threshold, scoped),
+      preview: formatPreview(field, limit, threshold, scoped, window, copy),
     }
   })
 }
@@ -212,8 +212,14 @@ function formatPreview(
   limit: number | undefined,
   threshold: number | undefined,
   settings: CompressionSettings,
+  native: number | undefined,
+  copy: Messages,
 ): string {
-  if (field === "contextLimit") return limit === undefined ? "" : formatTokens(limit)
+  if (field === "contextLimit") {
+    // 值那一列已经是绝对 token，这里只说明原生窗口，避免重复显示同一个数。
+    if (settings.contextLimit === "auto" || native === undefined) return ""
+    return copy.modelPanel.windowNative(formatTokens(native))
+  }
   if (field === "triggerPercent") return threshold === undefined ? "" : formatTokens(threshold)
   if (field === "nudgeGrowthTokens") return ""
   if (limit === undefined) return ""

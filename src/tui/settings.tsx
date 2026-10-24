@@ -32,6 +32,7 @@ import {
   type SummaryLanguage,
 } from "../shared/settings.ts"
 import { PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
+import { effectiveWindow } from "../shared/model-summary.ts"
 import {
   buildEditorOptions,
   buildFieldRows,
@@ -575,8 +576,10 @@ export function SettingsCommand(props: {
   /** 输入：配置键；输出：back 回上一屏，done 结束。预期：字段编辑屏；删除/重置后回覆盖列表。 */
   const openEditor = async (key: string): Promise<Flow> => {
     for (;;) {
-      const window = windowOf(modelEntries(), key)
-      const rows = buildFieldRows({ settings: props.settings, key, window, copy: copy() })
+      const native = windowOf(modelEntries(), key)
+      // 标题写生效窗口（与侧栏一致），原生窗口留给上下文上限那一行解释。
+      const window = effectiveWindow(resolveScoped(props.settings, key), native)
+      const rows = buildFieldRows({ settings: props.settings, key, window: native, copy: copy() })
       const picked = await props.context.ui.dialog.select<OverrideAction>({
         title: window === undefined ? keyLabel(key) : `${keyLabel(key)} · ${formatTokens(window)}`,
         options: buildEditorOptions({ rows, copy: copy() }),

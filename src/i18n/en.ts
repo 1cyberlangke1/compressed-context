@@ -122,7 +122,6 @@ export const en: Messages = {
     window: "Context window",
     windowNative: (native) => `${native} (model native)`,
     windowUnknown: "unknown",
-    sourceDefault: "defaults",
     sourceGlobal: "global",
     sourceName: "same name",
     sourceExact: "exact",

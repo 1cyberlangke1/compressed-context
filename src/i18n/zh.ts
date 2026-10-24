@@ -122,7 +122,6 @@ export const zh: Messages = {
     window: "上下文窗口",
     windowNative: (native) => `${native}（模型原生）`,
     windowUnknown: "未知",
-    sourceDefault: "默认",
     sourceGlobal: "全局",
     sourceName: "同名",
     sourceExact: "精确",

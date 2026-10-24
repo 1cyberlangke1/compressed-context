@@ -1,7 +1,6 @@
 import type { Messages } from "../i18n/index.ts"
 import { formatTokens } from "./format.ts"
 import {
-  DEFAULT_SETTINGS,
   resolveSummaryLimits,
   triggerTokens,
   type CompressionSettings,
@@ -18,28 +17,50 @@ const FIELDS: readonly ModelOverrideField[] = [
   "summaryTotalPercent",
 ]
 
-/** 来源层。 */
-export type Layer = "default" | "global" | "name" | "exact"
+/** 字段来源层：全局（含内置默认）、同名覆盖、精确覆盖。 */
+export type Layer = "global" | "name" | "exact"
+
+/** 一行里的一个片段：文本 + 来源层，面板按层上色。 */
+export interface Segment {
+  readonly text: string
+  readonly layer: Layer
+}
 
 /**
- * 输入：全局设置 + 精确/同名覆盖。
- * 输出：实际用到了哪些层，顺序 全局 → 同名 → 精确。
- * 预期：逐字段判定——精确优先，其次同名，再其次「全局是否偏离内置默认」，都没改就是默认。
+ * 输入：精确覆盖 + 同名覆盖。
+ * 输出：每个字段的来源层。
+ * 预期：精确优先，其次同名，都没有就是全局——全局本身已经包含内置默认，不再单独区分。
  */
-export function usedLayers(
-  settings: Settings,
+export function fieldLayers(
   exact: Settings["models"][string] | undefined,
   name: Settings["models"][string] | undefined,
-): readonly Layer[] {
-  const used = new Set<Layer>()
+): Readonly<Record<ModelOverrideField, Layer>> {
+  const layers = {} as Record<ModelOverrideField, Layer>
   for (const field of FIELDS) {
-    if (exact?.[field] !== undefined) used.add("exact")
-    else if (name?.[field] !== undefined) used.add("name")
-    else if (settings[field] !== DEFAULT_SETTINGS[field]) used.add("global")
-    else used.add("default")
+    layers[field] = exact?.[field] !== undefined ? "exact" : name?.[field] !== undefined ? "name" : "global"
   }
-  const ordered = (["global", "name", "exact"] as const).filter((layer) => used.has(layer))
-  return ordered.length === 0 ? ["default"] : ordered
+  return layers
+}
+
+/**
+ * 输入：字段来源 + 文案。
+ * 输出：来源标签，例如「全局 + 同名」。
+ * 预期：只列出实际有字段来自的层；全部字段都被某层覆盖时只显示那一层。
+ */
+export function layerLabel(
+  layers: Readonly<Record<ModelOverrideField, Layer>>,
+  copy: Messages,
+): string {
+  const used = new Set<Layer>(Object.values(layers))
+  const names: Record<Layer, string> = {
+    global: copy.modelPanel.sourceGlobal,
+    name: copy.modelPanel.sourceName,
+    exact: copy.modelPanel.sourceExact,
+  }
+  return (["global", "name", "exact"] as const)
+    .filter((layer) => used.has(layer))
+    .map((layer) => names[layer])
+    .join(" + ")
 }
 
 /** 输入：生效窗口设置 + 模型原生窗口；输出：实际窗口。预期：数字是上限，与原生取小。 */
@@ -50,15 +71,16 @@ export function effectiveWindow(scoped: CompressionSettings, native: number | un
 
 /**
  * 输入：该模型合并后的设置 + 原生窗口 + 文案。
- * 输出：一行要展示的片段（完整字段名 + 折算 token）。
+ * 输出：一行要展示的片段与各自来源。
  * 预期：窗口未知时明确写「未知」；提醒间隔为 0 时写「关」。
  */
 export function summarySegments(input: {
   readonly scoped: CompressionSettings
   readonly native: number | undefined
+  readonly layers: Readonly<Record<ModelOverrideField, Layer>>
   readonly copy: Messages
-}): readonly string[] {
-  const { scoped, native, copy } = input
+}): readonly Segment[] {
+  const { scoped, native, layers, copy } = input
   const limit = effectiveWindow(scoped, native)
   const threshold = triggerTokens(scoped, limit)
   const limits = resolveSummaryLimits(scoped, limit)
@@ -71,14 +93,26 @@ export function summarySegments(input: {
           ? copy.settings.limitCapped(formatTokens(scoped.contextLimit), formatTokens(native))
           : formatTokens(scoped.contextLimit)
   return [
-    `${copy.modelPanel.icons.threshold} ${scoped.triggerPercent.toString()}%${
-      threshold === undefined ? "" : `（${formatTokens(threshold)}）`
-    }`,
-    `${copy.modelPanel.icons.window} ${window}`,
-    `${copy.modelPanel.icons.block} ${scoped.summaryBlockPercent.toString()}%（${formatTokens(limits.blockChars)}）`,
-    `${copy.modelPanel.icons.total} ${scoped.summaryTotalPercent.toString()}%（${formatTokens(limits.totalChars)}）`,
-    `${copy.modelPanel.icons.nudge} ${
-      scoped.nudgeGrowthTokens === 0 ? copy.settings.off : formatTokens(scoped.nudgeGrowthTokens)
-    }`,
+    {
+      layer: layers.triggerPercent,
+      text: `${copy.modelPanel.icons.threshold} ${scoped.triggerPercent.toString()}%${
+        threshold === undefined ? "" : `（${formatTokens(threshold)}）`
+      }`,
+    },
+    { layer: layers.contextLimit, text: `${copy.modelPanel.icons.window} ${window}` },
+    {
+      layer: layers.summaryBlockPercent,
+      text: `${copy.modelPanel.icons.block} ${scoped.summaryBlockPercent.toString()}%（${formatTokens(limits.blockChars)}）`,
+    },
+    {
+      layer: layers.summaryTotalPercent,
+      text: `${copy.modelPanel.icons.total} ${scoped.summaryTotalPercent.toString()}%（${formatTokens(limits.totalChars)}）`,
+    },
+    {
+      layer: layers.nudgeGrowthTokens,
+      text: `${copy.modelPanel.icons.nudge} ${
+        scoped.nudgeGrowthTokens === 0 ? copy.settings.off : formatTokens(scoped.nudgeGrowthTokens)
+      }`,
+    },
   ]
 }

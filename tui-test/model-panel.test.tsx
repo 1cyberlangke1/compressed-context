@@ -17,7 +17,7 @@ function fakeContext(): Context {
         base: "#e8e8e8",
         muted: "#888888",
         formfield: { base: "#ffffff" },
-        feedback: { error: { base: "#ff0000" } },
+        feedback: { error: { base: "#ff0000" }, warning: { base: "#eab308" }, success: { base: "#22c55e" } },
       },
     },
     ui: {
@@ -97,11 +97,11 @@ describe("ModelPanel", () => {
     }
   })
 
-  test("全默认时来源是「默认」", async () => {
+  test("全默认时来源是「全局」", async () => {
     const app = await mount(normalizeSettings({}))
     try {
       const frame = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
-      expect(frame).toContain(copy.modelPanel.sourceDefault)
+      expect(frame).toContain(copy.modelPanel.sourceGlobal)
     } finally {
       app.renderer.destroy()
     }
