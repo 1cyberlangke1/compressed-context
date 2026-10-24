@@ -12,6 +12,10 @@ interface Captured {
   options?: DialogSelectOptions<string>
   run?: () => void
   readonly answers: (string | undefined)[]
+  /** 主菜单 select 调用次数（用于断言“弹窗型动作不重开菜单”）。 */
+  selects: number
+  /** dialog.show 调用次数。 */
+  shows: number
 }
 
 /** 输入：捕获对象；输出：SettingsCommand 需要的最小上下文。 */
@@ -34,8 +38,12 @@ function fakeContext(captured: Captured): Context {
     ui: {
       dialog: {
         select: (options: DialogSelectOptions<string>) => {
+          captured.selects += 1
           captured.options = options
           return Promise.resolve(captured.answers.shift())
+        },
+        show: () => {
+          captured.shows += 1
         },
         clear: () => {},
       },
@@ -52,7 +60,7 @@ function fakeContext(captured: Captured): Context {
 
 /** 输入：每次 select 的返回值队列；输出：渲染好的 app + 捕获对象 + 设置信号。 */
 async function mount(answers: (string | undefined)[]) {
-  const captured: Captured = { answers }
+  const captured: Captured = { answers, selects: 0, shows: 0 }
   const context = fakeContext(captured)
   const [settings, setSettings] = createSignal<Settings>({ ...DEFAULT_SETTINGS })
   const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
@@ -111,6 +119,44 @@ describe("SettingsCommand", () => {
       captured.run?.()
       await app.waitFor(() => settings().summaryFormat === "json")
       expect(settings().summaryFormat).toBe("json")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("取消主菜单时不写设置也不重开", async () => {
+    const { app, captured, settings } = await mount([undefined])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.selects === 1)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(captured.selects).toBe(1)
+      expect(settings().enabled).toBe(true)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("弹窗型动作只开弹窗，不重开主菜单", async () => {
+    const { app, captured } = await mount(["nudge"])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.shows === 1)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(captured.selects).toBe(1)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("limit 选自定义时只继续开输入框", async () => {
+    const { app, captured } = await mount(["limit", "custom"])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.shows === 1)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      // 主菜单一次 + limit 选择一次；自定义输入框已经打开，不能再弹主菜单。
+      expect(captured.selects).toBe(2)
     } finally {
       app.renderer.destroy()
     }
