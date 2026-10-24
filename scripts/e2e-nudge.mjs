@@ -9,7 +9,7 @@
  */
 
 import { strict as assert } from "node:assert"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomBytes } from "node:crypto"
@@ -168,30 +168,24 @@ function stateFor(id) {
   return typeof row?.value === "string" ? JSON.parse(row.value) : undefined
 }
 
-/** 输入：设置覆盖；输出：无；预期：直接写插件 settings，模拟 TUI 保存。 */
-function writeSettings(overrides) {
-  const db = new Database(join(root, "opencode.db"))
-  const now = Date.now()
-  db.query(
-    "insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)",
-  ).run(
-    `plugin:${pluginHex}:settings`,
-    JSON.stringify({
-      contextLimit: 1_000_000,
-      triggerPercent: 95,
-      summaryBlockPercent: 20,
-      summaryTotalPercent: 10,
-      summaryFormat: "markdown",
-      autoCompress: true,
-      enableCompressTool: true,
-      enableDecompressTool: true,
-      nudgeGrowthTokens: 1_000,
-      ...overrides,
-    }),
-    now,
-    now,
-  )
-  db.close()
+/** 输入：设置覆盖；输出：无；预期：写插件自己的 JSONC 配置，模拟 TUI 保存。 */
+async function writeSettings(overrides) {
+  const settings = {
+    lang: "auto",
+    contextLimit: 1_000_000,
+    triggerPercent: 95,
+    summaryBlockPercent: 20,
+    summaryTotalPercent: 10,
+    summaryFormat: "markdown",
+    autoCompress: true,
+    enableCompressTool: true,
+    enableDecompressTool: true,
+    nudgeGrowthTokens: 1_000,
+    ...overrides,
+  }
+  await writeFile(join(configDir, "compressed-context.json"), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
+  // 服务端设置缓存 1 秒；等它过期再发 prompt，否则会读到上一次的设置。
+  await Bun.sleep(1_100)
 }
 
 /** 输入：请求体；输出：尾部 context-reminder 文本，没有则 undefined。 */
@@ -218,7 +212,7 @@ try {
   pluginHex = Array.from("compressed-context")
     .map((char) => (char.codePointAt(0) ?? 0).toString(16).padStart(4, "0"))
     .join("")
-  writeSettings({})
+  await writeSettings({})
 
   const created = await api("POST", "/api/session", {
     title: "e2e-nudge",
@@ -270,17 +264,20 @@ try {
   console.log("case passed: second threshold crossing nudges again")
 
   // 关闭自动压缩后，文案应改为「需要时手动调用 compress」。
-  writeSettings({ autoCompress: false })
+  await writeSettings({ autoCompress: false })
 
   const beforeManual = requests.length
   await promptSession(sessionID, longText)
   const manualBatch = requests.slice(beforeManual)
   const manualNudge = manualBatch.map((body) => nudgeOf(body)).find((text) => text !== undefined)
-  assert.ok(manualNudge?.includes("call compress when convenient"), "manual wording when autoCompress is off")
+  assert.ok(
+    manualNudge?.toLowerCase().includes("call compress when convenient"),
+    "manual wording when autoCompress is off",
+  )
   console.log("case passed: manual wording after disabling auto compression")
 
   // 关闭 compress 工具后，即使提醒设置仍然打开，也不能发提醒。
-  writeSettings({ enableCompressTool: false })
+  await writeSettings({ enableCompressTool: false })
   const countBeforeDisabled = stateFor(sessionID)?.nudgeCount ?? 0
   const beforeDisabled = requests.length
   await promptSession(sessionID, longText)
@@ -298,7 +295,7 @@ try {
   console.log("case passed: disabled compress tool skips the reminder")
 
   // 重新打开后提醒恢复；禁用期间没有更新基线，所以这次增长应立刻跨过阈值。
-  writeSettings({})
+  await writeSettings({})
   const beforeEnabled = requests.length
   await promptSession(sessionID, longText)
   const enabledBatch = requests.slice(beforeEnabled)

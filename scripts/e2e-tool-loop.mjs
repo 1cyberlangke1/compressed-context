@@ -9,7 +9,7 @@
  */
 
 import { strict as assert } from "node:assert"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomBytes } from "node:crypto"
@@ -266,17 +266,21 @@ const pluginHex = Array.from("compressed-context")
   .map((char) => (char.codePointAt(0) ?? 0).toString(16).padStart(4, "0"))
   .join("")
 const dbPath = join(root, "opencode.db")
-{
-  const db = new Database(dbPath)
-  const now = Date.now()
-  db.query("insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)").run(
-    `plugin:${pluginHex}:settings`,
-    JSON.stringify({ contextLimit: 100_000, triggerPercent: 80, summaryBlockPercent: 10, summaryTotalPercent: 50 }),
-    now,
-    now,
-  )
-  db.close()
-}
+// 插件设置现在只读自己的 JSONC；写 DB 的旧 seed 已被忽略。
+await writeFile(
+  join(configDir, "compressed-context.json"),
+  `${JSON.stringify(
+    {
+      contextLimit: 100_000,
+      triggerPercent: 80,
+      summaryBlockPercent: 10,
+      summaryTotalPercent: 50,
+    },
+    null,
+    2,
+  )}\n`,
+  "utf8",
+)
 console.log("seeded settings")
 
 const created = await api("POST", "/api/session", {

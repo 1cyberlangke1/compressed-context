@@ -8,7 +8,7 @@
  */
 
 import { strict as assert } from "node:assert"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomBytes } from "node:crypto"
@@ -452,47 +452,37 @@ try {
   port = new URL(ready.url).port
   console.log("isolated server:", ready.url)
 
-  // 临时 DB 里 seed 低阈值，只影响这个隔离实例。
+  // 插件设置只读自己的 JSONC；写 DB 的旧 seed 已失效。
   const pluginHex = Array.from("compressed-context")
     .map((char) => (char.codePointAt(0) ?? 0).toString(16).padStart(4, "0"))
     .join("")
-  const db = new Database(join(root, "opencode.db"))
-  const settingsKey = `plugin:${pluginHex}:settings`
-  const now = Date.now()
-  db.query(
-    "insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)",
-  ).run(
-    settingsKey,
-    JSON.stringify({ contextLimit: 50_000, triggerPercent: 60, summaryBlockPercent: 20, summaryTotalPercent: 10 }),
-    now,
-    now,
-  )
-  db.close()
+  const settingsPath = join(configDir, "compressed-context.json")
+  const writeSettingsFile = async (value) => {
+    await writeFile(settingsPath, `${JSON.stringify(value, null, 2)}\n`, "utf8")
+    // 服务端设置缓存 1 秒；等过期再发 prompt，避免读到上一组设置。
+    await Bun.sleep(1_100)
+  }
+  await writeSettingsFile({
+    contextLimit: 50_000,
+    triggerPercent: 60,
+    summaryBlockPercent: 20,
+    summaryTotalPercent: 10,
+  })
   console.log("seeded plugin settings")
 
   /**
    * 输入：全部摘要百分比 + 窗口 + 阈值 + 额外字段。
    * 输出：无。
-   * 预期：只改临时 DB 的插件 settings；单条默认 20%，可用 extra.summaryBlockPercent 覆盖。
+   * 预期：只改隔离配置目录的插件 JSONC；单条默认 20%，可用 extra.summaryBlockPercent 覆盖。
    */
-  const setSettings = (totalPercent, contextLimit = 50_000, triggerPercent = 60, extra = {}) => {
-    const conn = new Database(join(root, "opencode.db"))
-    const at = Date.now()
-    conn
-      .query("insert or replace into kv (key, value, time_created, time_updated) values (?, ?, ?, ?)")
-      .run(
-        settingsKey,
-        JSON.stringify({
-          contextLimit,
-          triggerPercent,
-          summaryBlockPercent: 20,
-          summaryTotalPercent: totalPercent,
-          ...extra,
-        }),
-        at,
-        at,
-      )
-    conn.close()
+  const setSettings = async (totalPercent, contextLimit = 50_000, triggerPercent = 60, extra = {}) => {
+    await writeSettingsFile({
+      contextLimit,
+      triggerPercent,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: totalPercent,
+      ...extra,
+    })
   }
 
   /** 输入：标题 + 可选父 session + 可选模型；输出：新 sessionID。 */
@@ -598,7 +588,7 @@ try {
 
   // 小窗口模型（20k）下，真实参数 60% 的阈值是 12k，3 条 6k 字符消息就能压出多个 T1；
   // 之后发短消息让 older 收敛，T2 自然执行。没有预置 state，也没有改插件参数。
-  setSettings(10, 50_000, 60)
+  await setSettings(10, 50_000, 60)
   for (let index = 0; index < 8; index += 1) {
     const state = stateFor(sessionID)
     if ((state?.blocks ?? []).some((block) => block.tier === 2)) break
@@ -678,7 +668,7 @@ try {
 
   // case: 有消息时手动 compact，检查插件钩子是否报错/是否又跑原生摘要
   mode = "normal"
-  setSettings(50, 1_000_000, 95)
+  await setSettings(50, 1_000_000, 95)
   const manual = await newSession("e2e-manual-compact")
   await promptSession(manual, longText)
   await promptSession(manual, "continue")
@@ -700,7 +690,7 @@ try {
 
   // case: 块头显示 token 估算与时间线（默认关闭，这里显式打开）
   mode = "normal"
-  setSettings(50, 1_000_000, 95, { showBlockTokens: true, showTimeline: true })
+  await setSettings(50, 1_000_000, 95, { showBlockTokens: true, showTimeline: true })
   const meta = await newSession("e2e-block-meta")
   await promptSession(meta, longText)
   await promptSession(meta, "continue")
@@ -718,7 +708,7 @@ try {
 
   // case: 手动 compact 空历史 → failed，state 不产生块
   mode = "short"
-  setSettings(50)
+  await setSettings(50)
   const empty = await newSession("e2e-empty")
   await api("POST", `/api/session/${empty}/compact`, {})
   await promptSession(empty, "continue")
@@ -732,7 +722,7 @@ try {
   mode = "invalid-t1"
   // 强制真实 usage 超阈值，专门测摘要校验失败，不依赖文本估算大小。
   usagePromptTokens = 90_000
-  setSettings(50)
+  await setSettings(50)
   const invalid = await newSession("e2e-invalid-t1")
   await promptSession(invalid, longText)
   await promptSession(invalid, "continue")
@@ -754,7 +744,7 @@ try {
   // case: T1 结构非法（goal 为空）→ failed，state 不残留
   mode = "bad-shape-t1"
   usagePromptTokens = 90_000
-  setSettings(50)
+  await setSettings(50)
   const badShape = await newSession("e2e-bad-shape-t1")
   await promptSession(badShape, longText)
   await promptSession(badShape, "continue")
@@ -776,7 +766,7 @@ try {
   mode = "retry-t1"
   t1Attempts = 0
   usagePromptTokens = 90_000
-  setSettings(50)
+  await setSettings(50)
   const retry = await newSession("e2e-retry-t1")
   await promptSession(retry, longText)
   await promptSession(retry, "continue")
@@ -793,7 +783,7 @@ try {
   mode = "retry-t2"
   t2Attempts = 0
   usagePromptTokens = 90_000
-  setSettings(2.5)
+  await setSettings(2.5)
   const t2Retry = await newSession("e2e-retry-t2", undefined, "small")
   for (let index = 0; index < 10; index += 1) {
     if ((stateFor(t2Retry)?.blocks ?? []).some((item) => item.tier === 2)) break
@@ -814,7 +804,7 @@ try {
   // case: compress 工具在真实 OpenCode 里执行并生成 T1
   mode = "tool-compress"
   toolPromptCount = 0
-  setSettings(50, 1_000_000, 95)
+  await setSettings(50, 1_000_000, 95)
   const toolSession = await newSession("e2e-tool-compress")
   await promptSession(toolSession, longText)
   await promptSession(toolSession, "use compress tool")
@@ -855,7 +845,7 @@ try {
   mode = "tool-decompress"
   toolPromptCount = 0
   decompressTriggered = false
-  setSettings(50, 1_000_000, 95)
+  await setSettings(50, 1_000_000, 95)
   const decompressSession = await newSession("e2e-tool-decompress")
   await promptSession(decompressSession, longText)
   await promptSession(decompressSession, "use compress tool")
@@ -897,7 +887,9 @@ try {
 
   // case: 超大摘要上限被运行时钳制，压缩仍成功
   mode = "normal"
-  setSettings(90, 50_000, 60, { summaryBlockPercent: 90 })
+  // 用真实 usage 超阈值，不依赖文本估算（短文本本身到不了大窗口的触发线）。
+  usagePromptTokens = 90_000
+  await setSettings(90, 100_000, 80, { summaryBlockPercent: 90 })
   const clamp = await newSession("e2e-clamp")
   await promptSession(clamp, longText)
   await promptSession(clamp, "continue")
@@ -906,11 +898,13 @@ try {
   assert.ok(clampCompactions.length > 0, "clamped session should still compress")
   const clampState = stateFor(clamp)
   assert.ok((clampState?.blocks?.length ?? 0) > 0, "clamped session should have a block")
+  usagePromptTokens = undefined
   console.log("case passed: oversized limits clamped, compression still works")
 
   // case: 父子/不同 session 状态隔离
   mode = "normal"
-  setSettings(50)
+  usagePromptTokens = 90_000
+  await setSettings(50, 100_000, 80)
   const sessionA = await newSession("e2e-iso-a")
   const sessionB = await newSession("e2e-iso-b")
   for (const id of [sessionA, sessionB]) {
@@ -924,12 +918,13 @@ try {
   assert.equal(stateA?.blocks?.[0]?.tier, 1)
   assert.equal(stateB?.blocks?.[0]?.tier, 1)
   assert.notEqual(stateA?.blocks?.[0]?.fromId, stateB?.blocks?.[0]?.fromId)
+  usagePromptTokens = undefined
   console.log("case passed: auto T1 triggered by context hook, no manual compact")
 
   // case: 真实 usage 达到阈值时触发，不依赖文本估算
   mode = "normal"
   usagePromptTokens = 90_000
-  setSettings(50, 100_000, 80)
+  await setSettings(50, 100_000, 80)
   const usageSession = await newSession("e2e-real-usage")
   await promptSession(usageSession, "x".repeat(6_000))
   const usageMessages = await messagesFor(usageSession)
@@ -952,7 +947,7 @@ try {
 
   // case: autoCompress 关闭时只保留手动压缩
   mode = "normal"
-  setSettings(50, 50_000, 60, { autoCompress: false })
+  await setSettings(50, 50_000, 60, { autoCompress: false })
   const noAuto = await newSession("e2e-no-auto")
   await promptSession(noAuto, longText)
   await promptSession(noAuto, "continue")
@@ -964,7 +959,7 @@ try {
 
   // case: 终止状态拒绝新输入，并带回终止原因
   mode = "normal"
-  setSettings(50)
+  await setSettings(50)
   const terminalSession = await newSession("e2e-terminal")
   setState(terminalSession, {
     v: 1,
@@ -983,6 +978,7 @@ try {
   console.log("case passed: terminal session rejects input")
 
   const child = await newSession("e2e-iso-child", sessionA)
+  usagePromptTokens = 90_000
   await promptSession(child, longText)
   await promptSession(child, "continue")
   const stateChild = stateFor(child)
@@ -991,6 +987,7 @@ try {
   assert.equal(stateAAfterChild?.blocks?.length, 1, "parent must not gain child blocks")
   assert.notEqual(stateChild?.blocks?.[0]?.fromId, stateAAfterChild?.blocks?.[0]?.fromId)
   assert.equal(stateChild?.blocks?.[0]?.sourceBlockIds, undefined)
+  usagePromptTokens = undefined
   console.log("case passed: parent/child compression history isolated")
 
   // case: T2→T3 链（预算驱动的多轮蒸馏）
@@ -999,7 +996,7 @@ try {
   // T2 合并后仍超预算挂 phase=t3，再下一次请求触发 T3，T3 封顶（不再排 T4）。
   // 每层只合一对，active 链 tier 单调不增。
   mode = "t3-chain"
-  setSettings(50)
+  await setSettings(50)
   const t3Session = await newSession("e2e-t3-chain")
   await promptSession(t3Session, longText)
   await promptSession(t3Session, "continue")
@@ -1020,7 +1017,7 @@ try {
   // 降预算：下一次 T1 完成后 planT1Phase 挂 phase=t2
   // 预算用合法下限 5_000（低于它整包设置被拒绝回退默认 50k，phase 永远挂不上）；
   // 窗口用 1M 防 auto-compress 干扰（摘要 token 超过小窗口触发线会反复排队空压缩踩烂 phase）
-  setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20 })
+  await setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20 })
   await promptSession(t3Session, longText)
   await promptSession(t3Session, "continue")
   await api("POST", `/api/session/${t3Session}/compact`, {})
@@ -1082,7 +1079,7 @@ try {
 
   // case: Babel T1→T2→T3；验证首行 T/G、c=N 候选和层级合并都能落盘。
   mode = "babel-t3"
-  setSettings(50, 50_000, 60, { summaryFormat: "babel" })
+  await setSettings(50, 50_000, 60, { summaryFormat: "babel" })
   const babelSession = await newSession("e2e-babel-t3", undefined, "fake")
   for (let round = 0; round < 3; round += 1) {
     await promptSession(babelSession, longText)
@@ -1091,7 +1088,7 @@ try {
     await api("POST", `/api/session/${babelSession}/compact`, {})
     await waitSession(babelSession)
   }
-  setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20, summaryFormat: "babel" })
+  await setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20, summaryFormat: "babel" })
   await promptSession(babelSession, longText)
   await promptSession(babelSession, longText)
   await promptSession(babelSession, "continue")
@@ -1159,7 +1156,7 @@ try {
   // 每轮：长消息 + continue → 手动 compact 产 T1 → 再发一条触发下一次模型请求；
   // 若 T1 后超预算，context 钩子入队合并。验证多轮后链收敛、tier 单调、无残留错误。
   mode = "long-session"
-  setSettings(5, 200_000, 80)
+  await setSettings(5, 200_000, 80)
   const longSession = await newSession("e2e-long-session", undefined, "fake")
   const longTurns = 6
   for (let turn = 0; turn < longTurns; turn += 1) {
