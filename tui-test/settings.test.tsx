@@ -101,6 +101,8 @@ describe("SettingsCommand", () => {
       expect(options.map((option) => option.value)).toContain("showCacheLog")
       expect(options.map((option) => option.value)).toContain("showSummaries")
       expect(options.map((option) => option.value)).toContain("summaryFormat")
+      expect(options.map((option) => option.value)).toContain("modelCurrent")
+      expect(options.map((option) => option.value)).toContain("modelOverrides")
       expect([...new Set(options.map((option) => option.category))]).toEqual([
         "压缩",
         "摘要",

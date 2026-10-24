@@ -83,6 +83,34 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 
 关闭 `compress` 工具后，主动提醒会直接跳过，但不会改写你的 `nudgeGrowthTokens` 设置；重新打开工具后提醒会按原设置恢复。
 
+## 按模型设置
+
+同一份配置可以给不同模型单独设阈值。默认值永远按**该模型自己的窗口**折算，所以不配置任何东西时，200K 模型和 1M 模型本来就会得到不同的触发点。
+
+```jsonc
+{
+  // 全局默认：没单独设置的模型都用这套
+  "triggerPercent": 90,
+  "summaryTotalPercent": 50,
+
+  "models": {
+    // 只写模型名：所有提供商的同名模型都生效
+    "claude-sonnet-4-5": { "triggerPercent": 80 },
+
+    // 提供商/模型：最具体，优先级最高
+    "google/gemini-3-pro": { "contextLimit": 800000, "summaryTotalPercent": 40 }
+  }
+}
+```
+
+合并顺序：**内置默认 → 全局字段 → `models["模型名"]` → `models["提供商/模型"]`**。
+
+只有这 5 个 token 相关字段可以按模型覆盖：`contextLimit`、`triggerPercent`、`nudgeGrowthTokens`、`summaryBlockPercent`、`summaryTotalPercent`。
+
+配置里只保存**真正改过的字段**：某个字段改回与全局相同的值时会自动删除，一条覆盖里的字段全被删掉时整条移除，`models` 为空时连这个键也不留。
+
+TUI 里同样能改：`/compressed-context` → 「按模型」→「当前模型」直接编辑当前会话所用模型，或「模型覆盖」里选别的模型；模型名级覆盖会额外询问作用范围（仅某个提供商 / 所有同名模型）。
+
 ## 本地开发
 
 ```bash
