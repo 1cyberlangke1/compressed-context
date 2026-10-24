@@ -6,6 +6,7 @@ import { createStore, reconcile } from "solid-js/store"
 import { contextRpc, rpcLocation } from "../shared/rpc.ts"
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "../shared/settings.ts"
 import { configFileLayers } from "./config-layers.ts"
+import { applySettingsMutation, snapshotSettings } from "./settings-draft.ts"
 import { maybePromptNativeCompaction } from "./native-compaction-dialog.ts"
 import { CachePanel, Panel, SummaryPanel } from "./panel/panels.tsx"
 import { SettingsCommand } from "./settings.tsx"
@@ -40,10 +41,10 @@ export default Plugin.define({
     }
     const [settings, setSettings] = createStore<Settings>(initial)
     const updateSettings: UpdateSettings = async (mutation) => {
-      const previous = { ...settings }
-      const draft = { ...settings }
-      mutation(draft)
-      const next = normalizeSettings(draft)
+      // 必须连 models 一起浅拷贝：单独 spread store 时 models 仍是 store 的代理，
+      // 往里写新键会被忽略，保存出去的 models 永远是空的。
+      const previous: Settings = snapshotSettings(settings)
+      const next = applySettingsMutation(settings, mutation)
       setSettings(reconcile(next))
       try {
         const result = await rpc.settingsSet({ ...next, layers }, callOptions())

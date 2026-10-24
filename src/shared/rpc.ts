@@ -19,9 +19,31 @@ const SettingsGetInputJson = {
   additionalProperties: false,
 } as const
 
+/**
+ * 按模型覆盖的单条结构。
+ * 必须显式声明，否则 `{ type: "object" }` 会被 JSON Schema 转成空结构体，
+ * 解码时把里面的字段全部剥掉，表现就是「怎么设都会回退」。
+ */
+const ModelOverrideJson = {
+  type: "object",
+  properties: {
+    contextLimit: { anyOf: [{ type: "string", enum: ["auto"] }, { type: "number" }] },
+    triggerPercent: { type: "number" },
+    nudgeGrowthTokens: { type: "number" },
+    summaryBlockPercent: { type: "number" },
+    summaryTotalPercent: { type: "number" },
+  },
+  additionalProperties: false,
+} as const
+
+/** 键是 `provider/model` 或单独的模型名。 */
+const ModelsJson = {
+  type: "object",
+  additionalProperties: ModelOverrideJson,
+} as const
+
 const SettingsProperties = {
-  // 按模型覆盖：键是 `provider/model` 或单独的模型名，值只含 token 相关字段。
-  models: { type: "object" },
+  models: ModelsJson,
   contextLimit: {
     anyOf: [{ type: "string", enum: ["auto"] }, { type: "number" }],
   },
