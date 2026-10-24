@@ -9,6 +9,7 @@ import { FALLBACK_ERROR, FALLBACK_SUCCESS, FALLBACK_WARNING, mix, toHex, toRgb }
 import type { UpdateSettings } from "../types.ts"
 import { CacheSection } from "./cache.tsx"
 import { usePanelData } from "./data-scoped.ts"
+import { ModelPanel as ModelSection } from "./model.tsx"
 import { SummarySection } from "./summaries.tsx"
 
 /**
@@ -178,6 +179,20 @@ function usePanelSection(
     scope,
   })
   return { theme, copy, data }
+}
+
+/** 输入：TUI 上下文 + 设置；输出：当前模型设置分区。预期：独立 slot，常驻两行，不折叠。 */
+export function ModelPanel(props: {
+  readonly context: Context
+  readonly sessionID: string
+  readonly settings: Settings
+  readonly updateSettings: UpdateSettings
+}) {
+  return (
+    <Show when={props.settings.enabled}>
+      <ModelSection {...props} />
+    </Show>
+  )
 }
 
 /** 输入：TUI 上下文 + 设置；输出：缓存记录分区。预期：独立 slot，空行交给宿主 gap。 */

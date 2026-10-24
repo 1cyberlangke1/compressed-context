@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "../shared/se
 import { configFileLayers } from "./config-layers.ts"
 import { applySettingsMutation, snapshotSettings } from "./settings-draft.ts"
 import { maybePromptNativeCompaction } from "./native-compaction-dialog.ts"
-import { CachePanel, Panel, SummaryPanel } from "./panel/panels.tsx"
+import { CachePanel, ModelPanel, Panel, SummaryPanel } from "./panel/panels.tsx"
 import { SettingsCommand } from "./settings.tsx"
 import type { UpdateSettings } from "./types.ts"
 
@@ -59,7 +59,7 @@ export default Plugin.define({
     }
 
     // 三个分区各注册成独立 slot：宿主 sidebar.content 的 gap 负责分区之间的空行。
-    const panels: readonly Component<SidebarPanelProps>[] = [Panel, CachePanel, SummaryPanel]
+    const panels: readonly Component<SidebarPanelProps>[] = [ModelPanel, Panel, CachePanel, SummaryPanel]
     const disposePanels = panels.map((Section) =>
       context.ui.slot({
         append: "sidebar.content",

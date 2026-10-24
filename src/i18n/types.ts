@@ -112,6 +112,16 @@ export interface Messages {
     readonly on: string
     readonly off: string
   }
+  readonly modelPanel: {
+    readonly noModel: string
+    readonly window: string
+    readonly windowNative: (native: string) => string
+    readonly windowUnknown: string
+    readonly sourceDefault: string
+    readonly sourceGlobal: string
+    readonly sourceName: string
+    readonly sourceExact: string
+  }
   readonly languages: {
     readonly zh: string
     readonly en: string

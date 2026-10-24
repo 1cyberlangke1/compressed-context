@@ -117,6 +117,16 @@ export const en: Messages = {
     on: "On",
     off: "Off",
   },
+  modelPanel: {
+    noModel: "No model",
+    window: "Context window",
+    windowNative: (native) => `${native} (model native)`,
+    windowUnknown: "unknown",
+    sourceDefault: "defaults",
+    sourceGlobal: "global",
+    sourceName: "same name",
+    sourceExact: "exact",
+  },
   languages: {
     zh: "中文",
     en: "English",
