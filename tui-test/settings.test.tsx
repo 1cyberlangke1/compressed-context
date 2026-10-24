@@ -62,7 +62,11 @@ function fakeContext(captured: Captured): Context {
 async function mount(answers: (string | undefined)[]) {
   const captured: Captured = { answers, selects: 0, shows: 0 }
   const context = fakeContext(captured)
-  const [settings, setSettings] = createSignal<Settings>({ ...DEFAULT_SETTINGS })
+  const [settings, setSettings] = createSignal<Settings>({
+    ...DEFAULT_SETTINGS,
+    // 断言中文文案，不能依赖跑测试那台机器的系统语言。
+    locale: "zh",
+  })
   const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
     setSettings((previous) => {
       const draft = { ...previous }

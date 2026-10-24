@@ -148,6 +148,8 @@ function fakeContext(input = 100): Context {
 function Fixture(props: { readonly initial?: Partial<Settings>; readonly used?: number }) {
   const [settings, setSettings] = createSignal<Settings>({
     ...DEFAULT_SETTINGS,
+    // 断言中文文案，不能依赖跑测试那台机器的系统语言。
+    locale: "zh",
     showTimeline: true,
     showBlockTokens: true,
     ...props.initial,
