@@ -156,6 +156,30 @@ export function Panel(props: {
   )
 }
 
+/**
+ * 输入：TUI 上下文 + 会话 + 设置 + 数据范围。
+ * 输出：主题、文案、该范围的面板数据。
+ * 预期：缓存与摘要分区共用同一套准备逻辑，只有 Section 组件不同。
+ */
+function usePanelSection(
+  props: {
+    readonly context: Context
+    readonly sessionID: string
+    readonly settings: Settings
+  },
+  scope: "cache" | "summaries",
+) {
+  const theme = props.context.theme
+  const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
+  const data = usePanelData({
+    context: props.context,
+    sessionID: props.sessionID,
+    settings: () => props.settings,
+    scope,
+  })
+  return { theme, copy, data }
+}
+
 /** 输入：TUI 上下文 + 设置；输出：缓存记录分区。预期：独立 slot，空行交给宿主 gap。 */
 export function CachePanel(props: {
   readonly context: Context
@@ -163,14 +187,7 @@ export function CachePanel(props: {
   readonly settings: Settings
   readonly updateSettings: UpdateSettings
 }) {
-  const theme = props.context.theme
-  const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
-  const data = usePanelData({
-    context: props.context,
-    sessionID: props.sessionID,
-    settings: () => props.settings,
-    scope: "cache",
-  })
+  const { theme, copy, data } = usePanelSection(props, "cache")
   return (
     <Show when={props.settings.enabled}>
       <CacheSection
@@ -191,14 +208,7 @@ export function SummaryPanel(props: {
   readonly settings: Settings
   readonly updateSettings: UpdateSettings
 }) {
-  const theme = props.context.theme
-  const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
-  const data = usePanelData({
-    context: props.context,
-    sessionID: props.sessionID,
-    settings: () => props.settings,
-    scope: "summaries",
-  })
+  const { theme, copy, data } = usePanelSection(props, "summaries")
   return (
     <Show when={props.settings.enabled}>
       <SummarySection

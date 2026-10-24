@@ -1,4 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
+import type { Context } from "@opencode/plugin/tui/context"
+import type { Component } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 
 import { contextRpc, rpcLocation } from "../shared/rpc.ts"
@@ -8,6 +10,14 @@ import { maybePromptNativeCompaction } from "./native-compaction-dialog.ts"
 import { CachePanel, Panel, SummaryPanel } from "./panel/panels.tsx"
 import { SettingsCommand } from "./settings.tsx"
 import type { UpdateSettings } from "./types.ts"
+
+/** 侧栏分区组件共用的 props。 */
+interface SidebarPanelProps {
+  readonly context: Context
+  readonly sessionID: string
+  readonly settings: Settings
+  readonly updateSettings: UpdateSettings
+}
 
 export default Plugin.define({
   id: "compressed-context.tui",
@@ -47,41 +57,21 @@ export default Plugin.define({
       }
     }
 
-    const disposeContext = context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => (
-        <Panel
-          context={context}
-          sessionID={input.sessionID}
-          settings={settings}
-          updateSettings={updateSettings}
-        />
-      ),
-    })
-
-    const disposeCache = context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => (
-        <CachePanel
-          context={context}
-          sessionID={input.sessionID}
-          settings={settings}
-          updateSettings={updateSettings}
-        />
-      ),
-    })
-
-    const disposeSummaries = context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => (
-        <SummaryPanel
-          context={context}
-          sessionID={input.sessionID}
-          settings={settings}
-          updateSettings={updateSettings}
-        />
-      ),
-    })
+    // 三个分区各注册成独立 slot：宿主 sidebar.content 的 gap 负责分区之间的空行。
+    const panels: readonly Component<SidebarPanelProps>[] = [Panel, CachePanel, SummaryPanel]
+    const disposePanels = panels.map((Section) =>
+      context.ui.slot({
+        append: "sidebar.content",
+        render: (input) => (
+          <Section
+            context={context}
+            sessionID={input.sessionID}
+            settings={settings}
+            updateSettings={updateSettings}
+          />
+        ),
+      }),
+    )
 
     const disposeCommand = context.ui.slot({
       append: "app",
@@ -94,9 +84,7 @@ export default Plugin.define({
     }, 0)
 
     return () => {
-      disposeContext()
-      disposeCache()
-      disposeSummaries()
+      for (const dispose of disposePanels) dispose()
       disposeCommand()
     }
   },
