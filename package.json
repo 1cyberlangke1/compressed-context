@@ -1,6 +1,6 @@
 {
   "name": "compressed-context",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "description": "OpenCode 上下文管理插件：按需压缩、自包含摘要",
   "type": "module",
   "license": "MIT",
