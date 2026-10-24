@@ -12,9 +12,10 @@ import { startSessionEvents } from "../src/compression/events.ts"
 function ctxWith(
   events: readonly unknown[],
   sessions: Readonly<Record<string, string | undefined>> = {},
+  directory = "/work",
 ): Plugin.Context {
   return {
-    location: { directory: "/work" },
+    location: { directory },
     event: {
       subscribe: async function* () {
         for (const event of events) {
@@ -44,6 +45,15 @@ function run(events: readonly unknown[], collect: (value: unknown) => void, sess
       },
     })
   })
+}
+
+/** 输入：条件；输出：条件成立时 resolve，超过 1s 抛错。 */
+async function waitFor(check: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (check()) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error("condition not met")
 }
 
 describe("会话事件订阅", () => {
@@ -159,5 +169,84 @@ describe("会话事件订阅", () => {
     )
     expect(seen).toHaveLength(1)
     expect((seen[0] as { messageID: string }).messageID).toBe("m2")
+  })
+
+  it("同一会话的事件按到达顺序串行", async () => {
+    const seen: string[] = []
+    const cancel = startSessionEvents(
+      ctxWith([
+        { type: "session.step.ended", data: { sessionID: "ses_x", assistantMessageID: "m1", tokens: { input: 5 } } },
+        { type: "session.step.ended", data: { sessionID: "ses_x", assistantMessageID: "m2", tokens: { input: 6 } } },
+      ]),
+      {
+        onStepEnded: async (input) => {
+          // 第一条故意更慢：没有串行队列时会先看到 m2。
+          await new Promise((resolve) => setTimeout(resolve, input.messageID === "m1" ? 20 : 0))
+          seen.push(input.messageID)
+        },
+      },
+    )
+    await waitFor(() => seen.length === 2)
+    cancel()
+    expect(seen).toEqual(["m1", "m2"])
+  })
+
+  it("不同实例只处理自己 location 的会话，不跨实例重复记账", async () => {
+    const events = [
+      { type: "session.step.ended", data: { sessionID: "ses_a", assistantMessageID: "m1", tokens: { input: 5 } } },
+      { type: "session.step.ended", data: { sessionID: "ses_b", assistantMessageID: "m2", tokens: { input: 6 } } },
+    ]
+    const directories = { ses_a: "/a", ses_b: "/b" }
+    const seen: string[] = []
+    // 两个实例站在同一进程的不同目录上，事件总线会把同一条事件各投一份。
+    const cancelA = startSessionEvents(ctxWith(events, directories, "/a"), {
+      onStepEnded: (input) => {
+        seen.push(`a:${input.sessionID}`)
+      },
+    })
+    const cancelB = startSessionEvents(ctxWith(events, directories, "/b"), {
+      onStepEnded: (input) => {
+        seen.push(`b:${input.sessionID}`)
+      },
+    })
+    await waitFor(() => seen.length >= 2)
+    cancelA()
+    cancelB()
+    expect(seen.sort()).toEqual(["a:ses_a", "b:ses_b"])
+  })
+
+  it("不同会话互不阻塞：慢会话不拖住其它会话记账", async () => {
+    const order: string[] = []
+    let release: () => void = () => {
+      // 由 Promise executor 立即替换成真正的 resolve。
+    }
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const cancel = startSessionEvents(
+      ctxWith([
+        {
+          type: "session.step.ended",
+          data: { sessionID: "ses_slow", assistantMessageID: "m1", tokens: { input: 5 } },
+        },
+        {
+          type: "session.step.ended",
+          data: { sessionID: "ses_fast", assistantMessageID: "m2", tokens: { input: 6 } },
+        },
+      ]),
+      {
+        onStepEnded: async (input) => {
+          if (input.sessionID === "ses_slow") await gate
+          order.push(input.sessionID)
+        },
+      },
+    )
+    await waitFor(() => order.includes("ses_fast"))
+    // 慢会话还被门挡着，快会话已经记完。
+    expect(order).toEqual(["ses_fast"])
+    release()
+    await waitFor(() => order.length === 2)
+    cancel()
+    expect(order).toEqual(["ses_fast", "ses_slow"])
   })
 })

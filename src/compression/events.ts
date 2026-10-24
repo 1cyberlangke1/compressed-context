@@ -245,14 +245,41 @@ export function startSessionEvents(
     }
   }
 
+  /** 输入：事件里未校验的载荷；输出：会话 ID；缺失或形状不对时 undefined。 */
+  const readSessionID = (raw: unknown): string | undefined => {
+    if (typeof raw !== "object" || raw === null) return undefined
+    const value = (raw as Record<string, unknown>)["sessionID"]
+    return typeof value === "string" && value.length > 0 ? value : undefined
+  }
+
+  /** 每个会话的串行队列；同一会话按到达顺序处理，不同会话互不阻塞。 */
+  const chains = new Map<string, Promise<void>>()
+
+  /**
+   * 输入：sessionID + 处理任务。
+   * 输出：无。
+   * 预期：任务挂到该会话队尾；完成后删除空队列。
+   *       慢任务（压缩对账要读 session.context）不再拖住其它会话的记账。
+   */
+  const enqueue = (sessionID: string, task: () => Promise<void>): void => {
+    const previous = chains.get(sessionID) ?? Promise.resolve()
+    const next: Promise<void> = previous
+      .then(task)
+      .catch(() => {
+        // 单条事件失败不能让订阅退出：事件流没有重放，退出就再也不会收到后续事件。
+      })
+      .finally(() => {
+        if (chains.get(sessionID) === next) chains.delete(sessionID)
+      })
+    chains.set(sessionID, next)
+  }
+
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        try {
-          await handleEvent(event)
-        } catch {
-          // 单条事件失败不能让订阅退出：事件流没有重放，退出就再也不会收到后续事件。
-        }
+        const sessionID = readSessionID(event.data)
+        if (sessionID === undefined) continue
+        enqueue(sessionID, () => handleEvent(event))
       }
     } catch {
       // aborted or disconnected；下一次事件或启动对账会补上
