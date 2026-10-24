@@ -1,4 +1,12 @@
-import { mix, toHex, toRgb, type Rgb } from "./color.ts"
+import {
+  FALLBACK_ERROR,
+  FALLBACK_SUCCESS,
+  FALLBACK_WARNING,
+  mix,
+  toHex,
+  toRgb,
+  type Rgb,
+} from "./color.ts"
 
 /** 侧栏里折线图的默认尺寸：28 列 × 10 行（点阵 56 × 40）。 */
 export const CHART_WIDTH = 28
@@ -105,9 +113,9 @@ function clampPercent(value: number): number {
  * 输出：hex 颜色；0% 红、50% 黄、100% 绿，中间线性插值。
  */
 export function hitRateColor(pct: number, colors: ChartColors): string {
-  const red = toRgb(colors.error) ?? ([239, 68, 68] as Rgb)
-  const yellow = toRgb(colors.warning) ?? ([234, 179, 8] as Rgb)
-  const green = toRgb(colors.success) ?? ([34, 197, 94] as Rgb)
+  const red = toRgb(colors.error) ?? FALLBACK_ERROR
+  const yellow = toRgb(colors.warning) ?? FALLBACK_WARNING
+  const green = toRgb(colors.success) ?? FALLBACK_SUCCESS
   const ratio = clampPercent(pct) / 100
   const rgb: Rgb =
     ratio >= 0.5 ? mix(yellow, green, (ratio - 0.5) * 2) : mix(red, yellow, ratio * 2)

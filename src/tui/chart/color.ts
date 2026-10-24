@@ -1,6 +1,11 @@
 /** 颜色三元组，分量 0-255。 */
 export type Rgb = readonly [number, number, number]
 
+/** 主题色解析不出来时的兜底色：成功 / 警告 / 错误。 */
+export const FALLBACK_SUCCESS: Rgb = [34, 197, 94]
+export const FALLBACK_WARNING: Rgb = [234, 179, 8]
+export const FALLBACK_ERROR: Rgb = [239, 68, 68]
+
 /** 输入：0-255 分量；输出：两位十六进制。 */
 function channel(value: number): string {
   return Math.round(value).toString(16).padStart(2, "0")

@@ -75,6 +75,26 @@ export function createTempFileStore(options: TempFileStoreOptions = {}): TempFil
     }
   }
 
+  /** 输入：会话；输出：属于该会话的临时文件路径。预期：tokenPrefix 只算一次。 */
+  const sessionFiles = (sessionID: string): string[] => {
+    const tokenPrefix = `${prefix}${sessionToken(sessionID)}-`
+    return listFiles().filter((path) => basename(path).startsWith(tokenPrefix))
+  }
+
+  /** 输入：文件路径；输出：成功删除的数量。预期：单个文件失败不影响其余。 */
+  const removeFiles = (paths: readonly string[]): number => {
+    let removed = 0
+    for (const path of paths) {
+      try {
+        unlinkSync(path)
+        removed += 1
+      } catch {
+        // best effort
+      }
+    }
+    return removed
+  }
+
   /**
    * 输入：会话 ID + 上限。
    * 输出：无。
@@ -82,10 +102,8 @@ export function createTempFileStore(options: TempFileStoreOptions = {}): TempFil
    */
   const enforceCap = (sessionID: string, cap: number): void => {
     if (cap <= 0) return
-    const tokenPrefix = `${prefix}${sessionToken(sessionID)}-`
     const entries: { path: string; mtimeMs: number }[] = []
-    for (const path of listFiles()) {
-      if (!basename(path).startsWith(tokenPrefix)) continue
+    for (const path of sessionFiles(sessionID)) {
       try {
         entries.push({ path, mtimeMs: statSync(path).mtimeMs })
       } catch {
@@ -94,13 +112,7 @@ export function createTempFileStore(options: TempFileStoreOptions = {}): TempFil
     }
     if (entries.length <= cap) return
     entries.sort((left, right) => left.mtimeMs - right.mtimeMs)
-    for (const entry of entries.slice(0, entries.length - cap)) {
-      try {
-        unlinkSync(entry.path)
-      } catch {
-        // best effort
-      }
-    }
+    removeFiles(entries.slice(0, entries.length - cap).map((entry) => entry.path))
   }
 
   const writeText = (sessionID: string, blockID: string, body: string, cap = defaultCap): string => {
@@ -130,20 +142,8 @@ export function createTempFileStore(options: TempFileStoreOptions = {}): TempFil
     return path
   }
 
-  const deleteSession = (sessionID: string): number => {
-    const tokenPrefix = `${prefix}${sessionToken(sessionID)}-`
-    let removed = 0
-    for (const path of listFiles()) {
-      if (!basename(path).startsWith(tokenPrefix)) continue
-      try {
-        unlinkSync(path)
-        removed += 1
-      } catch {
-        // best effort
-      }
-    }
-    return removed
-  }
+  /** 输入：会话；输出：删除的文件数；预期：跨进程也能按文件名前缀找到该会话的文件。 */
+  const deleteSession = (sessionID: string): number => removeFiles(sessionFiles(sessionID))
 
   const sweep = (): number => {
     const cutoff = now() - maxAgeMs

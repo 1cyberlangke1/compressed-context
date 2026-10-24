@@ -11,6 +11,7 @@
 
 import { appendFileSync } from "node:fs"
 
+import { stringify } from "../shared/parts.ts"
 import { countText } from "../shared/tokens.ts"
 import type { Block, StorageLike } from "./state.ts"
 import { loadState } from "./state.ts"
@@ -70,18 +71,6 @@ export function deleteSessionTempFiles(sessionID: string): number {
   return defaultTempFiles.deleteSession(sessionID)
 }
 
-/** 输入：任意值；输出：可读 JSON 文本；不可序列化时返回空串。 */
-function stringifyStored(value: unknown): string {
-  if (typeof value === "string") return value
-  if (value === undefined) return ""
-  try {
-    const encoded: unknown = JSON.stringify(value)
-    return typeof encoded === "string" ? encoded : ""
-  } catch {
-    return ""
-  }
-}
-
 /** 输入：落盘 part + 上下文；输出：可读文本；不可还原的媒体输出占位符。 */
 function renderStoredPart(
   part: StoredPart,
@@ -93,10 +82,10 @@ function renderStoredPart(
 ): string {
   if (part.type === "text") return part.text ?? ""
   if (part.type === "tool-call") {
-    return `[Tool call ${part.name ?? "?"}] ${stringifyStored(part.input)}`
+    return `[Tool call ${part.name ?? "?"}] ${stringify(part.input)}`
   }
   if (part.type === "tool-result") {
-    return `[Tool result ${part.name ?? "?"}] ${stringifyStored(part.result)}`
+    return `[Tool result ${part.name ?? "?"}] ${stringify(part.result)}`
   }
   const source = part.media?.source
   const filename = part.filename === undefined ? "" : ` "${part.filename}"`

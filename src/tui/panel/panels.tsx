@@ -5,7 +5,7 @@ import { resolveMessages } from "../../i18n/index.ts"
 import { formatTokens } from "../../shared/format.ts"
 import { effectiveLimit, localeArgument, type Settings } from "../../shared/settings.ts"
 import { scaleCategories } from "../../shared/stats.ts"
-import { mix, toHex, toRgb, type Rgb } from "../chart/color.ts"
+import { FALLBACK_ERROR, FALLBACK_SUCCESS, FALLBACK_WARNING, mix, toHex, toRgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
 import { CacheSection } from "./cache.tsx"
 import { usePanelData } from "./data-scoped.ts"
@@ -17,9 +17,9 @@ import { SummarySection } from "./summaries.tsx"
  * 预期：每个百分比都有独立颜色；主题色不可解析时回退到内置色。
  */
 function occupancyColor(pct: number, theme: Context["theme"]): string {
-  const green = toRgb(theme.text.feedback.success.base) ?? ([34, 197, 94] as Rgb)
-  const yellow = toRgb(theme.text.feedback.warning.base) ?? ([234, 179, 8] as Rgb)
-  const red = toRgb(theme.text.feedback.error.base) ?? ([239, 68, 68] as Rgb)
+  const green = toRgb(theme.text.feedback.success.base) ?? FALLBACK_SUCCESS
+  const yellow = toRgb(theme.text.feedback.warning.base) ?? FALLBACK_WARNING
+  const red = toRgb(theme.text.feedback.error.base) ?? FALLBACK_ERROR
   const ratio = Math.min(1, Math.max(0, pct / 100))
   if (ratio <= 0.5) return toHex(mix(green, yellow, ratio * 2))
   return toHex(mix(yellow, red, (ratio - 0.5) * 2))

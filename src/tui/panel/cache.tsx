@@ -14,7 +14,7 @@ import {
   xAxisLabels,
   type ChartCell,
 } from "../chart/cache-chart.ts"
-import { themeHex } from "../chart/color.ts"
+import { FALLBACK_ERROR, FALLBACK_SUCCESS, FALLBACK_WARNING, themeHex } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
 
 /** 输入：一行 chart cell；输出：可直接放进 `<text>` 的 span 序列。 */
@@ -56,9 +56,9 @@ export function CacheSection(props: {
   readonly samples: readonly CacheSample[]
 }) {
   const chartColors = createMemo(() => ({
-    success: themeHex(props.theme.text.feedback.success.base, [34, 197, 94]),
-    warning: themeHex(props.theme.text.feedback.warning.base, [234, 179, 8]),
-    error: themeHex(props.theme.text.feedback.error.base, [239, 68, 68]),
+    success: themeHex(props.theme.text.feedback.success.base, FALLBACK_SUCCESS),
+    warning: themeHex(props.theme.text.feedback.warning.base, FALLBACK_WARNING),
+    error: themeHex(props.theme.text.feedback.error.base, FALLBACK_ERROR),
   }))
 
   const latestHit = createMemo(() => props.samples.at(-1)?.hitRate)
