@@ -15,6 +15,11 @@ interface Captured {
   readonly toasts: string[]
 }
 
+const MODELS = [
+  { providerID: "google", modelID: "gemini-3-pro", name: "Gemini 3 Pro", limit: { context: 1_000_000, output: 4096 } },
+  { providerID: "openrouter", modelID: "gemini-3-pro", name: "Gemini 3 Pro (OR)", limit: { context: 1_000_000, output: 4096 } },
+]
+
 /** 输入：记录器；输出：SettingsCommand 需要的最小上下文。 */
 function fakeContext(captured: Captured): Context {
   return {
@@ -50,20 +55,7 @@ function fakeContext(captured: Captured): Context {
         },
       },
     },
-    data: {
-      location: {
-        model: {
-          list: () => [
-            {
-              providerID: "google",
-              modelID: "gemini-3-pro",
-              name: "Gemini 3 Pro",
-              limit: { context: 1_000_000, output: 4096 },
-            },
-          ],
-        },
-      },
-    },
+    data: { location: { model: { list: () => MODELS } } },
     client: {
       rpc: () => ({
         settingsGet: () => Promise.resolve({ ...DEFAULT_SETTINGS, resolvedWindow: 1_000_000 }),
@@ -77,14 +69,18 @@ function fakeContext(captured: Captured): Context {
 }
 
 /**
- * 输入：脚本化的 select 返回值。
+ * 输入：脚本化的 select 返回值 + 可选初始设置。
  * 输出：渲染好的 app + 记录器。
- * 预期：updateSettings 与 main.tsx 用同一套 applySettingsMutation / snapshotSettings 实现。
+ * 预期：updateSettings 与 main.tsx 用同一套 applySettingsMutation / snapshotSettings。
  */
-async function mount(answers: unknown[]) {
+async function mount(answers: unknown[], initial?: Partial<Settings>) {
   const captured: Captured = { answers, selects: 0, sent: [], toasts: [] }
   const context = fakeContext(captured)
-  const [settings, setSettings] = createStore<Settings>({ ...DEFAULT_SETTINGS, models: {} })
+  const [settings, setSettings] = createStore<Settings>({
+    ...DEFAULT_SETTINGS,
+    models: {},
+    ...initial,
+  })
   const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
     const previous = snapshotSettings(settings)
     const next = applySettingsMutation(settings, mutation)
@@ -101,11 +97,11 @@ async function mount(answers: unknown[]) {
   )
   app.renderer.start()
   await app.waitFor(() => captured.run !== undefined)
-  return { app, captured }
+  return { app, captured, settings }
 }
 
-describe("按模型设置的写入", () => {
-  test("编辑阈值后 payload.models 必须带上覆盖", async () => {
+describe("按模型设置的 TUI 路径", () => {
+  test("修改精确模型的阈值", async () => {
     const { app, captured } = await mount([
       "models",
       "current",
@@ -118,6 +114,76 @@ describe("按模型设置的写入", () => {
       captured.run?.()
       await Bun.sleep(150)
       expect(captured.sent.at(-1)?.models["google/gemini-3-pro"]?.triggerPercent).toBe(85)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("恢复继承会删掉整个模型键", async () => {
+    const { app, captured } = await mount(
+      ["models", "current", { kind: "field", field: "triggerPercent" }, "inherit", undefined, undefined],
+      { models: { "google/gemini-3-pro": { triggerPercent: 85 } } },
+    )
+    try {
+      captured.run?.()
+      await Bun.sleep(150)
+      expect(captured.sent.at(-1)?.models["google/gemini-3-pro"]).toBeUndefined()
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("删除这条设置会清掉覆盖", async () => {
+    const { app, captured } = await mount(
+      ["models", "current", { kind: "delete" }, undefined],
+      { models: { "google/gemini-3-pro": { triggerPercent: 85 } } },
+    )
+    try {
+      captured.run?.()
+      await Bun.sleep(150)
+      expect(captured.sent.at(-1)?.models["google/gemini-3-pro"]).toBeUndefined()
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("选「同名模型」后写入不带提供商的键", async () => {
+    const { app, captured } = await mount([
+      "models",
+      "overrides",
+      "__add",
+      { key: "gemini-3-pro" },
+      "name",
+      { kind: "field", field: "triggerPercent" },
+      90,
+      undefined,
+      undefined,
+    ])
+    try {
+      captured.run?.()
+      await Bun.sleep(150)
+      expect(captured.sent.at(-1)?.models["gemini-3-pro"]?.triggerPercent).toBe(90)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("同名模型改选精确提供商时写到 provider/模型 键", async () => {
+    const { app, captured } = await mount([
+      "models",
+      "overrides",
+      "__add",
+      { key: "gemini-3-pro" },
+      "openrouter/gemini-3-pro",
+      { kind: "field", field: "triggerPercent" },
+      90,
+      undefined,
+      undefined,
+    ])
+    try {
+      captured.run?.()
+      await Bun.sleep(150)
+      expect(captured.sent.at(-1)?.models["openrouter/gemini-3-pro"]?.triggerPercent).toBe(90)
     } finally {
       app.renderer.destroy()
     }
