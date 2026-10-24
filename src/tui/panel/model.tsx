@@ -88,7 +88,7 @@ export function ModelPanel(props: {
         </For>
         <span style={{ fg: theme.text.muted }}>{`  ${sourceLabel()}`}</span>
       </text>
-      <box flexDirection="row" flexWrap="wrap" columnGap={2}>
+      <box flexDirection="row" flexWrap="wrap" columnGap={1}>
         <For each={summarySegments({ scoped: scoped(), native: entry()?.limit.context, copy: copy() })}>
           {(segment) => <text fg={theme.text.muted}>{segment}</text>}
         </For>
