@@ -25,6 +25,25 @@ function chartLine(row: readonly ChartCell[]) {
 }
 
 /**
+ * 输入：主题 + 标题 + 展开状态 + 点击回调。
+ * 输出：一行折叠头。
+ * 预期：只服务本文件的两个子折叠区（图表、日志）；外层头带百分比后缀，不并进来。
+ */
+function FoldHeader(props: {
+  readonly theme: Context["theme"]
+  readonly label: string
+  readonly expanded: boolean
+  readonly onToggle: () => void
+}) {
+  return (
+    <box flexDirection="row" height={1} gap={1} onMouseDown={props.onToggle}>
+      <text fg={props.theme.text.base}>{props.expanded ? "▼" : "▶"}</text>
+      <text fg={props.theme.text.base}>{props.label}</text>
+    </box>
+  )
+}
+
+/**
  * 输入：主题 + 文案 + 设置 + 写入函数 + 缓存样本。
  * 输出：可折叠的缓存记录区（Braille 折线 + 最近 10 次日志）。
  * 预期：样本由服务端持久化，这里只负责展示；0% 红 → 100% 绿。
@@ -94,19 +113,14 @@ export function CacheSection(props: {
           <box paddingLeft={2} flexDirection="column" width="100%">
             <Show when={props.settings.showCacheChart}>
               <box flexDirection="column" width="100%">
-                <box
-                  flexDirection="row"
-                  height={1}
-                  gap={1}
-                  onMouseDown={() => {
+                <FoldHeader
+                  theme={props.theme}
+                  label={props.copy.cacheChart}
+                  expanded={props.settings.cacheChartExpanded}
+                  onToggle={() => {
                     toggleFold("cacheChartExpanded")
                   }}
-                >
-                  <text fg={props.theme.text.base}>
-                    {props.settings.cacheChartExpanded ? "▼" : "▶"}
-                  </text>
-                  <text fg={props.theme.text.base}>{props.copy.cacheChart}</text>
-                </box>
+                />
                 <Show when={props.settings.cacheChartExpanded}>
                   <Show
                     when={chartRows().length > 0}
@@ -135,19 +149,14 @@ export function CacheSection(props: {
 
             <Show when={props.settings.showCacheLog}>
               <box flexDirection="column" width="100%">
-                <box
-                  flexDirection="row"
-                  height={1}
-                  gap={1}
-                  onMouseDown={() => {
+                <FoldHeader
+                  theme={props.theme}
+                  label={props.copy.cacheLog}
+                  expanded={props.settings.cacheLogExpanded}
+                  onToggle={() => {
                     toggleFold("cacheLogExpanded")
                   }}
-                >
-                  <text fg={props.theme.text.base}>
-                    {props.settings.cacheLogExpanded ? "▼" : "▶"}
-                  </text>
-                  <text fg={props.theme.text.base}>{props.copy.cacheLog}</text>
-                </box>
+                />
                 <Show when={props.settings.cacheLogExpanded}>
                   <Show
                     when={props.samples.length > 0}
