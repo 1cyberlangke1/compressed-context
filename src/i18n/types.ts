@@ -76,7 +76,28 @@ export interface Messages {
       readonly panel: string
       readonly decompress: string
       readonly interface: string
+      readonly models: string
     }
+    readonly modelCurrent: string
+    readonly modelOverrides: string
+    readonly modelsConfigured: (count: number) => string
+    readonly modelPicker: string
+    readonly modelPickerHint: string
+    readonly modelPickerNameOnly: (providers: number) => string
+    readonly modelScopeTitle: string
+    readonly modelScopeExact: (label: string) => string
+    readonly modelScopeAll: (id: string, providers: number) => string
+    readonly overrideInherited: (value: string) => string
+    readonly overrideSet: (value: string) => string
+    readonly overrideAdd: string
+    readonly overrideNone: string
+    readonly overrideResetAll: string
+    readonly overrideDelete: string
+    readonly overrideSaved: (key: string, count: number) => string
+    readonly overrideCleared: (key: string) => string
+    readonly overrideMissingModel: string
+    readonly overrideInheritAction: string
+    readonly overrideCustom: string
     readonly decompressInlineMax: string
     readonly decompressInlineMaxHint: string
     readonly decompressInlineMaxInvalid: string

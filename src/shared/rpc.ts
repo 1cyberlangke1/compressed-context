@@ -20,6 +20,8 @@ const SettingsGetInputJson = {
 } as const
 
 const SettingsProperties = {
+  // 按模型覆盖：键是 `provider/model` 或单独的模型名，值只含 token 相关字段。
+  models: { type: "object" },
   contextLimit: {
     anyOf: [{ type: "string", enum: ["auto"] }, { type: "number" }],
   },

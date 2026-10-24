@@ -31,12 +31,15 @@ import {
   isSummaryLanguage,
   isSummaryFormat,
   normalizeSettings,
+  pruneModelOverride,
+  resolveForModel,
   type CompressionSettings,
+  type ModelOverride,
   type Settings,
 } from "../shared/settings.ts"
 import { resolveConfigFiles } from "../shared/config-paths.ts"
 import { readOptionalInt, readStrictBoolean } from "../shared/parse.ts"
-import { diffConfig, nearestExistingConfig, readMergedConfig, writeConfigValues } from "./config-file.ts"
+import { diffConfig, diffRemovedPaths, nearestExistingConfig, readMergedConfig, removeConfigValues, writeConfigValues } from "./config-file.ts"
 import type { ConfigReadResult } from "./config-file.ts"
 
 /** 设置读取缓存有效期；文件改动最迟一秒内可见，保存路径会主动失效。 */
@@ -265,12 +268,32 @@ export async function saveSettings(
   const paths = resolveConfigFiles(ctx.location?.directory ?? process.cwd(), layers)
   const merged = await readMergedConfig(paths)
   const normalized = normalizeSettings({ ...settings })
-  const patch = diffConfig(merged.values, { ...normalized })
-  if (patch === undefined) return
+  // 按模型设置只落「与全局默认不同」的字段；整条都等于继承值时删掉这一条。
+  const base = resolveForModel({ ...normalized, models: {} }, undefined)
+  const pruned: Record<string, ModelOverride> = {}
+  for (const [key, override] of Object.entries(normalized.models)) {
+    const kept = pruneModelOverride(override, base)
+    if (kept !== undefined) pruned[key] = kept
+  }
+  const next: Settings = { ...normalized, models: pruned }
+  const patch = diffConfig(merged.values, { ...next })
+  // 全空的 models 不写：空对象也会被当成一次变化，最后又把键删掉。
+  if (patch !== undefined && Object.keys(pruned).length === 0) delete patch["models"]
   const target = await nearestExistingConfig(paths)
   if (target === undefined) throw new Error("no plugin config path")
-  const result = await writeConfigValues(target, patch)
-  if (!result.ok) throw new Error(result.error)
+  if (patch !== undefined) {
+    const result = await writeConfigValues(target, patch)
+    if (!result.ok) throw new Error(result.error)
+  }
+  const currentModels = merged.values["models"]
+  const removed =
+    Object.keys(pruned).length === 0 && currentModels !== undefined
+      ? [["models"]]
+      : diffRemovedPaths({ models: currentModels ?? {} }, { models: pruned }).map((entry) => entry.path)
+  if (removed.length > 0) {
+    const result = await removeConfigValues(target, removed)
+    if (!result.ok) throw new Error(result.error)
+  }
   // 写盘后立刻失效，避免随后的 settingsGet 读到旧缓存。
   configCache.delete(configCacheKey(paths))
 }

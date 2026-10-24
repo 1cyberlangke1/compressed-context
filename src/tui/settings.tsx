@@ -24,11 +24,30 @@ import {
   maxSummaryPercent,
   type ContextLimit,
   type LocaleSetting,
+  type ModelIdentity,
+  type ModelOverride,
+  type ModelOverrideField,
   type Settings,
   type SummaryFormat,
   type SummaryLanguage,
 } from "../shared/settings.ts"
 import { PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
+import {
+  buildEditorOptions,
+  buildFieldRows,
+  buildPickerOptions,
+  currentKeyOf,
+  filterPicker,
+  isExactKey,
+  modelKey,
+  providerCount,
+  resolveScoped,
+  toEntries,
+  windowOf,
+  type ModelEntry,
+  type OverrideAction,
+  type PickerValue,
+} from "./settings/models.ts"
 import { buildSettingsOptions, type SettingsAction, type ToggleSetting } from "./settings/options.ts"
 import type { UpdateSettings } from "./types.ts"
 
@@ -352,11 +371,280 @@ export function SettingsCommand(props: {
     return false
   }
 
+  /** 输入：无；输出：当前 TUI 能看到的模型条目。预期：取不到数据时返回空数组，不抛错。 */
+  const modelEntries = (): readonly ModelEntry[] => {
+    try {
+      const list = props.context.data.location.model.list() ?? []
+      return toEntries(
+        list.map((model) => ({
+          providerID: model.providerID,
+          id: model.modelID,
+          name: model.name,
+          limit: model.limit.context,
+        })),
+      )
+    } catch {
+      return []
+    }
+  }
+
+  /** 输入：无；输出：提示词里当前选中的模型。 */
+  const currentModel = (): ModelIdentity | undefined => {
+    const picked = props.context.ui.model.current()
+    return picked === undefined ? undefined : { providerID: picked.providerID, id: picked.modelID }
+  }
+
+  /** 输入：配置键；输出：展示名。预期：精确键显示成 [提供商]模型。 */
+  const keyLabel = (key: string): string => {
+    if (!isExactKey(key)) return key
+    const slash = key.indexOf("/")
+    return `[${key.slice(0, slash)}]${key.slice(slash + 1)}`
+  }
+
+  /** 输入：原覆盖 + 字段 + 值；输出：新覆盖。预期：只改一个字段，其余保留。 */
+  const withField = (
+    base: ModelOverride,
+    field: ModelOverrideField,
+    value: number | "auto",
+  ): ModelOverride => {
+    const next: ModelOverride = { ...base }
+    if (field === "contextLimit") next.contextLimit = value
+    else if (typeof value === "number") next[field] = value
+    return next
+  }
+
+  /** 输入：键 + 字段 + 值；输出：无。预期：写回设置；服务端会裁掉等于继承的字段。 */
+  const writeOverride = async (
+    key: string,
+    field: ModelOverrideField,
+    value: number | "auto",
+  ): Promise<void> => {
+    await props.updateSettings((draft) => {
+      draft.models[key] = withField(draft.models[key] ?? {}, field, value)
+    })
+  }
+
+  /** 输入：键 + 字段；输出：无。预期：继承 / 预设 / 自定义三选一，写完回到编辑屏。 */
+  const openOverrideField = async (key: string, field: ModelOverrideField): Promise<void> => {
+    const labels: Record<ModelOverrideField, string> = {
+      contextLimit: copy().settings.limit,
+      triggerPercent: copy().settings.threshold,
+      nudgeGrowthTokens: copy().settings.nudgeGrowth,
+      summaryBlockPercent: copy().settings.summaryBlockPercent,
+      summaryTotalPercent: copy().settings.summaryTotalPercent,
+    }
+    const presets: readonly { readonly title: string; readonly value: number | "auto" }[] =
+      field === "contextLimit"
+        ? [
+            { title: copy().settings.limitAuto, value: "auto" },
+            ...PRESET_LIMITS.map((value) => ({ title: formatTokens(value), value })),
+          ]
+        : field === "triggerPercent"
+          ? [60, 70, 75, 80, 85, 90, 95].map((value) => ({ title: `${value.toString()}%`, value }))
+          : field === "nudgeGrowthTokens"
+            ? [
+                { title: copy().settings.off, value: 0 },
+                ...[25_000, 50_000, 100_000].map((value) => ({ title: formatTokens(value), value })),
+              ]
+            : [5, 10, 15, 20, 25, 30, 40, 50].map((value) => ({ title: `${value.toString()}%`, value }))
+    const picked = await props.context.ui.dialog.select<number | "auto" | "inherit" | "custom">({
+      title: `${keyLabel(key)} · ${labels[field]}`,
+      options: [
+        { title: copy().settings.overrideInheritAction, value: "inherit" },
+        ...presets.map((preset) => ({ title: preset.title, value: preset.value })),
+        { title: copy().settings.overrideCustom, value: "custom" },
+      ],
+    })
+    if (picked === undefined) return
+    if (picked === "inherit") {
+      await props.updateSettings((draft) => {
+        const bucket = { ...(draft.models[key] ?? {}) }
+        Reflect.deleteProperty(bucket, field)
+        if (Object.keys(bucket).length === 0) Reflect.deleteProperty(draft.models, key)
+        else draft.models[key] = bucket
+      })
+      return
+    }
+    if (picked === "custom") {
+      openOverrideCustom(key, field)
+      return
+    }
+    await writeOverride(key, field, picked)
+  }
+
+  /** 输入：键 + 字段；输出：无。预期：弹输入框，确认后写回并回到编辑屏。 */
+  const openOverrideCustom = (key: string, field: ModelOverrideField): void => {
+    const scoped = resolveScoped(props.settings, key)
+    const window = windowOf(modelEntries(), key)
+    if (field === "triggerPercent") {
+      props.context.ui.dialog.show(() => (
+        <ThresholdDialog
+          context={props.context}
+          copy={copy()}
+          initial={scoped.triggerPercent.toString()}
+          onConfirm={(value) => {
+            void writeOverride(key, field, value).then(() => openEditor(key))
+          }}
+        />
+      ))
+      return
+    }
+    if (field === "contextLimit") {
+      props.context.ui.dialog.show(() => (
+        <TokenDialog
+          context={props.context}
+          copy={copy()}
+          title={copy().settings.limit}
+          hint={copy().settings.limitHint}
+          invalid={copy().settings.limitInvalid}
+          placeholder={copy().settings.limitPlaceholder}
+          initial={scoped.contextLimit === "auto" ? "" : scoped.contextLimit.toString()}
+          min={MIN_CONTEXT_LIMIT}
+          max={MAX_CONTEXT_LIMIT}
+          onConfirm={(value) => {
+            void writeOverride(key, field, value).then(() => openEditor(key))
+          }}
+        />
+      ))
+      return
+    }
+    if (field === "nudgeGrowthTokens") {
+      props.context.ui.dialog.show(() => (
+        <TokenDialog
+          context={props.context}
+          copy={copy()}
+          title={copy().settings.nudgeGrowth}
+          hint={copy().settings.nudgeGrowthHint}
+          invalid={copy().settings.nudgeGrowthInvalid}
+          placeholder="50k"
+          initial={scoped.nudgeGrowthTokens === 0 ? "0" : formatTokens(scoped.nudgeGrowthTokens)}
+          min={0}
+          max={MAX_NUDGE_GROWTH_TOKENS}
+          allowZero
+          onConfirm={(value) => {
+            void writeOverride(key, field, value).then(() => openEditor(key))
+          }}
+        />
+      ))
+      return
+    }
+    props.context.ui.dialog.show(() => (
+      <PercentDialog
+        context={props.context}
+        copy={copy()}
+        title={
+          field === "summaryBlockPercent"
+            ? copy().settings.summaryBlockPercent
+            : copy().settings.summaryTotalPercent
+        }
+        hint={
+          field === "summaryBlockPercent"
+            ? copy().settings.summaryBlockPercentHint
+            : copy().settings.summaryTotalPercentHint
+        }
+        invalid={copy().settings.summaryPercentInvalid}
+        initial={field === "summaryBlockPercent" ? scoped.summaryBlockPercent : scoped.summaryTotalPercent}
+        windowTokens={window}
+        minPercent={1}
+        maxPercent={maxSummaryPercent(window)}
+        onConfirm={(value) => {
+          void writeOverride(key, field, value).then(() => openEditor(key))
+        }}
+      />
+    ))
+  }
+
+  /** 输入：配置键；输出：无。预期：字段编辑屏；删除或重置后回到覆盖列表。 */
+  const openEditor = async (key: string): Promise<void> => {
+    const window = windowOf(modelEntries(), key)
+    const rows = buildFieldRows({ settings: props.settings, key, window, copy: copy() })
+    const picked = await props.context.ui.dialog.select<OverrideAction>({
+      title: window === undefined ? keyLabel(key) : `${keyLabel(key)} · ${formatTokens(window)}`,
+      options: buildEditorOptions({ rows, copy: copy() }),
+    })
+    if (picked === undefined) return
+    if (picked.kind === "delete" || picked.kind === "resetAll") {
+      await props.updateSettings((draft) => {
+        Reflect.deleteProperty(draft.models, key)
+      })
+      void openOverrides()
+      return
+    }
+    if (picked.kind === "back") {
+      void openOverrides()
+      return
+    }
+    await openOverrideField(key, picked.field)
+    void openEditor(key)
+  }
+
+  /** 输入：无；输出：无。预期：已有覆盖列表 + 新增入口。 */
+  const openOverrides = async (): Promise<void> => {
+    const keys = Object.keys(props.settings.models)
+    const picked = await props.context.ui.dialog.select<string>({
+      title: copy().settings.modelOverrides,
+      options: [
+        ...keys.map((key) => ({
+          title: keyLabel(key),
+          value: key,
+          footer: copy().settings.modelsConfigured(Object.keys(props.settings.models[key] ?? {}).length),
+        })),
+        { title: copy().settings.overrideAdd, value: "__add" },
+      ],
+    })
+    if (picked === undefined) return
+    if (picked === "__add") {
+      await openPicker()
+      return
+    }
+    await openEditor(picked)
+  }
+
+  /** 输入：无；输出：无。预期：选模型（内置搜索），模型名级覆盖再问一次作用范围。 */
+  const openPicker = async (): Promise<void> => {
+    const entries = modelEntries()
+    const currentKey = currentKeyOf(entries, currentModel())
+    const picked = await props.context.ui.dialog.select<PickerValue>({
+      title: copy().settings.modelPicker,
+      placeholder: copy().settings.modelPickerHint,
+      options: buildPickerOptions({ entries, overrides: props.settings.models, currentKey, copy: copy() }),
+      search: (query, available) => filterPicker(query, available),
+    })
+    if (picked === undefined) return
+    if (isExactKey(picked.key) || providerCount(entries, picked.key) <= 1) {
+      await openEditor(picked.key)
+      return
+    }
+    const scope = await props.context.ui.dialog.select<string>({
+      title: copy().settings.modelScopeTitle,
+      options: [
+        { title: copy().settings.modelScopeAll(picked.key, providerCount(entries, picked.key)), value: "name" },
+        ...entries
+          .filter((entry) => entry.id === picked.key)
+          .map((entry) => ({
+            title: copy().settings.modelScopeExact(`[${entry.providerID}]${entry.id}`),
+            value: modelKey(entry),
+          })),
+      ],
+    })
+    if (scope === undefined) return
+    await openEditor(scope === "name" ? picked.key : scope)
+  }
+
+  /** 输入：无；输出：无。预期：直接编辑当前模型；拿不到当前模型时退回选择器。 */
+  const openCurrentModel = async (): Promise<void> => {
+    const key = currentKeyOf(modelEntries(), currentModel())
+    if (key === undefined) {
+      await openPicker()
+      return
+    }
+    await openEditor(key)
+  }
+
   /**
    * 每个菜单项自己的处理，包含「谁重开主菜单」：
    * 选择型（语言/格式/总开关/上限）重开，弹窗型不重开，避免把对话框顶掉。
-   */
-  const handlers: Partial<Record<SettingsAction, () => void | Promise<void>>> = {
+   */  const handlers: Partial<Record<SettingsAction, () => void | Promise<void>>> = {
     show: async () => {
       await props.updateSettings((draft) => {
         draft.enabled = !draft.enabled
@@ -396,15 +684,23 @@ export function SettingsCommand(props: {
       await openLocale()
       void openSettings()
     },
+    modelCurrent: openCurrentModel,
+    modelOverrides: openOverrides,
   }
 
   async function openSettings(): Promise<void> {
     // 每次打开菜单都按当前会话模型刷新窗口，避免显示成别的模型。
     await fetchWindow(routeSessionID())
     const window = currentWindow()
+    const currentKey = currentKeyOf(modelEntries(), currentModel())
     const picked = await props.context.ui.dialog.select<SettingsAction>({
       title: copy().settings.title,
-      options: buildSettingsOptions({ settings: props.settings, copy: copy(), window }),
+      options: buildSettingsOptions({
+        settings: props.settings,
+        copy: copy(),
+        window,
+        ...(currentKey === undefined ? {} : { currentModel: keyLabel(currentKey) }),
+      }),
     })
     if (picked === undefined) return
     await handlers[picked]?.()

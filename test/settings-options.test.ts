@@ -36,6 +36,8 @@ describe("buildSettingsOptions", () => {
       "decompressTempMaxAgeHours",
       "decompressShowTokens",
       "language",
+      "modelCurrent",
+      "modelOverrides",
     ])
     expect([...new Set(options.map((option) => option.category))]).toEqual([
       "压缩",
@@ -43,6 +45,7 @@ describe("buildSettingsOptions", () => {
       "面板",
       "解压",
       "界面",
+      "按模型",
     ])
   })
 

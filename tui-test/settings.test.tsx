@@ -48,6 +48,13 @@ function fakeContext(captured: Captured): Context {
         clear: () => {},
       },
       router: { current: () => ({ type: "session", sessionID: "ses_a" }) },
+      model: { current: () => ({ providerID: "google", modelID: "gemini-3-pro" }) },
+    },
+    // 模型列表在真实 TUI 里来自 location 数据；测试给一个空列表即可。
+    data: {
+      location: {
+        model: { list: () => [] },
+      },
     },
     client: {
       rpc: () => ({
@@ -100,6 +107,7 @@ describe("SettingsCommand", () => {
         "面板",
         "解压",
         "界面",
+        "按模型",
       ])
     } finally {
       app.renderer.destroy()

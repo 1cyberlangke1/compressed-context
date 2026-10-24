@@ -145,6 +145,46 @@ function flattenPatch(patch: ConfigValues, prefix: readonly string[] = []): { pa
 }
 
 /**
+ * 输入：当前值 + 目标值 + 前缀。
+ * 输出：只存在于当前值、在目标值里消失的叶子路径。
+ * 预期：对象递归；数组与标量整体比较；用于删除配置里的条目。
+ */
+export function diffRemovedPaths(
+  current: ConfigValues,
+  next: ConfigValues,
+  prefix: readonly string[] = [],
+): { path: string[] }[] {
+  const removed: { path: string[] }[] = []
+  for (const [key, value] of Object.entries(current)) {
+    const path = [...prefix, key]
+    if (!(key in next)) {
+      removed.push({ path })
+      continue
+    }
+    const target = next[key]
+    if (isRecord(value) && isRecord(target)) removed.push(...diffRemovedPaths(value, target, path))
+  }
+  return removed
+}
+
+/** 输入：目标文件路径 + 要删除的键路径；输出：成功或错误。预期：保留注释与格式，原子写入。 */
+export async function removeConfigValues(
+  path: string,
+  paths: readonly (readonly string[])[],
+): Promise<ConfigWriteResult> {
+  if (paths.length === 0) return { ok: true }
+  const read = await readConfigFile(path)
+  if (read.error !== undefined) return { ok: false, error: read.error.message }
+  if (read.value === undefined) return { ok: true }
+
+  let text = await readText(path)
+  for (const keyPath of paths) {
+    text = applyEdits(text, modify(text, [...keyPath], undefined, { formattingOptions: { insertSpaces: true, tabSize: 2 } }))
+  }
+  return writeTextAtomic(path, text)
+}
+
+/**
  * 输入：配置文件路径 + 只含变化键的补丁。
  * 输出：成功或错误。
  * 预期：保留注释与格式；解析失败绝不覆盖；先写临时文件再替换。
@@ -164,7 +204,11 @@ export async function writeConfigValues(path: string, patch: ConfigValues): Prom
       }),
     )
   }
+  return writeTextAtomic(path, text)
+}
 
+/** 输入：目标路径 + 文本；输出：写入结果。预期：先写临时文件再替换，失败不留半截文件。 */
+async function writeTextAtomic(path: string, text: string): Promise<ConfigWriteResult> {
   try {
     await mkdir(dirname(path), { recursive: true })
     const temp = `${path}.${process.pid.toString()}.${Date.now().toString()}.tmp`

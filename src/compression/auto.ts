@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { formatTokens } from "../shared/format.ts"
-import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE } from "../shared/settings.ts"
+import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE, resolveForModel, triggerTokens } from "../shared/settings.ts"
 import { estimateCategories, totalCategories } from "../shared/tokens.ts"
 import {
   endCompactionRequest,
@@ -171,9 +171,9 @@ export async function maybeAutoCompressStep(input: {
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (blockedByState(state)) return
 
-    const settings = await loadServerSettings(input.ctx)
+    const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
     if (!settings.autoCompress) return
-    // 事件里没有 model 引用；用生效窗口缓存（min(settings, native)）折算阈值。
+    // step.ended 不带模型引用，用会话当前模型解析按模型设置；窗口仍取生效值缓存。
     // 原生窗口单独是 1M 时阈值会变成 800k，压缩永远不会触发。
     const effective = await effectiveLimit(input.ctx.storage, input.sessionID)
     if (effective === undefined || effective <= 0) return
@@ -184,7 +184,9 @@ export async function maybeAutoCompressStep(input: {
       return
     }
 
-    if (promptTokens(input.tokens) < effective * (settings.triggerPercent / 100)) return
+    const threshold = triggerTokens(settings, effective)
+    if (threshold === undefined) return
+    if (promptTokens(input.tokens) < threshold) return
     // 刚压缩完、还没有新的 user 消息时，历史里只剩 checkpoint；再入队只会得到
     // Nothing to compact yet，并在 state 里留下一次无意义的 attempts。
     if (!(await hasUserSinceCompaction(input.ctx, input.sessionID))) return
@@ -360,7 +362,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const state = await loadState(input.ctx.storage, input.sessionID)
     if (blockedByState(state)) return
 
-    const settings = await loadServerSettings(input.ctx)
+    const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
     if (!settings.autoCompress) return
     const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)
     if (limit === undefined || limit <= 0) return
@@ -375,7 +377,8 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     }
 
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
-    if (total < limit * (settings.triggerPercent / 100)) return
+    const threshold = triggerTokens(settings, limit)
+    if (threshold === undefined || total < threshold) return
     const eligible = eligibleMessages(input.messages)
     const sourceChars = buildTranscript(eligible).length
     if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
@@ -417,7 +420,7 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     if (isCompactionInFlight(input.sessionID)) return
     if (isCompressionInstruction(input.messages)) return
 
-    const settings = await loadServerSettings(input.ctx)
+    const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
     if (settings.nudgeGrowthTokens <= 0) return
     // compress 工具被关闭时提醒没有意义：模型即使看到也调不动。
     // 只跳过本次提醒，不改用户的 nudgeGrowthTokens / enableCompressTool 设置。

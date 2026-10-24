@@ -29,6 +29,7 @@ describe("initialSettings / normalizeSettings", () => {
     expect(initialSettings({})).toEqual(DEFAULT_SETTINGS)
     expect(initialSettings({ enabled: false, locale: "en", contextLimit: "200k" })).toEqual({
       enabled: false,
+      models: {},
       expanded: true,
       locale: "en",
       contextLimit: 200_000,

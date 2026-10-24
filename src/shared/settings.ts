@@ -134,7 +134,29 @@ export interface CompressionSettings {
   decompressShowTokens: boolean
 }
 
+/** 允许按模型覆盖的字段；只放 token 相关项，界面与行为项保持全局。 */
+export const MODEL_OVERRIDE_FIELDS = [
+  "contextLimit",
+  "triggerPercent",
+  "nudgeGrowthTokens",
+  "summaryBlockPercent",
+  "summaryTotalPercent",
+] as const
+
+export type ModelOverrideField = (typeof MODEL_OVERRIDE_FIELDS)[number]
+
+/** 单条模型覆盖：只写要改的字段，没写的继承全局默认。 */
+export type ModelOverride = Partial<Pick<CompressionSettings, ModelOverrideField>>
+
+/** 模型身份；`providerID/id` 用于精确匹配，`id` 单独用于「仅模型名」匹配。 */
+export interface ModelIdentity {
+  readonly providerID: string
+  readonly id: string
+}
+
 export interface Settings extends CompressionSettings {
+  /** 按模型覆盖；键是 `providerID/modelID` 或单独的 `modelID`。空对象表示全部继承默认。 */
+  models: Record<string, ModelOverride>
   /** 是否显示整块上下文面板 */
   enabled: boolean
   /** 面板是否展开（折叠后只剩标题行） */
@@ -161,6 +183,7 @@ export interface Settings extends CompressionSettings {
 
 export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
+  models: {},
   expanded: true,
   locale: "auto",
   contextLimit: "auto",
@@ -305,6 +328,129 @@ function readContextLimit(value: unknown): ContextLimit {
 }
 
 /**
+ * 输入：任意值；输出：合法的窗口百分比，非法返回 undefined。
+ * 预期：与全局字段同一套范围，但不回退默认值——undefined 表示「没设置」。
+ */
+function readOptionalPercent(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  const rounded = Math.round(value * 10) / 10
+  if (rounded < MIN_SUMMARY_PERCENT || rounded > MAX_SUMMARY_PERCENT) return undefined
+  return rounded
+}
+
+/** 输入：任意值；输出：合法的提醒间隔（0 表示关闭），非法返回 undefined。 */
+function readOptionalNudge(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  const rounded = Math.round(value)
+  if (rounded === 0) return 0
+  if (rounded < MIN_NUDGE_GROWTH_TOKENS || rounded > MAX_NUDGE_GROWTH_TOKENS) return undefined
+  return rounded
+}
+
+/** 输入：任意值；输出：合法的上下文上限，非法返回 undefined。 */
+function readOptionalLimit(value: unknown): ContextLimit | undefined {
+  if (isContextLimit(value)) return value
+  if (typeof value === "string") return parseTokenLimit(value)
+  return undefined
+}
+
+/**
+ * 输入：任意值；输出：单条模型覆盖。
+ * 预期：只保留合法字段；一个合法字段都没有时返回 undefined，避免配置里留空对象。
+ */
+export function normalizeModelOverride(value: unknown): ModelOverride | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const override: ModelOverride = {}
+  const limit = readOptionalLimit(record["contextLimit"])
+  if (limit !== undefined) override.contextLimit = limit
+  const trigger = record["triggerPercent"]
+  if (typeof trigger === "number" && Number.isFinite(trigger)) {
+    const rounded = Math.round(trigger)
+    if (rounded >= MIN_TRIGGER_PERCENT && rounded <= MAX_TRIGGER_PERCENT) override.triggerPercent = rounded
+  }
+  const nudge = readOptionalNudge(record["nudgeGrowthTokens"])
+  if (nudge !== undefined) override.nudgeGrowthTokens = nudge
+  const block = readOptionalPercent(record["summaryBlockPercent"])
+  if (block !== undefined) override.summaryBlockPercent = block
+  const total = readOptionalPercent(record["summaryTotalPercent"])
+  if (total !== undefined) override.summaryTotalPercent = total
+  return Object.keys(override).length === 0 ? undefined : override
+}
+
+/**
+ * 输入：配置里的 `models` 值；输出：键 → 覆盖的映射。
+ * 预期：空键、含空白的键、非法条目、没有合法字段的条目全部丢弃；绝不抛错。
+ */
+export function normalizeModelOverrides(value: unknown): Record<string, ModelOverride> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {}
+  const result: Record<string, ModelOverride> = {}
+  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const key = rawKey.trim()
+    if (key.length === 0 || /\s/.test(key)) continue
+    const override = normalizeModelOverride(rawValue)
+    if (override !== undefined) result[key] = override
+  }
+  return result
+}
+
+/**
+ * 输入：设置 + 当前模型（可为空）。
+ * 输出：该模型实际使用的压缩设置。
+ * 预期：内置默认 < 全局字段 < `models[modelID]` < `models[providerID/modelID]`；
+ *       模型为空、或没有任何覆盖时，原样返回全局字段。
+ */
+export function resolveForModel(
+  settings: CompressionSettings & { readonly models?: Record<string, ModelOverride> },
+  model: ModelIdentity | undefined,
+): CompressionSettings {
+  const { models, ...base } = settings
+  if (model === undefined) return base
+  return { ...base, ...models?.[model.id], ...models?.[`${model.providerID}/${model.id}`] }
+}
+
+/**
+ * 输入：一条覆盖 + 继承基线（合并后不含该条覆盖的设置）。
+ * 输出：只保留与基线不同的字段；没有差异返回 undefined。
+ * 预期：保存时只落真正的差异，全部等于继承值时整条删除，配置里不会留下冗余。
+ */
+export function pruneModelOverride(
+  override: ModelOverride,
+  base: CompressionSettings,
+): ModelOverride | undefined {
+  const result: ModelOverride = {}
+  if (override.contextLimit !== undefined && override.contextLimit !== base.contextLimit) {
+    result.contextLimit = override.contextLimit
+  }
+  if (override.triggerPercent !== undefined && override.triggerPercent !== base.triggerPercent) {
+    result.triggerPercent = override.triggerPercent
+  }
+  if (override.nudgeGrowthTokens !== undefined && override.nudgeGrowthTokens !== base.nudgeGrowthTokens) {
+    result.nudgeGrowthTokens = override.nudgeGrowthTokens
+  }
+  if (override.summaryBlockPercent !== undefined && override.summaryBlockPercent !== base.summaryBlockPercent) {
+    result.summaryBlockPercent = override.summaryBlockPercent
+  }
+  if (override.summaryTotalPercent !== undefined && override.summaryTotalPercent !== base.summaryTotalPercent) {
+    result.summaryTotalPercent = override.summaryTotalPercent
+  }
+  return Object.keys(result).length === 0 ? undefined : result
+}
+
+/**
+ * 输入：合并后的设置 + 生效窗口。
+ * 输出：触发自动压缩的 token 数；窗口未知或非法时返回 undefined。
+ * 预期：阈值永远按当前模型自己的窗口算，不缓存绝对值。
+ */
+export function triggerTokens(
+  settings: CompressionSettings,
+  window: number | undefined,
+): number | undefined {
+  if (window === undefined || !Number.isFinite(window) || window <= 0) return undefined
+  return Math.round(window * (settings.triggerPercent / 100))
+}
+
+/**
  * 输入：任意设置对象（可能来自旧版本、缺字段或类型不对）。
  * 输出：补齐后的合法设置。
  * 预期：用于启动时迁移 storage 里的旧数据，绝不抛错；旧的绝对值字段不再读取，统一回到百分比默认。
@@ -315,6 +461,7 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
   const totalPercent = readSummaryPercent(value["summaryTotalPercent"], DEFAULT_SUMMARY_TOTAL_PERCENT)
   return {
     enabled: typeof value["enabled"] === "boolean" ? value["enabled"] : DEFAULT_SETTINGS.enabled,
+    models: normalizeModelOverrides(value["models"]),
     expanded: typeof value["expanded"] === "boolean" ? value["expanded"] : DEFAULT_SETTINGS.expanded,
     locale: isLocaleSetting(value["locale"]) ? value["locale"] : DEFAULT_SETTINGS.locale,
     contextLimit: readContextLimit(value["contextLimit"]),

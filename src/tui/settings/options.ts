@@ -85,6 +85,8 @@ export const SETTINGS_ACTIONS = [
   "decompressTempMaxAgeHours",
   "decompressShowTokens",
   "language",
+  "modelCurrent",
+  "modelOverrides",
 ] as const
 
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number]
@@ -112,6 +114,7 @@ export function buildSettingsOptions(input: {
   readonly settings: Settings
   readonly copy: Messages
   readonly window: number | undefined
+  readonly currentModel?: string
 }): readonly DialogSelectOption<SettingsAction>[] {
   const { settings, copy, window } = input
   const onOff = (value: boolean): string => (value ? copy.settings.on : copy.settings.off)
@@ -243,6 +246,18 @@ export function buildSettingsOptions(input: {
       value: "language",
       footer: localeLabel(settings, copy),
       category: copy.settings.categories.interface,
+    },
+    {
+      title: copy.settings.modelCurrent,
+      value: "modelCurrent",
+      footer: input.currentModel ?? copy.settings.overrideNone,
+      category: copy.settings.categories.models,
+    },
+    {
+      title: copy.settings.modelOverrides,
+      value: "modelOverrides",
+      footer: copy.settings.modelsConfigured(Object.keys(settings.models).length),
+      category: copy.settings.categories.models,
     },
   ]
 }
