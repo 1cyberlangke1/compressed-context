@@ -265,6 +265,32 @@ function decodeMarkdownSummary(text: string): Summary | undefined {
   return toSummary(text, "markdown")
 }
 
+/**
+ * 输入：prompt + 生成器 + 可选模型 + 失败上报。
+ * 输出：模型的原始文本。
+ * 预期：`generate` 抛错时先上报真实原因、再原样抛出；这次调用不消耗重试次数。
+ */
+async function generateText(
+  prompt: string,
+  generate: GenerateLike,
+  model: ModelRefLike | undefined,
+  onFailure: ((reason: string) => void) | undefined,
+): Promise<string> {
+  try {
+    const response = await generate.text(model ? { prompt, model } : { prompt })
+    return response.text
+  } catch (error) {
+    onFailure?.(`generate failed: ${error instanceof Error ? error.message : String(error)}`)
+    throw error
+  }
+}
+
+/** 输入：最终失败原因 + 上报回调；输出：永不返回。预期：先上报再抛，两处收尾一致。 */
+function rejectSummary(reason: string, onFailure?: (reason: string) => void): never {
+  onFailure?.(reason)
+  throw new Error(reason)
+}
+
 async function runSummaryPrompt(
   base: string,
   sourceChars: number,
@@ -277,14 +303,7 @@ async function runSummaryPrompt(
   let prompt = base
   let reason = "summary rejected"
   for (let attempt = 0; attempt < SUMMARY_ATTEMPTS; attempt += 1) {
-    let text: string
-    try {
-      const response = await generate.text(model ? { prompt, model } : { prompt })
-      text = response.text
-    } catch (error) {
-      onFailure?.(`generate failed: ${error instanceof Error ? error.message : String(error)}`)
-      throw error
-    }
+    const text = await generateText(prompt, generate, model, onFailure)
 
     const decoded =
       format === "babel"
@@ -307,8 +326,7 @@ async function runSummaryPrompt(
           : "reply was not valid JSON matching the shape"
     prompt = `${base}\n\nYour previous reply was not valid ${formatName(format)}. Return the corrected ${formatName(format)} only.`
   }
-  onFailure?.(reason)
-  throw new Error(reason)
+  return rejectSummary(reason, onFailure)
 }
 
 /** 输入：已经拼好的会话内指令；输出：摘要；失败返回 undefined。 */
@@ -366,14 +384,7 @@ async function runChoicePrompt(
   let prompt = base
   let reason = "choice rejected"
   for (let attempt = 0; attempt < SUMMARY_ATTEMPTS; attempt += 1) {
-    let text: string
-    try {
-      const response = await generate.text(model ? { prompt, model } : { prompt })
-      text = response.text
-    } catch (error) {
-      onFailure?.(`generate failed: ${error instanceof Error ? error.message : String(error)}`)
-      throw error
-    }
+    const text = await generateText(prompt, generate, model, onFailure)
 
     const split =
       format === "babel"
@@ -412,8 +423,7 @@ async function runChoicePrompt(
           ? `${base}\n\nYour previous reply was not valid markdown. Return the corrected markdown only. First line must be \`candidate: N\` with N from 1 to ${candidates.length.toString()}.`
           : `${base}\n\nYour previous reply was not valid JSON with a valid candidate and summary. Return the corrected JSON only. The top-level "candidate" must be an integer from 1 to ${candidates.length.toString()}; "goal" must be non-empty.`
   }
-  onFailure?.(reason)
-  throw new Error(reason)
+  return rejectSummary(reason, onFailure)
 }
 
 /** 输入：已经拼好的合并指令 + 候选；输出：选择 + 摘要；失败返回 undefined。 */
