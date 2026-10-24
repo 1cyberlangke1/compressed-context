@@ -133,6 +133,49 @@ describe("SettingsCommand", () => {
     }
   })
 
+  test("在分组里按 esc 回到设置第一层", async () => {
+    const { app, captured } = await mount(["defaults", undefined, undefined])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.history.length >= 3)
+      const back = captured.history[2]?.options ?? []
+      expect(back.map((option) => option.value)).toEqual([
+        "defaults",
+        "models",
+        "summary",
+        "switches",
+        "decompress",
+        "interface",
+      ])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("在模型编辑屏按 esc 回到按模型", async () => {
+    const { app, captured } = await mount(["models", "current", undefined, undefined, undefined])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.history.length >= 4)
+      const back = captured.history[3]?.options ?? []
+      expect(back.map((option) => option.value)).toEqual(["current", "overrides"])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("在覆盖列表按 esc 回到按模型", async () => {
+    const { app, captured } = await mount(["models", "overrides", undefined, undefined, undefined])
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.history.length >= 4)
+      const back = captured.history[3]?.options ?? []
+      expect(back.map((option) => option.value)).toEqual(["current", "overrides"])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("开关和界面各自独立，不在默认设置里", async () => {
     const { app, captured } = await mount(["interface"])
     try {

@@ -60,6 +60,9 @@ import {
 } from "./settings/options.ts"
 import type { UpdateSettings } from "./types.ts"
 
+/** 设置导航的返回结果：`back` 回上一层，`done` 结束（弹窗已经在屏幕上）。 */
+type Flow = "back" | "done"
+
 /** 可选上限预设；菜单里只出现合法值（最低 50k）。 */
 const PRESET_LIMITS = [
   64_000,
@@ -311,7 +314,6 @@ export function SettingsCommand(props: {
     await props.updateSettings((draft) => {
       draft[key] = !draft[key]
     })
-    reopenCurrent()
   }
 
   const openDecompressInline = (): void => {
@@ -570,55 +572,51 @@ export function SettingsCommand(props: {
     ))
   }
 
-  /** 输入：配置键；输出：无。预期：字段编辑屏；删除或重置后回到覆盖列表。 */
-  const openEditor = async (key: string): Promise<void> => {
-    const window = windowOf(modelEntries(), key)
-    const rows = buildFieldRows({ settings: props.settings, key, window, copy: copy() })
-    const picked = await props.context.ui.dialog.select<OverrideAction>({
-      title: window === undefined ? keyLabel(key) : `${keyLabel(key)} · ${formatTokens(window)}`,
-      options: buildEditorOptions({ rows, copy: copy() }),
-    })
-    if (picked === undefined) return
-    if (picked.kind === "delete" || picked.kind === "resetAll") {
-      await props.updateSettings((draft) => {
-        Reflect.deleteProperty(draft.models, key)
+  /** 输入：配置键；输出：back 回上一屏，done 结束。预期：字段编辑屏；删除/重置后回覆盖列表。 */
+  const openEditor = async (key: string): Promise<Flow> => {
+    for (;;) {
+      const window = windowOf(modelEntries(), key)
+      const rows = buildFieldRows({ settings: props.settings, key, window, copy: copy() })
+      const picked = await props.context.ui.dialog.select<OverrideAction>({
+        title: window === undefined ? keyLabel(key) : `${keyLabel(key)} · ${formatTokens(window)}`,
+        options: buildEditorOptions({ rows, copy: copy() }),
       })
-      void openOverrides()
-      return
+      if (picked === undefined) return "back"
+      if (picked.kind === "delete" || picked.kind === "resetAll") {
+        await props.updateSettings((draft) => {
+          Reflect.deleteProperty(draft.models, key)
+        })
+        return "back"
+      }
+      if (picked.kind === "back") return "back"
+      // 自定义输入框已经在屏幕上，再重开编辑屏会把它顶掉。
+      if (await openOverrideField(key, picked.field)) return "done"
     }
-    if (picked.kind === "back") {
-      void openOverrides()
-      return
-    }
-    const openedDialog = await openOverrideField(key, picked.field)
-    // 自定义输入框已经在屏幕上，这时再重开编辑屏会把它顶掉。
-    if (!openedDialog) void openEditor(key)
   }
 
-  /** 输入：无；输出：无。预期：已有覆盖列表 + 新增入口。 */
-  const openOverrides = async (): Promise<void> => {
-    const keys = Object.keys(props.settings.models)
-    const picked = await props.context.ui.dialog.select<string>({
-      title: copy().settings.modelOverrides,
-      options: [
-        ...keys.map((key) => ({
-          title: keyLabel(key),
-          value: key,
-          footer: copy().settings.modelsConfigured(Object.keys(props.settings.models[key] ?? {}).length),
-        })),
-        { title: copy().settings.overrideAdd, value: "__add" },
-      ],
-    })
-    if (picked === undefined) return
-    if (picked === "__add") {
-      await openPicker()
-      return
+  /** 输入：无；输出：back 回上一屏，done 结束。预期：已有覆盖列表 + 新增入口。 */
+  const openOverrides = async (): Promise<Flow> => {
+    for (;;) {
+      const keys = Object.keys(props.settings.models)
+      const picked = await props.context.ui.dialog.select<string>({
+        title: copy().settings.modelOverrides,
+        options: [
+          ...keys.map((key) => ({
+            title: keyLabel(key),
+            value: key,
+            footer: copy().settings.modelsConfigured(Object.keys(props.settings.models[key] ?? {}).length),
+          })),
+          { title: copy().settings.overrideAdd, value: "__add" },
+        ],
+      })
+      if (picked === undefined) return "back"
+      const result = picked === "__add" ? await openPicker() : await openEditor(picked)
+      if (result === "done") return "done"
     }
-    await openEditor(picked)
   }
 
-  /** 输入：无；输出：无。预期：选模型（内置搜索），模型名级覆盖再问一次作用范围。 */
-  const openPicker = async (): Promise<void> => {
+  /** 输入：无；输出：back 回上一屏，done 结束。预期：选模型（内置搜索），模型名级再问一次作用范围。 */
+  const openPicker = async (): Promise<Flow> => {
     const entries = modelEntries()
     const currentKey = currentKeyOf(entries, currentModel())
     const picked = await props.context.ui.dialog.select<PickerValue>({
@@ -627,10 +625,9 @@ export function SettingsCommand(props: {
       options: buildPickerOptions({ entries, overrides: props.settings.models, currentKey, copy: copy() }),
       search: (query, available) => filterPicker(query, available),
     })
-    if (picked === undefined) return
+    if (picked === undefined) return "back"
     if (isExactKey(picked.key) || providerCount(entries, picked.key) <= 1) {
-      await openEditor(picked.key)
-      return
+      return openEditor(picked.key)
     }
     const scope = await props.context.ui.dialog.select<string>({
       title: copy().settings.modelScopeTitle,
@@ -644,110 +641,143 @@ export function SettingsCommand(props: {
           })),
       ],
     })
-    if (scope === undefined) return
-    await openEditor(scope === "name" ? picked.key : scope)
+    if (scope === undefined) return "back"
+    return openEditor(scope === "name" ? picked.key : scope)
   }
 
-  /** 输入：无；输出：无。预期：直接编辑当前模型；拿不到当前模型时退回选择器。 */
-  const openCurrentModel = async (): Promise<void> => {
+  /** 输入：无；输出：back / done。预期：直接编辑当前模型；拿不到当前模型时退回选择器。 */
+  const openCurrentModel = async (): Promise<Flow> => {
     const key = currentKeyOf(modelEntries(), currentModel())
-    if (key === undefined) {
-      await openPicker()
-      return
-    }
-    await openEditor(key)
+    return key === undefined ? openPicker() : openEditor(key)
   }
 
   /**
-   * 每个菜单项自己的处理，包含「谁重开」：
-   * 选择型重开当前分组；弹窗型不重开，避免把对话框顶掉。
+   * 每个菜单项自己的处理。
+   * 返回 true 表示已经在屏幕上打开了弹窗：调用方不要再重开列表，否则会把弹窗顶掉。
    */
-  const handlers: Partial<Record<SettingsAction, () => void | Promise<void>>> = {
+  const handlers: Partial<Record<SettingsAction, () => boolean | Promise<boolean>>> = {
     show: async () => {
       await props.updateSettings((draft) => {
         draft.enabled = !draft.enabled
       })
-      reopenCurrent()
+      return false
     },
-    limit: async () => {
-      const custom = await openLimit()
-      // 自定义对话框已经打开时不要再弹菜单，否则会把它顶掉。
-      if (!custom) reopenCurrent()
+    limit: async () => openLimit(),
+    threshold: () => {
+      openThreshold()
+      return true
     },
-    threshold: openThreshold,
-    nudge: openNudge,
-    blockPercent: openSummaryBlock,
-    totalPercent: openSummaryTotal,
+    nudge: () => {
+      openNudge()
+      return true
+    },
+    blockPercent: () => {
+      openSummaryBlock()
+      return true
+    },
+    totalPercent: () => {
+      openSummaryTotal()
+      return true
+    },
     summaryLanguage: async () => {
       await openSummaryLanguage()
-      reopenCurrent()
+      return false
     },
     summaryFormat: async () => {
       await openSummaryFormat()
-      reopenCurrent()
+      return false
     },
-    autoCompress: () => toggleSetting("autoCompress"),
-    enableCompressTool: () => toggleSetting("enableCompressTool"),
-    enableDecompressTool: () => toggleSetting("enableDecompressTool"),
-    showTimeline: () => toggleSetting("showTimeline"),
-    showBlockTokens: () => toggleSetting("showBlockTokens"),
-    showCacheChart: () => toggleSetting("showCacheChart"),
-    showCacheLog: () => toggleSetting("showCacheLog"),
-    showSummaries: () => toggleSetting("showSummaries"),
-    decompressShowTokens: () => toggleSetting("decompressShowTokens"),
-    decompressInlineMax: openDecompressInline,
-    decompressTempCap: openDecompressCap,
-    decompressTempMaxAgeHours: openDecompressMaxAge,
+    autoCompress: async () => {
+      await toggleSetting("autoCompress")
+      return false
+    },
+    enableCompressTool: async () => {
+      await toggleSetting("enableCompressTool")
+      return false
+    },
+    enableDecompressTool: async () => {
+      await toggleSetting("enableDecompressTool")
+      return false
+    },
+    showTimeline: async () => {
+      await toggleSetting("showTimeline")
+      return false
+    },
+    showBlockTokens: async () => {
+      await toggleSetting("showBlockTokens")
+      return false
+    },
+    showCacheChart: async () => {
+      await toggleSetting("showCacheChart")
+      return false
+    },
+    showCacheLog: async () => {
+      await toggleSetting("showCacheLog")
+      return false
+    },
+    showSummaries: async () => {
+      await toggleSetting("showSummaries")
+      return false
+    },
+    decompressShowTokens: async () => {
+      await toggleSetting("decompressShowTokens")
+      return false
+    },
+    decompressInlineMax: () => {
+      openDecompressInline()
+      return true
+    },
+    decompressTempCap: () => {
+      openDecompressCap()
+      return true
+    },
+    decompressTempMaxAgeHours: () => {
+      openDecompressMaxAge()
+      return true
+    },
     language: async () => {
       await openLocale()
-      reopenCurrent()
+      return false
     },
   }
 
-  /** 当前浏览的分组；动作完成后回到这一组，而不是回到第一层。 */
-  let activeGroup: SettingsGroup = "defaults"
-
-  /** 输入：无；输出：无。预期：重开当前分组。 */
-  const reopenCurrent = (): void => {
-    void openGroup(activeGroup)
+  /** 输入：分组；输出：back 回上一层，done 结束（弹窗已在上面）。预期：Esc 逐层返回，动作完留在本组。 */
+  async function openGroup(group: SettingsGroup): Promise<Flow> {
+    for (;;) {
+      const picked = await props.context.ui.dialog.select<SettingsAction>({
+        title: copy().settings.categories[group],
+        options: itemsOfGroup(
+          buildSettingsOptions({ settings: props.settings, copy: copy(), window: currentWindow() }),
+          group,
+        ),
+      })
+      if (picked === undefined) return "back"
+      if ((await handlers[picked]?.()) === true) return "done"
+    }
   }
 
-  /** 输入：分组；输出：是否返回上一层。预期：动作处理完返回 false（已重开或已弹窗）。 */
-  async function openGroup(group: SettingsGroup): Promise<boolean> {
-    activeGroup = group
-    const picked = await props.context.ui.dialog.select<SettingsAction>({
-      title: copy().settings.categories[group],
-      options: itemsOfGroup(
-        buildSettingsOptions({ settings: props.settings, copy: copy(), window: currentWindow() }),
-        group,
-      ),
-    })
-    if (picked === undefined) return true
-    await handlers[picked]?.()
-    return false
-  }
-
-  /** 输入：无；输出：是否返回第一层。预期：按模型的第一层。 */
-  async function openModelSection(): Promise<boolean> {
-    const currentKey = currentKeyOf(modelEntries(), currentModel())
-    const picked = await props.context.ui.dialog.select<"current" | "overrides">({
-      title: copy().settings.sectionModel,
-      options: buildModelSectionOptions({
-        settings: props.settings,
-        copy: copy(),
-        ...(currentKey === undefined ? {} : { currentModel: keyLabel(currentKey) }),
-      }),
-    })
-    if (picked === undefined) return true
-    if (picked === "current") await openCurrentModel()
-    else await openOverrides()
-    return false
+  /** 输入：无；输出：back 回第一层，done 结束。预期：按模型的两项循环。 */
+  async function openModelSection(): Promise<Flow> {
+    for (;;) {
+      const currentKey = currentKeyOf(modelEntries(), currentModel())
+      const picked = await props.context.ui.dialog.select<"current" | "overrides">({
+        title: copy().settings.sectionModel,
+        options: buildModelSectionOptions({
+          settings: props.settings,
+          copy: copy(),
+          ...(currentKey === undefined ? {} : { currentModel: keyLabel(currentKey) }),
+        }),
+      })
+      if (picked === undefined) return "back"
+      const result = picked === "current" ? await openCurrentModel() : await openOverrides()
+      if (result === "done") return "done"
+    }
   }
 
   /**
    * 输入：无。
    * 输出：无。
-   * 预期：设置第一层只给「全局默认 / 按模型」两项；esc 逐层返回。
+   * 预期：第一层是 默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面；esc 逐层返回，最外层才关闭。
    */
   async function openSettings(): Promise<void> {
     for (;;) {
@@ -763,8 +793,8 @@ export function SettingsCommand(props: {
         }),
       })
       if (section === undefined) return
-      const back = section === "models" ? await openModelSection() : await openGroup(section)
-      if (!back) return
+      const result = section === "models" ? await openModelSection() : await openGroup(section)
+      if (result === "done") return
     }
   }
 
