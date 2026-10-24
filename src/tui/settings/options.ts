@@ -115,6 +115,13 @@ export function buildSettingsOptions(input: {
 }): readonly DialogSelectOption<SettingsAction>[] {
   const { settings, copy, window } = input
   const onOff = (value: boolean): string => (value ? copy.settings.on : copy.settings.off)
+  /** 输入：动作 + 标题 + 右侧值 + 分组；输出：一个布尔开关项。 */
+  const toggle = (
+    value: SettingsAction,
+    title: string,
+    footer: string,
+    category: string,
+  ): DialogSelectOption<SettingsAction> => ({ title, value, footer, category })
   return [
     {
       title: copy.settings.limit,
@@ -134,24 +141,24 @@ export function buildSettingsOptions(input: {
       footer: nudgeLabel(settings, copy),
       category: copy.settings.categories.compress,
     },
-    {
-      title: copy.settings.autoCompress,
-      value: "autoCompress",
-      footer: onOff(settings.autoCompress),
-      category: copy.settings.categories.compress,
-    },
-    {
-      title: copy.settings.enableCompressTool,
-      value: "enableCompressTool",
-      footer: onOff(settings.enableCompressTool),
-      category: copy.settings.categories.compress,
-    },
-    {
-      title: copy.settings.enableDecompressTool,
-      value: "enableDecompressTool",
-      footer: onOff(settings.enableDecompressTool),
-      category: copy.settings.categories.compress,
-    },
+    toggle(
+      "autoCompress",
+      copy.settings.autoCompress,
+      onOff(settings.autoCompress),
+      copy.settings.categories.compress,
+    ),
+    toggle(
+      "enableCompressTool",
+      copy.settings.enableCompressTool,
+      onOff(settings.enableCompressTool),
+      copy.settings.categories.compress,
+    ),
+    toggle(
+      "enableDecompressTool",
+      copy.settings.enableDecompressTool,
+      onOff(settings.enableDecompressTool),
+      copy.settings.categories.compress,
+    ),
     {
       title: copy.settings.summaryBlockPercent,
       value: "blockPercent",
@@ -176,42 +183,37 @@ export function buildSettingsOptions(input: {
       footer: summaryFormatLabel(settings, copy),
       category: copy.settings.categories.summary,
     },
-    {
-      title: copy.settings.showTimeline,
-      value: "showTimeline",
-      footer: onOff(settings.showTimeline),
-      category: copy.settings.categories.summary,
-    },
-    {
-      title: copy.settings.showBlockTokens,
-      value: "showBlockTokens",
-      footer: onOff(settings.showBlockTokens),
-      category: copy.settings.categories.summary,
-    },
-    {
-      title: copy.settings.show,
-      value: "show",
-      footer: onOff(settings.enabled),
-      category: copy.settings.categories.panel,
-    },
-    {
-      title: copy.settings.showCacheChart,
-      value: "showCacheChart",
-      footer: onOff(settings.showCacheChart),
-      category: copy.settings.categories.panel,
-    },
-    {
-      title: copy.settings.showCacheLog,
-      value: "showCacheLog",
-      footer: onOff(settings.showCacheLog),
-      category: copy.settings.categories.panel,
-    },
-    {
-      title: copy.settings.showSummaries,
-      value: "showSummaries",
-      footer: onOff(settings.showSummaries),
-      category: copy.settings.categories.panel,
-    },
+    toggle(
+      "showTimeline",
+      copy.settings.showTimeline,
+      onOff(settings.showTimeline),
+      copy.settings.categories.summary,
+    ),
+    toggle(
+      "showBlockTokens",
+      copy.settings.showBlockTokens,
+      onOff(settings.showBlockTokens),
+      copy.settings.categories.summary,
+    ),
+    toggle("show", copy.settings.show, onOff(settings.enabled), copy.settings.categories.panel),
+    toggle(
+      "showCacheChart",
+      copy.settings.showCacheChart,
+      onOff(settings.showCacheChart),
+      copy.settings.categories.panel,
+    ),
+    toggle(
+      "showCacheLog",
+      copy.settings.showCacheLog,
+      onOff(settings.showCacheLog),
+      copy.settings.categories.panel,
+    ),
+    toggle(
+      "showSummaries",
+      copy.settings.showSummaries,
+      onOff(settings.showSummaries),
+      copy.settings.categories.panel,
+    ),
     {
       title: copy.settings.decompressInlineMax,
       value: "decompressInlineMax",
@@ -230,12 +232,12 @@ export function buildSettingsOptions(input: {
       footer: `${effectiveDecompressTempMaxAgeHours(settings).toString()}h`,
       category: copy.settings.categories.decompress,
     },
-    {
-      title: copy.settings.decompressShowTokens,
-      value: "decompressShowTokens",
-      footer: onOff(settings.decompressShowTokens),
-      category: copy.settings.categories.decompress,
-    },
+    toggle(
+      "decompressShowTokens",
+      copy.settings.decompressShowTokens,
+      onOff(settings.decompressShowTokens),
+      copy.settings.categories.decompress,
+    ),
     {
       title: copy.settings.language,
       value: "language",

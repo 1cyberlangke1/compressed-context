@@ -352,7 +352,53 @@ export function SettingsCommand(props: {
     return false
   }
 
-  const openSettings = async (): Promise<void> => {
+  /**
+   * 每个菜单项自己的处理，包含「谁重开主菜单」：
+   * 选择型（语言/格式/总开关/上限）重开，弹窗型不重开，避免把对话框顶掉。
+   */
+  const handlers: Partial<Record<SettingsAction, () => void | Promise<void>>> = {
+    show: async () => {
+      await props.updateSettings((draft) => {
+        draft.enabled = !draft.enabled
+      })
+      void openSettings()
+    },
+    limit: async () => {
+      const custom = await openLimit()
+      // 自定义对话框已经打开时不要再弹主菜单，否则会把它顶掉。
+      if (!custom) void openSettings()
+    },
+    threshold: openThreshold,
+    nudge: openNudge,
+    blockPercent: openSummaryBlock,
+    totalPercent: openSummaryTotal,
+    summaryLanguage: async () => {
+      await openSummaryLanguage()
+      void openSettings()
+    },
+    summaryFormat: async () => {
+      await openSummaryFormat()
+      void openSettings()
+    },
+    autoCompress: () => toggleSetting("autoCompress"),
+    enableCompressTool: () => toggleSetting("enableCompressTool"),
+    enableDecompressTool: () => toggleSetting("enableDecompressTool"),
+    showTimeline: () => toggleSetting("showTimeline"),
+    showBlockTokens: () => toggleSetting("showBlockTokens"),
+    showCacheChart: () => toggleSetting("showCacheChart"),
+    showCacheLog: () => toggleSetting("showCacheLog"),
+    showSummaries: () => toggleSetting("showSummaries"),
+    decompressShowTokens: () => toggleSetting("decompressShowTokens"),
+    decompressInlineMax: openDecompressInline,
+    decompressTempCap: openDecompressCap,
+    decompressTempMaxAgeHours: openDecompressMaxAge,
+    language: async () => {
+      await openLocale()
+      void openSettings()
+    },
+  }
+
+  async function openSettings(): Promise<void> {
     // 每次打开菜单都按当前会话模型刷新窗口，避免显示成别的模型。
     await fetchWindow(routeSessionID())
     const window = currentWindow()
@@ -360,75 +406,8 @@ export function SettingsCommand(props: {
       title: copy().settings.title,
       options: buildSettingsOptions({ settings: props.settings, copy: copy(), window }),
     })
-    if (picked === "show") {
-      await props.updateSettings((draft) => {
-        draft.enabled = !draft.enabled
-      })
-      void openSettings()
-      return
-    }
-    if (picked === "limit") {
-      const custom = await openLimit()
-      // 自定义对话框已经打开时不要再弹主菜单，否则会把它顶掉。
-      if (!custom) void openSettings()
-      return
-    }
-    if (picked === "threshold") {
-      openThreshold()
-      return
-    }
-    if (picked === "nudge") {
-      openNudge()
-      return
-    }
-    if (picked === "blockPercent") {
-      openSummaryBlock()
-      return
-    }
-    if (picked === "totalPercent") {
-      openSummaryTotal()
-      return
-    }
-    if (picked === "summaryLanguage") {
-      await openSummaryLanguage()
-      void openSettings()
-      return
-    }
-    if (picked === "summaryFormat") {
-      await openSummaryFormat()
-      void openSettings()
-      return
-    }
-    if (
-      picked === "autoCompress" ||
-      picked === "enableCompressTool" ||
-      picked === "enableDecompressTool" ||
-      picked === "showTimeline" ||
-      picked === "showBlockTokens" ||
-      picked === "showCacheChart" ||
-      picked === "showCacheLog" ||
-      picked === "showSummaries" ||
-      picked === "decompressShowTokens"
-    ) {
-      await toggleSetting(picked)
-      return
-    }
-    if (picked === "decompressInlineMax") {
-      openDecompressInline()
-      return
-    }
-    if (picked === "decompressTempCap") {
-      openDecompressCap()
-      return
-    }
-    if (picked === "decompressTempMaxAgeHours") {
-      openDecompressMaxAge()
-      return
-    }
-    if (picked === "language") {
-      await openLocale()
-      void openSettings()
-    }
+    if (picked === undefined) return
+    await handlers[picked]?.()
   }
 
   props.context.keymap.layer(() => ({
