@@ -3,6 +3,7 @@ import type { Context } from "@opencode/plugin/tui/context"
 import type { Component } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 
+import { errorText } from "../shared/error-text.ts"
 import { contextRpc, rpcLocation } from "../shared/rpc.ts"
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "../shared/settings.ts"
 import { configFileLayers } from "./config-layers.ts"
@@ -52,7 +53,7 @@ export default Plugin.define({
       } catch (error) {
         setSettings(reconcile(previous))
         context.ui.toast.show({
-          message: error instanceof Error ? error.message : String(error),
+          message: errorText(error),
           variant: "error",
         })
       }

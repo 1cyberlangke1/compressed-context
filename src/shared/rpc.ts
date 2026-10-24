@@ -81,7 +81,7 @@ const SettingsInputJson = {
     ...SettingsProperties,
     layers: LayersJson,
   },
-  required: ["contextLimit", "triggerPercent"],
+  required: ["triggerPercent"],
   additionalProperties: false,
 } as const
 
@@ -92,7 +92,7 @@ const SettingsOutputJson = {
     ...SettingsProperties,
     resolvedWindow: { type: "number" },
   },
-  required: ["contextLimit", "triggerPercent"],
+  required: ["triggerPercent"],
   additionalProperties: false,
 } as const
 
