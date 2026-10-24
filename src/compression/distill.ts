@@ -78,7 +78,8 @@ export function planT1Phase(
 /**
  * 输入：一次蒸馏结果 + active 链 + 预算。
  * 输出：是否已经无法继续压缩（仍超预算，且没有任何合法合并候选）。
- * 预期：与层级无关——全 T3 只要还有两块可合并，或链本身没超预算，都不算终止。
+ * 预期：与层级无关——全 T3 只要还有两块可合并，或链本身没超预算，都不算终止；
+ *       这次刚合并完但已经压不动，也算终止，否则下一次压缩会空转。
  */
 export function isTerminal(
   result: DistillOnceResult,
@@ -86,7 +87,7 @@ export function isTerminal(
   budgetTokens: number,
   totalChars: number,
 ): boolean {
-  if (result.merged || result.error !== undefined) return false
+  if (result.error !== undefined) return false
   if (countText(result.summary) <= budgetTokens && result.summary.length <= totalChars) return false
   return mergeCandidates(active).length === 0
 }

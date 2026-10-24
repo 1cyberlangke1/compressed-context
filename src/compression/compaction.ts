@@ -10,7 +10,7 @@ import { distillOnce, isTerminal, planT1Phase } from "./distill.ts"
 import { TERMINAL_MESSAGE } from "./events.ts"
 import { endCompaction, tryBeginCompaction } from "./inflight.ts"
 import { activeBlocks } from "./render.ts"
-import { messageRange, olderMessages, textChars, type MessageLike } from "./select.ts"
+import { messageRange, olderMessages, type MessageLike } from "./select.ts"
 import { loadServerSettings } from "./settings.ts"
 import { loadState, type Block, type CompactionPhase, type State } from "./state.ts"
 import { stateStore } from "./state-store.ts"
@@ -18,7 +18,7 @@ import { buildT1Instruction, sessionGenerator, summarizeInstruction } from "./su
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
 import { saveTranscript } from "./transcript-store.ts"
-import { MIN_SOURCE_CHARS, validateSummary } from "./validate.ts"
+import { validateSummary } from "./validate.ts"
 
 /** compaction 钩子需要的最小事件形状。 */
 export interface CompactionEvent {
@@ -83,12 +83,14 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       })
     }
 
-    // 第二阶段：T2/T3。older 里没有真实消息，或新消息不足以单独做 T1 时合并块。
-    // 短消息仍由 OpenCode 原样保留在 recent 里，不会丢内容。
-    // 有足够新内容时走下面的 T1：先总结新内容，phase 留到下一次压缩再合并。
+    // 先按 T1 的真实口径算一次：`buildTranscript` 会把单条工具输出截到 2000 字符，
+    // 而 `textChars` 统计的是全文，两者不能混用，否则会出现「以为有内容、实际不够」。
     const older = olderMessages(event.messages)
-    const olderChars = textChars(older)
-    if (state.phase !== undefined && (older.length === 0 || olderChars < MIN_SOURCE_CHARS)) {
+    const transcript = buildTranscript(older)
+    const sourceChars = transcript.length
+    // 第二阶段：T2/T3。phase 有值说明摘要已经超出预算、上一轮就排好了层级，
+    // 这一轮必须先合并摘要链，对象是摘要而不是新对话流，因此不再看新消息多长。
+    if (state.phase !== undefined) {
       const result = await distillOnce({
         ctx,
         sessionID: event.sessionID,
@@ -103,9 +105,16 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         showTimeline: settings.showTimeline,
         showBlockTokens: settings.showBlockTokens,
       })
-      await save(result.blocks, result.pending, result.nextPhase, result.error)
+      // 模型或校验失败时保留 phase，下一次请求重试同一层；成功且预算回落则由 nextPhase 决定。
+      await save(
+        result.blocks,
+        result.pending,
+        result.error === undefined ? result.nextPhase : state.phase,
+        result.error,
+      )
       event.result = { summary: result.summary }
       // 摘要链仍超预算且没有合法候选：无法再压，记录终止原因并停止自动压缩。
+      // pending 必须保留，否则刚合并出的块会从状态里丢掉。
       if (
         isTerminal(
           result,
@@ -114,7 +123,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
           limits.totalChars,
         )
       ) {
-        await save(result.blocks, undefined, undefined, TERMINAL_MESSAGE, {
+        await save(result.blocks, result.pending, undefined, TERMINAL_MESSAGE, {
           attempts: 0,
           terminal: TERMINAL_MESSAGE,
         })
@@ -130,16 +139,21 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       return
     }
 
-    // 第一阶段：T1。已有 pending（compress 工具）就直接用；
-    // 否则用 session 前缀 + 尾部指令生成，保持前缀缓存。
+    // 第一阶段：T1。只有“真的没有任何可压缩内容”（历史里只剩 checkpoint）才跳过；
+    // 只要还有原文就必须压，压不动就让宿主看到失败并重试，不能悄悄跳过。
+    if (older.length === 0 || sourceChars === 0) {
+      if (state.blocks.length > 0 || state.pending !== undefined) {
+        event.result = {
+          summary: renderActiveSummary(event.sessionID, state, renderOptions),
+        }
+      }
+      return
+    }
+
+    // 已有 pending（compress 工具）就直接用；否则用 session 前缀 + 尾部指令生成，保持前缀缓存。
     let pending = state.pending
     if (pending === undefined) {
       const eligible = older
-      const transcript = buildTranscript(eligible)
-      const sourceChars = transcript.length
-      if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) {
-        throw new Error("nothing to compress")
-      }
       let failure = "unknown"
       const summary = await summarizeInstruction({
         prompt: buildT1Instruction({

@@ -1828,6 +1828,187 @@ describe("摘要单层合并", () => {
     expect(state.phase).toBeUndefined()
   })
 
+  it("phase=t3 时即使新原文够 T1 也先合并，不再抛 nothing to compress", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_t3_then_t1", {
+      blocks: [longBlock("b1", 3, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3)],
+      attempts: 0,
+      phase: "t3",
+    })
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    // 工具输出全文远超 5000，但 transcript 只保留 2000；旧逻辑会因此掉进 T1 并抛错。
+    const event: CompactionEvent = {
+      sessionID: "ses_t3_then_t1",
+      model: { providerID: "fake", id: "model" },
+      messages: [
+        message("user", "<conversation-checkpoint>[T3] old</conversation-checkpoint>", "m0"),
+        {
+          id: "m1",
+          role: "assistant",
+          content: [
+            { type: "text", text: "done" },
+            { type: "tool-result", name: "read", result: "x".repeat(10_000) },
+          ],
+        },
+      ],
+    }
+
+    await handleCompaction(ctx, event)
+
+    const state = await loadState(storage, "ses_t3_then_t1")
+    expect(state.lastError).toBeUndefined()
+    expect(event.result?.summary).toBeDefined()
+    // 合并了 b1+b2，没有新建 T1。
+    expect(state.pending?.tier).toBe(3)
+    expect(state.pending?.sourceBlockIds).toEqual(["b1", "b2"])
+    expect(activeBlocks(state.blocks, state.pending)).toHaveLength(2)
+  })
+
+  it("phase 为空时只有大工具输出也照样压 T1，不跳过", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 40,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_t1_small", { blocks: [], attempts: 0 })
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_t1_small",
+      model: { providerID: "fake", id: "model" },
+      messages: [
+        message("user", "start", "m0"),
+        {
+          id: "m1",
+          role: "assistant",
+          content: [{ type: "tool-result", name: "read", result: "x".repeat(10_000) }],
+        },
+      ],
+    }
+
+    await handleCompaction(ctx, event)
+
+    const state = await loadState(storage, "ses_t1_small")
+    expect(state.lastError).toBeUndefined()
+    expect(state.pending?.tier).toBe(1)
+    expect(event.result?.summary).toContain(`#${state.pending?.id ?? ""}`)
+  })
+
+  it("只剩 checkpoint 时才跳过，并复用现有摘要", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 40,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_only_checkpoint", { blocks: [longBlock("b1", 1, 1)], attempts: 0 })
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.reject(new Error("不应该调用模型")),
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_only_checkpoint",
+      model: { providerID: "fake", id: "model" },
+      messages: [message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0")],
+    }
+
+    await handleCompaction(ctx, event)
+
+    const state = await loadState(storage, "ses_only_checkpoint")
+    expect(state.blocks).toHaveLength(1)
+    expect(state.pending).toBeUndefined()
+    expect(event.result?.summary).toContain("#b1")
+  })
+
+  it("合并失败时保留 phase 等下一次重试", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_retry_t3", {
+      blocks: [longBlock("b1", 3, 1), longBlock("b2", 1, 2)],
+      attempts: 0,
+      phase: "t3",
+    })
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.reject(new Error("boom")),
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_retry_t3",
+      model: { providerID: "fake", id: "model" },
+      messages: [message("user", "<conversation-checkpoint>[T3] old</conversation-checkpoint>", "m0")],
+    }
+
+    await expect(handleCompaction(ctx, event)).rejects.toThrow("boom")
+
+    const state = await loadState(storage, "ses_retry_t3")
+    expect(state.phase).toBe("t3")
+    expect(state.lastError).toContain("boom")
+  })
+
+  it("T3 合并后仍超预算且无候选时写入终止态并保留新块", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      contextLimit: 50_000,
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_t3_ceiling", {
+      blocks: [longBlock("b1", 3, 1), longBlock("b2", 1, 2)],
+      attempts: 0,
+      phase: "t3",
+    })
+    const ctx = fakeCtx(
+      storage,
+      () =>
+        Promise.resolve({
+          text: JSON.stringify({ candidate: 1, ...summary, facts: ["x".repeat(4_000)] }),
+        }),
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_t3_ceiling",
+      model: { providerID: "fake", id: "model" },
+      messages: [message("user", "<conversation-checkpoint>[T3] old</conversation-checkpoint>", "m0")],
+    }
+
+    await handleCompaction(ctx, event)
+
+    const state = await loadState(storage, "ses_t3_ceiling")
+    expect(state.terminal).toBe(TERMINAL_MESSAGE)
+    expect(state.phase).toBeUndefined()
+    // 刚合并出的 T3 不能因为写终止态被丢掉。
+    expect(state.pending?.tier).toBe(3)
+  })
+
   it("两个实例同时处理同一 compaction 只生成一次摘要", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {

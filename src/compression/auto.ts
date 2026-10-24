@@ -381,7 +381,10 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (threshold === undefined || total < threshold) return
     const eligible = eligibleMessages(input.messages)
     const sourceChars = buildTranscript(eligible).length
-    if (eligible.length === 0 || sourceChars < MIN_SOURCE_CHARS) return
+    // 第一次触发要求有实质内容；失败过（attempts>0）就必须能重试，不能因为短就永远跳过。
+    const retrying = state.attempts > 0 && state.lastError !== undefined
+    if (eligible.length === 0) return
+    if (!retrying && sourceChars < MIN_SOURCE_CHARS) return
 
     await requestCompaction(input.ctx, input.sessionID)
   } catch (error) {
