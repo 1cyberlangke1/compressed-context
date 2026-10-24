@@ -121,6 +121,13 @@ export interface Messages {
     readonly sourceGlobal: string
     readonly sourceName: string
     readonly sourceExact: string
+    readonly icons: {
+      readonly threshold: string
+      readonly window: string
+      readonly block: string
+      readonly total: string
+      readonly nudge: string
+    }
   }
   readonly languages: {
     readonly zh: string

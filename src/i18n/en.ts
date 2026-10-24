@@ -126,6 +126,13 @@ export const en: Messages = {
     sourceGlobal: "global",
     sourceName: "same name",
     sourceExact: "exact",
+    icons: {
+      threshold: "⚡",
+      window: "🪟",
+      block: "📄",
+      total: "📚",
+      nudge: "🔔",
+    },
   },
   languages: {
     zh: "中文",

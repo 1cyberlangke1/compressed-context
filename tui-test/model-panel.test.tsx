@@ -66,13 +66,15 @@ describe("ModelPanel", () => {
   test("默认设置显示模型名、来源与完整字段", async () => {
     const app = await mount(normalizeSettings({ triggerPercent: 90, summaryBlockPercent: 5, summaryTotalPercent: 7 }))
     try {
-      const frame = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
+      const raw = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
+      // 字段内部用不换行空格，断言前统一还原成普通空格。
+      const frame = raw.replaceAll("\u00A0", " ")
       expect(frame).toContain(copy.modelPanel.sourceGlobal)
-      expect(frame).toContain(`${copy.settings.threshold} 90%（900k）`)
-      expect(frame).toContain(`${copy.modelPanel.window} 1.0M（${copy.settings.limitAuto}）`)
-      expect(frame).toContain(`${copy.settings.summaryBlockPercent} 5%（50k）`)
-      expect(frame).toContain(`${copy.settings.summaryTotalPercent} 7%（70k）`)
-      expect(frame).toContain(`${copy.settings.nudgeGrowth} 50k`)
+      expect(frame).toContain(`${copy.modelPanel.icons.threshold} 90%（900k）`)
+      expect(frame).toContain(`${copy.modelPanel.icons.window} 1.0M（${copy.settings.limitAuto}）`)
+      expect(frame).toContain(`${copy.modelPanel.icons.block} 5%（50k）`)
+      expect(frame).toContain(`${copy.modelPanel.icons.total} 7%（70k）`)
+      expect(frame).toContain(`${copy.modelPanel.icons.nudge} 50k`)
     } finally {
       app.renderer.destroy()
     }
@@ -86,10 +88,12 @@ describe("ModelPanel", () => {
       }),
     )
     try {
-      const frame = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
+      const raw = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
+      // 字段内部用不换行空格，断言前统一还原成普通空格。
+      const frame = raw.replaceAll("\u00A0", " ")
       expect(frame).toContain(`${copy.modelPanel.sourceGlobal} + ${copy.modelPanel.sourceExact}`)
-      expect(frame).toContain(`${copy.settings.threshold} 80%（800k）`)
-      expect(frame).toContain(`${copy.settings.summaryTotalPercent} 40%（400k）`)
+      expect(frame).toContain(`${copy.modelPanel.icons.threshold} 80%（800k）`)
+      expect(frame).toContain(`${copy.modelPanel.icons.total} 40%（400k）`)
     } finally {
       app.renderer.destroy()
     }
@@ -98,7 +102,9 @@ describe("ModelPanel", () => {
   test("全默认时来源是「默认」", async () => {
     const app = await mount(normalizeSettings({}))
     try {
-      const frame = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
+      const raw = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
+      // 字段内部用不换行空格，断言前统一还原成普通空格。
+      const frame = raw.replaceAll("\u00A0", " ")
       expect(frame).toContain(copy.modelPanel.sourceDefault)
     } finally {
       app.renderer.destroy()

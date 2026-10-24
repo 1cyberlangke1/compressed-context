@@ -126,6 +126,13 @@ export const zh: Messages = {
     sourceGlobal: "全局",
     sourceName: "同名",
     sourceExact: "精确",
+    icons: {
+      threshold: "⚡",
+      window: "🪟",
+      block: "📄",
+      total: "📚",
+      nudge: "🔔",
+    },
   },
   languages: {
     zh: "中文",

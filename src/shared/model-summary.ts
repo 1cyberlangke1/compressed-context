@@ -49,6 +49,16 @@ export function effectiveWindow(scoped: CompressionSettings, native: number | un
 }
 
 /**
+ * 输入：字段片段。
+ * 输出：单行文本，片段之间用两个空格分隔（不用中点）。
+ * 预期：片段内部的空格换成不换行空格，折行只会发生在字段之间，
+ *       不会出现「上下文窗口」和它后面的数值被拆到两行的情况。
+ */
+export function joinSegments(segments: readonly string[]): string {
+  return segments.map((segment) => segment.replaceAll(" ", "\u00A0")).join("  ")
+}
+
+/**
  * 输入：该模型合并后的设置 + 原生窗口 + 文案。
  * 输出：一行要展示的片段（完整字段名 + 折算 token）。
  * 预期：窗口未知时明确写「未知」；提醒间隔为 0 时写「关」。
@@ -71,13 +81,13 @@ export function summarySegments(input: {
           ? copy.settings.limitCapped(formatTokens(scoped.contextLimit), formatTokens(native))
           : formatTokens(scoped.contextLimit)
   return [
-    `${copy.settings.threshold} ${scoped.triggerPercent.toString()}%${
+    `${copy.modelPanel.icons.threshold} ${scoped.triggerPercent.toString()}%${
       threshold === undefined ? "" : `（${formatTokens(threshold)}）`
     }`,
-    `${copy.modelPanel.window} ${window}`,
-    `${copy.settings.summaryBlockPercent} ${scoped.summaryBlockPercent.toString()}%（${formatTokens(limits.blockChars)}）`,
-    `${copy.settings.summaryTotalPercent} ${scoped.summaryTotalPercent.toString()}%（${formatTokens(limits.totalChars)}）`,
-    `${copy.settings.nudgeGrowth} ${
+    `${copy.modelPanel.icons.window} ${window}`,
+    `${copy.modelPanel.icons.block} ${scoped.summaryBlockPercent.toString()}%（${formatTokens(limits.blockChars)}）`,
+    `${copy.modelPanel.icons.total} ${scoped.summaryTotalPercent.toString()}%（${formatTokens(limits.totalChars)}）`,
+    `${copy.modelPanel.icons.nudge} ${
       scoped.nudgeGrowthTokens === 0 ? copy.settings.off : formatTokens(scoped.nudgeGrowthTokens)
     }`,
   ]
