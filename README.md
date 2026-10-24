@@ -1,5 +1,7 @@
 # compressed-context
 
+[![license](https://img.shields.io/npm/l/compressed-context)](LICENSE)
+
 OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独立的摘要块，让长会话在有限的上下文窗口里继续跑下去。
 
 ![compressed-context TUI 面板](docs/panel.png)
