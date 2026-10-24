@@ -144,6 +144,6 @@ describe("三层菜单", () => {
       currentModel: "[google]gemini-3-pro",
     })
     expect(options.map((option) => option.value)).toEqual(["current", "overrides"])
-    expect(options[1]?.footer).toBe("已配置 1 条")
+    expect(options[1]?.footer).toBe("1 条")
   })
 })

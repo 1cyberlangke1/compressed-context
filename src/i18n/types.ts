@@ -93,9 +93,7 @@ export interface Messages {
     readonly overrideNone: string
     readonly overrideResetAll: string
     readonly overrideDelete: string
-    readonly overrideSaved: (key: string, count: number) => string
-    readonly overrideCleared: (key: string) => string
-    readonly overrideMissingModel: string
+    readonly modelConfigured: string
     readonly overrideInheritAction: string
     readonly overrideCustom: string
     readonly decompressInlineMax: string

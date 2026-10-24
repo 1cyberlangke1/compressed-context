@@ -115,7 +115,7 @@ export function buildPickerOptions(input: {
     .map(({ item }) => ({
       title: item.title,
       value: { key: item.key },
-      footer: item.configured ? `${item.footer} · ${copy.settings.modelsConfigured(1)}` : item.footer,
+      footer: item.configured ? `${item.footer} · ${copy.settings.modelConfigured}` : item.footer,
       ...(item.isCurrent ? { description: copy.settings.modelCurrent } : {}),
     }))
 
