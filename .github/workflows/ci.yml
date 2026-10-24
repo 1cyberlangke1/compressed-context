@@ -32,3 +32,40 @@ jobs:
           bun-version: latest
       - run: pnpm test:tui
       - run: pnpm build:tui
+
+  # 用真的 opencode 按 npm 安装形态加载插件：插件加载失败就让 CI 红，发布也被 needs 挡住。
+  plugin-load:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # 故意不锁版本：上游发新版就让 CI 红，提醒适配。
+      - id: opencode
+        run: echo "version=$(npm view @opencode/cli version)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: opencode-cache
+        with:
+          path: .ci/opencode
+          key: opencode-${{ runner.os }}-${{ steps.opencode.outputs.version }}
+
+      - if: steps.opencode-cache.outputs.cache-hit != 'true'
+        run: npm install --prefix .ci/opencode "@opencode/cli@${{ steps.opencode.outputs.version }}"
+
+      - run: echo "$PWD/.ci/opencode/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: opencode --version
+
+      - run: pnpm install --frozen-lockfile
+      # prepack 会跑 build:tui，产物口径与发布一致。
+      - run: bun scripts/ci-plugin-load.mjs

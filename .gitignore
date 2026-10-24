@@ -36,6 +36,9 @@ hs_err_pid*
 *.rar
 *.tgz
 
+# CI 本地复现用的 opencode 安装目录
+.ci/
+
 # 临时 clone / 临时目录
 tmp/
 
