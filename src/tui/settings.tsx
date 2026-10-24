@@ -93,26 +93,89 @@ export function SettingsCommand(props: {
     void fetchWindow(routeSessionID())
   })
 
-  const openNudge = (): void => {
+  /**
+   * 输入：TokenDialog 的差异字段 + 写回函数。
+   * 输出：无。
+   * 预期：统一弹窗与写回；allowZero 只在需要时传，避免把「允许 0」带给别的字段。
+   */
+  const openTokenField = (input: {
+    readonly title: string
+    readonly hint: string
+    readonly invalid: string
+    readonly placeholder: string
+    readonly initial: string
+    readonly min: number
+    readonly max: number
+    readonly allowZero?: boolean
+    readonly apply: (draft: Settings, value: number) => void
+  }): void => {
     props.context.ui.dialog.show(() => (
       <TokenDialog
         context={props.context}
         copy={copy()}
-        title={copy().settings.nudgeGrowth}
-        hint={copy().settings.nudgeGrowthHint}
-        invalid={copy().settings.nudgeGrowthInvalid}
-        placeholder="50k"
-        initial={props.settings.nudgeGrowthTokens === 0 ? "0" : formatTokens(props.settings.nudgeGrowthTokens)}
-        min={0}
-        max={MAX_NUDGE_GROWTH_TOKENS}
-        allowZero
+        title={input.title}
+        hint={input.hint}
+        invalid={input.invalid}
+        placeholder={input.placeholder}
+        initial={input.initial}
+        min={input.min}
+        max={input.max}
+        {...(input.allowZero === true ? { allowZero: true } : {})}
         onConfirm={(value) => {
           void props.updateSettings((draft) => {
-            draft.nudgeGrowthTokens = value
+            input.apply(draft, value)
           })
         }}
       />
     ))
+  }
+
+  /**
+   * 输入：PercentDialog 的差异字段 + 写回函数。
+   * 输出：无。
+   * 预期：共用当前窗口换算百分比上限与提示。
+   */
+  const openPercentField = (input: {
+    readonly title: string
+    readonly hint: string
+    readonly initial: number
+    readonly apply: (draft: Settings, value: number) => void
+  }): void => {
+    const window = currentWindow()
+    props.context.ui.dialog.show(() => (
+      <PercentDialog
+        context={props.context}
+        copy={copy()}
+        title={input.title}
+        hint={input.hint}
+        invalid={copy().settings.summaryPercentInvalid}
+        initial={input.initial}
+        windowTokens={window}
+        minPercent={1}
+        maxPercent={maxSummaryPercent(window)}
+        onConfirm={(next) => {
+          void props.updateSettings((draft) => {
+            input.apply(draft, next)
+          })
+        }}
+      />
+    ))
+  }
+
+  const openNudge = (): void => {
+    openTokenField({
+      title: copy().settings.nudgeGrowth,
+      hint: copy().settings.nudgeGrowthHint,
+      invalid: copy().settings.nudgeGrowthInvalid,
+      placeholder: "50k",
+      initial: props.settings.nudgeGrowthTokens === 0 ? "0" : formatTokens(props.settings.nudgeGrowthTokens),
+      min: 0,
+      max: MAX_NUDGE_GROWTH_TOKENS,
+      allowZero: true,
+      apply: (draft, value) => {
+        draft.nudgeGrowthTokens = value
+      },
+    })
   }
 
   const openThreshold = (): void => {
@@ -147,68 +210,40 @@ export function SettingsCommand(props: {
   }
 
   const openCustom = (): void => {
-    props.context.ui.dialog.show(() => (
-      <TokenDialog
-        context={props.context}
-        copy={copy()}
-        title={copy().settings.limit}
-        hint={copy().settings.limitHint}
-        invalid={copy().settings.limitInvalid}
-        placeholder={copy().settings.limitPlaceholder}
-        initial={props.settings.contextLimit === "auto" ? "" : props.settings.contextLimit.toString()}
-        min={MIN_CONTEXT_LIMIT}
-        max={MAX_CONTEXT_LIMIT}
-        onConfirm={(value) => {
-          void props.updateSettings((draft) => {
-            draft.contextLimit = value
-          })
-        }}
-      />
-    ))
+    openTokenField({
+      title: copy().settings.limit,
+      hint: copy().settings.limitHint,
+      invalid: copy().settings.limitInvalid,
+      placeholder: copy().settings.limitPlaceholder,
+      initial: props.settings.contextLimit === "auto" ? "" : props.settings.contextLimit.toString(),
+      min: MIN_CONTEXT_LIMIT,
+      max: MAX_CONTEXT_LIMIT,
+      apply: (draft, value) => {
+        draft.contextLimit = value
+      },
+    })
   }
 
   const openSummaryBlock = (): void => {
-    const window = currentWindow()
-    props.context.ui.dialog.show(() => (
-      <PercentDialog
-        context={props.context}
-        copy={copy()}
-        title={copy().settings.summaryBlockPercent}
-        hint={copy().settings.summaryBlockPercentHint}
-        invalid={copy().settings.summaryPercentInvalid}
-        initial={effectiveSummaryBlockPercent(props.settings)}
-        windowTokens={window}
-        minPercent={1}
-        maxPercent={maxSummaryPercent(window)}
-        onConfirm={(next) => {
-          void props.updateSettings((draft) => {
-            draft.summaryBlockPercent = next
-          })
-        }}
-      />
-    ))
+    openPercentField({
+      title: copy().settings.summaryBlockPercent,
+      hint: copy().settings.summaryBlockPercentHint,
+      initial: effectiveSummaryBlockPercent(props.settings),
+      apply: (draft, value) => {
+        draft.summaryBlockPercent = value
+      },
+    })
   }
 
   const openSummaryTotal = (): void => {
-    const window = currentWindow()
-    props.context.ui.dialog.show(() => (
-      <PercentDialog
-        context={props.context}
-        copy={copy()}
-        title={copy().settings.summaryTotalPercent}
-        hint={copy().settings.summaryTotalPercentHint}
-        invalid={copy().settings.summaryPercentInvalid}
-        initial={effectiveSummaryTotalPercent(props.settings)}
-        windowTokens={window}
-        minPercent={1}
-        maxPercent={maxSummaryPercent(window)}
-        onConfirm={(next) => {
-          void props.updateSettings((draft) => {
-            draft.summaryTotalPercent = next
-          })
-        }}
-      />
-    ))
+    openPercentField({
+      title: copy().settings.summaryTotalPercent,
+      hint: copy().settings.summaryTotalPercentHint,
+      initial: effectiveSummaryTotalPercent(props.settings),
+      apply: (draft, value) => {
+        draft.summaryTotalPercent = value
+      },
+    })
   }
 
   const openSummaryLanguage = async (): Promise<void> => {
@@ -252,66 +287,48 @@ export function SettingsCommand(props: {
   }
 
   const openDecompressInline = (): void => {
-    props.context.ui.dialog.show(() => (
-      <TokenDialog
-        context={props.context}
-        copy={copy()}
-        title={copy().settings.decompressInlineMax}
-        hint={copy().settings.decompressInlineMaxHint}
-        invalid={copy().settings.decompressInlineMaxInvalid}
-        placeholder="10k"
-        initial={formatTokens(effectiveDecompressInlineMax(props.settings))}
-        min={MIN_DECOMPRESS_INLINE_MAX}
-        max={MAX_DECOMPRESS_INLINE_MAX}
-        onConfirm={(next) => {
-          void props.updateSettings((draft) => {
-            draft.decompressInlineMax = next
-          })
-        }}
-      />
-    ))
+    openTokenField({
+      title: copy().settings.decompressInlineMax,
+      hint: copy().settings.decompressInlineMaxHint,
+      invalid: copy().settings.decompressInlineMaxInvalid,
+      placeholder: "10k",
+      initial: formatTokens(effectiveDecompressInlineMax(props.settings)),
+      min: MIN_DECOMPRESS_INLINE_MAX,
+      max: MAX_DECOMPRESS_INLINE_MAX,
+      apply: (draft, value) => {
+        draft.decompressInlineMax = value
+      },
+    })
   }
 
   const openDecompressCap = (): void => {
-    props.context.ui.dialog.show(() => (
-      <TokenDialog
-        context={props.context}
-        copy={copy()}
-        title={copy().settings.decompressTempCap}
-        hint={copy().settings.decompressTempCapHint}
-        invalid={copy().settings.decompressTempCapInvalid}
-        placeholder="50"
-        initial={effectiveDecompressTempCap(props.settings).toString()}
-        min={MIN_DECOMPRESS_TEMP_CAP}
-        max={MAX_DECOMPRESS_TEMP_CAP}
-        onConfirm={(next) => {
-          void props.updateSettings((draft) => {
-            draft.decompressTempCap = next
-          })
-        }}
-      />
-    ))
+    openTokenField({
+      title: copy().settings.decompressTempCap,
+      hint: copy().settings.decompressTempCapHint,
+      invalid: copy().settings.decompressTempCapInvalid,
+      placeholder: "50",
+      initial: effectiveDecompressTempCap(props.settings).toString(),
+      min: MIN_DECOMPRESS_TEMP_CAP,
+      max: MAX_DECOMPRESS_TEMP_CAP,
+      apply: (draft, value) => {
+        draft.decompressTempCap = value
+      },
+    })
   }
 
   const openDecompressMaxAge = (): void => {
-    props.context.ui.dialog.show(() => (
-      <TokenDialog
-        context={props.context}
-        copy={copy()}
-        title={copy().settings.decompressTempMaxAgeHours}
-        hint={copy().settings.decompressTempMaxAgeHoursHint}
-        invalid={copy().settings.decompressTempMaxAgeHoursInvalid}
-        placeholder="24"
-        initial={effectiveDecompressTempMaxAgeHours(props.settings).toString()}
-        min={MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS}
-        max={MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS}
-        onConfirm={(next) => {
-          void props.updateSettings((draft) => {
-            draft.decompressTempMaxAgeHours = next
-          })
-        }}
-      />
-    ))
+    openTokenField({
+      title: copy().settings.decompressTempMaxAgeHours,
+      hint: copy().settings.decompressTempMaxAgeHoursHint,
+      invalid: copy().settings.decompressTempMaxAgeHoursInvalid,
+      placeholder: "24",
+      initial: effectiveDecompressTempMaxAgeHours(props.settings).toString(),
+      min: MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+      max: MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+      apply: (draft, value) => {
+        draft.decompressTempMaxAgeHours = value
+      },
+    })
   }
 
   const openLimit = async (): Promise<boolean> => {
