@@ -62,7 +62,9 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         const next: State = {
           blocks,
           attempts: current.attempts,
-          ...(pending === undefined ? {} : { pending }),
+          ...(pending === undefined
+            ? {}
+            : { pending, pendingAt: Date.now() }),
           ...(phase === undefined ? {} : { phase }),
           ...(lastError === undefined ? {} : { lastError }),
           ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),

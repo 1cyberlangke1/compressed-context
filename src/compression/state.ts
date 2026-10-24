@@ -32,6 +32,8 @@ export interface Block {
 export interface State {
   readonly blocks: readonly Block[]
   readonly pending?: Block
+  /** pending 挂起的时间戳（毫秒）；转正/丢弃后清除。事件丢失时按它兜底过期。 */
+  readonly pendingAt?: number
   /** 下一次 compaction 是二级压缩；T1 时缺省。 */
   readonly phase?: CompactionPhase
   readonly attempts: number
@@ -41,6 +43,9 @@ export interface State {
   /** 已发出的主动压缩提醒次数。 */
   readonly nudgeCount?: number
 }
+
+/** pending 超过这个时长还没被事件转正就视为丢失，强制转正（宁可重复展示摘要，不可卡死会话）。 */
+export const PENDING_TIMEOUT_MS = 10 * 60_000
 
 /** 服务端 storage 的最小接口，便于测试替身。 */
 export interface StorageLike {
@@ -280,7 +285,6 @@ export function commitPending(state: State): State {
     ...(state.phase === undefined ? {} : { phase: state.phase }),
   }
 }
-
 /** 输入：状态 + 错误；输出：丢弃 pending 后的新状态；预期：失败时清 pending/phase。 */
 export function dropPending(state: State, error: string): State {
   return {
@@ -290,6 +294,31 @@ export function dropPending(state: State, error: string): State {
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
   }
+}
+
+/**
+ * 输入：状态 + 当前时间。
+ * 输出：pending 超过 PENDING_TIMEOUT_MS 时强制转正；否则原样返回（含 pendingAt 首次标记）。
+ * 预期：事件丢失时 pending 会永久卡住自动压缩（blockedByState 挡住一切），
+ *       这里按时间兜底：宁可摘要重复展示一次，也不让会话卡死。
+ */
+export function expireStalePending(state: State, now: number): State {
+  if (state.pending === undefined) return state
+  const marked = state.pendingAt ?? now
+  if (now - marked < PENDING_TIMEOUT_MS) {
+    return state.pendingAt === undefined ? { ...state, pendingAt: marked } : state
+  }
+  const committed = commitPending(state)
+  const next = {
+    blocks: committed.blocks,
+    attempts: committed.attempts,
+    ...(committed.phase === undefined ? {} : { phase: committed.phase }),
+    ...(committed.nudgeBaselineTokens === undefined
+      ? {}
+      : { nudgeBaselineTokens: committed.nudgeBaselineTokens }),
+    ...(committed.nudgeCount === undefined ? {} : { nudgeCount: committed.nudgeCount }),
+  }
+  return next
 }
 
 /**

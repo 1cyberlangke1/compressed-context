@@ -18,7 +18,7 @@ import {
   resolvedWindowKey,
   windowKey,
 } from "./settings.ts"
-import { MAX_COMPRESSION_ATTEMPTS, clearPhase, loadState, type State } from "./state.ts"
+import { PENDING_TIMEOUT_MS, MAX_COMPRESSION_ATTEMPTS, clearPhase, expireStalePending, loadState, type State } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -94,7 +94,13 @@ async function effectiveLimit(
  *       摘要压不动只是这一次没有候选，新消息进来后仍会继续压缩。
  */
 function blockedByState(state: State): boolean {
-  return state.pending !== undefined || state.attempts >= MAX_COMPRESSION_ATTEMPTS
+  if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return true
+  // pending 卡住超过兜底时长视为事件丢失：不再挡压缩，等这次入队走完整体生命周期。
+  if (state.pending !== undefined) {
+    const marked = state.pendingAt
+    return marked === undefined || Date.now() - marked < PENDING_TIMEOUT_MS
+  }
+  return false
 }
 
 /**
@@ -159,6 +165,25 @@ async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): P
 }
 
 /**
+ * 输入：插件上下文 + sessionID。
+ * 输出：过期兜底后的最新状态。
+ * 预期：pending 挂起超过 PENDING_TIMEOUT_MS 时强制转正写回；其余原样读。
+ *       事件丢失时靠这条路径解卡，而不是永远挡住自动压缩。
+ */
+async function expireStalePendingStorage(ctx: Plugin.Context, sessionID: string): Promise<State> {
+  const state = await loadState(ctx.storage, sessionID)
+  const expired = expireStalePending(state, Date.now())
+  if (expired !== state) {
+    await stateStore(ctx.storage).transact(sessionID, (current) => ({
+      next: expireStalePending(current, Date.now()),
+      result: undefined,
+    }))
+    return expireStalePending(await loadState(ctx.storage, sessionID), Date.now())
+  }
+  return state
+}
+
+/**
  * 输入：服务端上下文 + sessionID + 捕获到的错误。
  * 输出：无。
  * 预期：累加 attempts 并记录 lastError；写状态失败时忽略，避免掩盖原始错误。
@@ -204,7 +229,7 @@ export async function maybeAutoCompressStep(input: {
     const session = await input.ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
     if (session?.location.directory !== input.ctx.location.directory) return
     if (isCompactionInFlight(input.sessionID)) return
-    const state = await loadState(input.ctx.storage, input.sessionID)
+    const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
@@ -399,7 +424,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (isCompactionInFlight(input.sessionID)) return
     if (isCompressionInstruction(input.messages)) return
 
-    const state = await loadState(input.ctx.storage, input.sessionID)
+    const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)

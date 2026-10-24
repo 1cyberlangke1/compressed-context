@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest"
 
 import type { SummaryFields } from "../src/compression/schema.ts"
 import {
+  PENDING_TIMEOUT_MS,
   commitPending,
   dropPending,
+  expireStalePending,
   parseState,
   retryPending,
   withPending,
   type Block,
+  type State,
 } from "../src/compression/state.ts"
 
 /** 输入：标题；输出：最小合法摘要。 */
@@ -177,5 +180,40 @@ describe("state transitions", () => {
       attempts: 0,
     })
     expect(parsed.blocks[0]).toMatchObject({ sourceTokens: 777, summaryTokens: 77 })
+  })
+})
+
+describe("expireStalePending", () => {
+  it("首次看到无标记的 pending 时打上 pendingAt，不转正", () => {
+    const state: State = { blocks: [], attempts: 0, pending: block("b1", 1) }
+    const next = expireStalePending(state, 1_000)
+    expect(next.pendingAt).toBe(1_000)
+    expect(next.pending?.id).toBe("b1")
+  })
+
+  it("超时后强制转正并清掉 pendingAt", () => {
+    const state: State = {
+      blocks: [],
+      attempts: 0,
+      pending: block("b1", 1),
+      pendingAt: 1_000,
+      phase: "t2",
+    }
+    const next = expireStalePending(state, 1_000 + PENDING_TIMEOUT_MS + 1)
+    expect(next.pending).toBeUndefined()
+    expect(next.pendingAt).toBeUndefined()
+    expect(next.blocks.map((item) => item.id)).toEqual(["b1"])
+    // 事件对账有它自己的语义：转正保留 phase，这里也一致。
+    expect(next.phase).toBe("t2")
+  })
+
+  it("未超时的 pending 原样保留", () => {
+    const state: State = { blocks: [], attempts: 0, pending: block("b1", 1), pendingAt: 1_000 }
+    expect(expireStalePending(state, 1_000 + PENDING_TIMEOUT_MS - 1)).toBe(state)
+  })
+
+  it("没有 pending 时原样返回", () => {
+    const state: State = { blocks: [block("b1", 1)], attempts: 0 }
+    expect(expireStalePending(state, 999_999)).toBe(state)
   })
 })
