@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 
 import { resolveMessages } from "../src/i18n/index.ts"
-import { effectiveWindow, joinSegments, summarySegments, usedLayers } from "../src/shared/model-summary.ts"
+import { effectiveWindow, summarySegments, usedLayers } from "../src/shared/model-summary.ts"
 import { normalizeSettings } from "../src/shared/settings.ts"
 
 // 断言对照语言文件，改文案不用改测试。
@@ -81,13 +81,5 @@ describe("summarySegments", () => {
     })
     expect(segments[1]).toBe(`${copy.modelPanel.icons.window} ${copy.modelPanel.windowUnknown}`)
     expect(segments[4]).toBe(`${copy.modelPanel.icons.nudge} ${copy.settings.off}`)
-  })
-})
-
-describe("joinSegments", () => {
-  test("片段之间用两个空格，字段内部用不换行空格", () => {
-    const line = joinSegments(["压缩阈值 90%（900k）", "上下文窗口 1.0M（模型原生）"])
-    expect(line).toBe("压缩阈值\u00A090%（900k）  上下文窗口\u00A01.0M（模型原生）")
-    expect(line.split("  ")).toHaveLength(2)
   })
 })

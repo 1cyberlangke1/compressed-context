@@ -3,7 +3,7 @@ import { createMemo, For } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
 import { modelTint, tintAt } from "../../shared/model-color.ts"
-import { joinSegments, summarySegments, usedLayers, type Layer } from "../../shared/model-summary.ts"
+import { summarySegments, usedLayers, type Layer } from "../../shared/model-summary.ts"
 import { localeArgument, resolveForModel, type Settings } from "../../shared/settings.ts"
 import { toHex, toRgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
@@ -88,9 +88,11 @@ export function ModelPanel(props: {
         </For>
         <span style={{ fg: theme.text.muted }}>{`  ${sourceLabel()}`}</span>
       </text>
-      <text fg={theme.text.muted}>
-        {joinSegments(summarySegments({ scoped: scoped(), native: entry()?.limit.context, copy: copy() }))}
-      </text>
+      <box flexDirection="row" flexWrap="wrap" columnGap={2}>
+        <For each={summarySegments({ scoped: scoped(), native: entry()?.limit.context, copy: copy() })}>
+          {(segment) => <text fg={theme.text.muted}>{segment}</text>}
+        </For>
+      </box>
     </box>
   )
 }

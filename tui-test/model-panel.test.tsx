@@ -44,8 +44,8 @@ function fakeContext(): Context {
   } as unknown as Context
 }
 
-/** 输入：设置；输出：渲染好的 app。预期：语言固定 zh。 */
-async function mount(settings: Settings) {
+/** 输入：设置 + 渲染宽度；输出：渲染好的 app。预期：语言固定 zh。 */
+async function mount(settings: Settings, width = 120) {
   const context = fakeContext()
   const app = await testRender(
     () => (
@@ -56,18 +56,17 @@ async function mount(settings: Settings) {
         updateSettings={() => Promise.resolve()}
       />
     ),
-    { width: 120, height: 10 },
+    { width, height: 12 },
   )
   app.renderer.start()
   return app
 }
 
 describe("ModelPanel", () => {
-  test("默认设置显示模型名、来源与完整字段", async () => {
+  test("默认设置显示模型名、来源与 emoji 字段", async () => {
     const app = await mount(normalizeSettings({ triggerPercent: 90, summaryBlockPercent: 5, summaryTotalPercent: 7 }))
     try {
       const raw = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
-      // 字段内部用不换行空格，断言前统一还原成普通空格。
       const frame = raw.replaceAll("\u00A0", " ")
       expect(frame).toContain(copy.modelPanel.sourceGlobal)
       expect(frame).toContain(`${copy.modelPanel.icons.threshold} 90%（900k）`)
@@ -89,7 +88,6 @@ describe("ModelPanel", () => {
     )
     try {
       const raw = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
-      // 字段内部用不换行空格，断言前统一还原成普通空格。
       const frame = raw.replaceAll("\u00A0", " ")
       expect(frame).toContain(`${copy.modelPanel.sourceGlobal} + ${copy.modelPanel.sourceExact}`)
       expect(frame).toContain(`${copy.modelPanel.icons.threshold} 80%（800k）`)
@@ -102,10 +100,27 @@ describe("ModelPanel", () => {
   test("全默认时来源是「默认」", async () => {
     const app = await mount(normalizeSettings({}))
     try {
-      const raw = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
-      // 字段内部用不换行空格，断言前统一还原成普通空格。
-      const frame = raw.replaceAll("\u00A0", " ")
+      const frame = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
       expect(frame).toContain(copy.modelPanel.sourceDefault)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("窄宽度下每段数值完整，不会被折行切断", async () => {
+    const app = await mount(
+      normalizeSettings({ triggerPercent: 88, summaryBlockPercent: 1, summaryTotalPercent: 10 }),
+      30,
+    )
+    try {
+      const frame = await app.waitForFrame((value) => value.includes("gemini-3-pro"))
+      for (const line of frame.split("\n")) {
+        const open = (line.match(/（/g) ?? []).length
+        const close = (line.match(/）/g) ?? []).length
+        expect(open).toBe(close)
+      }
+      expect(frame).toContain("880k")
+      expect(frame).toContain("10k")
     } finally {
       app.renderer.destroy()
     }

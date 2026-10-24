@@ -49,16 +49,6 @@ export function effectiveWindow(scoped: CompressionSettings, native: number | un
 }
 
 /**
- * 输入：字段片段。
- * 输出：单行文本，片段之间用两个空格分隔（不用中点）。
- * 预期：片段内部的空格换成不换行空格，折行只会发生在字段之间，
- *       不会出现「上下文窗口」和它后面的数值被拆到两行的情况。
- */
-export function joinSegments(segments: readonly string[]): string {
-  return segments.map((segment) => segment.replaceAll(" ", "\u00A0")).join("  ")
-}
-
-/**
  * 输入：该模型合并后的设置 + 原生窗口 + 文案。
  * 输出：一行要展示的片段（完整字段名 + 折算 token）。
  * 预期：窗口未知时明确写「未知」；提醒间隔为 0 时写「关」。
