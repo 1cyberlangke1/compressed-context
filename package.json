@@ -23,10 +23,11 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./tui": "./src/tui/main.tsx"
+    "./tui": "./dist/tui.js"
   },
   "files": [
-    "src"
+    "src",
+    "dist"
   ],
   "peerDependencies": {
     "@opencode/plugin": "^2.0.32",
@@ -34,10 +35,23 @@
     "@opentui/solid": ">=0.5.17",
     "solid-js": ">=1.9.0"
   },
+  "peerDependenciesMeta": {
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:tui",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:tui && pnpm build:tui",
+    "build:tui": "bun scripts/build-tui.mjs",
+    "prepack": "bun run build:tui",
     "test": "vitest run",
     "test:tui": "cd tui-test && bun test",
     "test:e2e:nudge": "bun scripts/e2e-nudge.mjs",

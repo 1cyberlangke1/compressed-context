@@ -1,4 +1,4 @@
-import { Rpc } from "@opencode/plugin/rpc"
+import type { Rpc } from "@opencode/plugin/rpc"
 
 import type { SummaryBlock } from "./blocks.ts"
 import type { CacheSample } from "./cache.ts"
@@ -155,8 +155,14 @@ const CacheHistoryOutputJson = {
   additionalProperties: false,
 } as const
 
-/** TUI 与服务端共用的设置 / 面板 RPC。 */
-export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
+/**
+ * TUI 与服务端共用的设置 / 面板 RPC。
+ *
+ * 用字面量而不是 `Rpc.define(...)`：`define` 只做「错误名不能以 rpc. 开头」的运行时校验
+ * 并把入参原样返回。改成纯字面量后 TUI 产物不再需要运行时导入 `@opencode/plugin/rpc`
+ * （该模块不在宿主的运行时模块表里，npm 安装后无法解析）。
+ */
+export const ContextRpc: Rpc.PortableDefinition = {
   id: "compressed-context",
   methods: {
     settingsGet: { input: SettingsGetInputJson, output: SettingsOutputJson },
@@ -169,7 +175,7 @@ export const ContextRpc: Rpc.PortableDefinition = Rpc.define({
     },
   },
   events: {},
-})
+}
 
 /** 服务端设置读取结果。 */
 export interface ContextSettingsResult extends Settings {
