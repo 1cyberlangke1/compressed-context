@@ -49,13 +49,13 @@ import {
   type PickerValue,
 } from "./settings/models.ts"
 import {
-  buildGroupOptions,
   buildModelSectionOptions,
   buildSectionOptions,
   buildSettingsOptions,
   itemsOfGroup,
   type SettingsAction,
   type SettingsGroup,
+  type SettingsSection,
   type ToggleSetting,
 } from "./settings/options.ts"
 import type { UpdateSettings } from "./types.ts"
@@ -697,7 +697,7 @@ export function SettingsCommand(props: {
   }
 
   /** 当前浏览的分组；动作完成后回到这一组，而不是回到第一层。 */
-  let activeGroup: SettingsGroup = "compress"
+  let activeGroup: SettingsGroup = "defaults"
 
   /** 输入：无；输出：无。预期：重开当前分组。 */
   const reopenCurrent = (): void => {
@@ -717,18 +717,6 @@ export function SettingsCommand(props: {
     if (picked === undefined) return true
     await handlers[picked]?.()
     return false
-  }
-
-  /** 输入：无；输出：是否返回第一层。预期：全局默认的五组循环。 */
-  async function openGlobalSection(): Promise<boolean> {
-    for (;;) {
-      const group = await props.context.ui.dialog.select<SettingsGroup>({
-        title: copy().settings.sectionGlobal,
-        options: buildGroupOptions({ settings: props.settings, copy: copy(), window: currentWindow() }),
-      })
-      if (group === undefined) return true
-      if (!(await openGroup(group))) return false
-    }
   }
 
   /** 输入：无；输出：是否返回第一层。预期：按模型的第一层。 */
@@ -758,7 +746,7 @@ export function SettingsCommand(props: {
       // 每次打开菜单都按当前会话模型刷新窗口，避免显示成别的模型。
       await fetchWindow(routeSessionID())
       const currentKey = currentKeyOf(modelEntries(), currentModel())
-      const section = await props.context.ui.dialog.select<"global" | "models">({
+      const section = await props.context.ui.dialog.select<SettingsSection>({
         title: copy().settings.title,
         options: buildSectionOptions({
           settings: props.settings,
@@ -767,7 +755,7 @@ export function SettingsCommand(props: {
         }),
       })
       if (section === undefined) return
-      const back = section === "models" ? await openModelSection() : await openGlobalSection()
+      const back = section === "models" ? await openModelSection() : await openGroup(section)
       if (!back) return
     }
   }

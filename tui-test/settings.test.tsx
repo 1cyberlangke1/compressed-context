@@ -94,48 +94,57 @@ async function mount(answers: (string | undefined)[]) {
 }
 
 describe("SettingsCommand", () => {
-  test("第一层只有全局默认与按模型", async () => {
+  test("第一层是六项：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面", async () => {
     const { app, captured } = await mount([])
     try {
       captured.run?.()
       await app.waitFor(() => captured.history.length >= 1)
       const options = captured.history[0]?.options ?? []
-      expect(options.map((option) => option.value)).toEqual(["global", "models"])
-      expect(options.map((option) => option.title)).toEqual(["全局默认", "按模型"])
+      expect(options.map((option) => option.value)).toEqual([
+        "defaults",
+        "models",
+        "summary",
+        "switches",
+        "decompress",
+        "interface",
+      ])
+      expect(options[0]?.title).toBe("默认设置")
+      expect(options[1]?.title).toBe("按模型")
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("全局默认第二层是六个分组里的五个", async () => {
-    const { app, captured } = await mount(["global"])
+  test("点进分区直接是该分组的项", async () => {
+    const { app, captured } = await mount(["defaults"])
     try {
       captured.run?.()
       await app.waitFor(() => captured.history.length >= 2)
       const options = captured.history[1]?.options ?? []
       expect(options.map((option) => option.value)).toEqual([
-        "compress",
-        "summary",
-        "panel",
-        "decompress",
-        "interface",
+        "limit",
+        "threshold",
+        "nudge",
+        "blockPercent",
+        "totalPercent",
       ])
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("第三层只显示该分组的项", async () => {
-    const { app, captured } = await mount(["global", "panel"])
+  test("开关和界面各自独立，不在默认设置里", async () => {
+    const { app, captured } = await mount(["interface"])
     try {
       captured.run?.()
-      await app.waitFor(() => captured.history.length >= 3)
-      const options = captured.history[2]?.options ?? []
+      await app.waitFor(() => captured.history.length >= 2)
+      const options = captured.history[1]?.options ?? []
       expect(options.map((option) => option.value)).toEqual([
         "show",
         "showCacheChart",
         "showCacheLog",
         "showSummaries",
+        "language",
       ])
     } finally {
       app.renderer.destroy()
@@ -143,7 +152,7 @@ describe("SettingsCommand", () => {
   })
 
   test("选择 showCacheChart 会翻转设置", async () => {
-    const { app, captured, settings } = await mount(["global", "panel", "showCacheChart", undefined])
+    const { app, captured, settings } = await mount(["interface", "showCacheChart", undefined])
     try {
       captured.run?.()
       await app.waitFor(() => settings().showCacheChart === false)
@@ -154,7 +163,7 @@ describe("SettingsCommand", () => {
   })
 
   test("选择 summaryFormat 会切到 json", async () => {
-    const { app, captured, settings } = await mount(["global", "summary", "summaryFormat", "json", undefined])
+    const { app, captured, settings } = await mount(["summary", "summaryFormat", "json", undefined])
     try {
       captured.run?.()
       await app.waitFor(() => settings().summaryFormat === "json")
@@ -178,25 +187,25 @@ describe("SettingsCommand", () => {
   })
 
   test("弹窗型动作只开弹窗，不重开菜单", async () => {
-    const { app, captured } = await mount(["global", "compress", "nudge"])
+    const { app, captured } = await mount(["defaults", "nudge"])
     try {
       captured.run?.()
       await app.waitFor(() => captured.shows === 1)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(captured.selects).toBe(3)
+      expect(captured.selects).toBe(2)
     } finally {
       app.renderer.destroy()
     }
   })
 
   test("limit 选自定义时只继续开输入框", async () => {
-    const { app, captured } = await mount(["global", "compress", "limit", "custom"])
+    const { app, captured } = await mount(["defaults", "limit", "custom"])
     try {
       captured.run?.()
       await app.waitFor(() => captured.shows === 1)
       await new Promise((resolve) => setTimeout(resolve, 20))
       // 第一层 + 分组 + limit 选择 + limit 自己的选项；自定义输入框已打开，不能再弹菜单。
-      expect(captured.selects).toBe(4)
+      expect(captured.selects).toBe(3)
     } finally {
       app.renderer.destroy()
     }

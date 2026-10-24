@@ -92,10 +92,8 @@ export function buildPickerOptions(input: {
   }))
 
   const ids = [...new Set(entries.map((entry) => entry.id))]
-  const nameOnly = ids
-    .map((id) => ({ id, providers: providerCount(entries, id) }))
-    .filter((item) => item.providers > 1)
-    .map((item) => ({
+  // 每个模型名都出一行「仅模型名」：只有一个提供商时它和精确项等价，但以后加了提供商不用再改配置。
+  const nameOnly = ids.map((id) => ({ id, providers: providerCount(entries, id) })).map((item) => ({
       key: item.id,
       title: copy.settings.modelPickerNameOnly(item.providers),
       footer: item.id,

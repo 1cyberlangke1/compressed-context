@@ -71,14 +71,12 @@ export interface Messages {
     readonly showCacheLog: string
     readonly showSummaries: string
     readonly categories: {
-      readonly compress: string
+      readonly defaults: string
       readonly summary: string
-      readonly panel: string
+      readonly switches: string
       readonly decompress: string
       readonly interface: string
-      readonly models: string
     }
-    readonly sectionGlobal: string
     readonly sectionModel: string
     readonly modelCurrent: string
     readonly modelOverrides: string

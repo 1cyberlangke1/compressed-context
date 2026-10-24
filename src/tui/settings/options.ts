@@ -89,34 +89,37 @@ export const SETTINGS_ACTIONS = [
 
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number]
 
-/** 全局默认下的五个分组；顺序即菜单顺序。 */
-export const SETTINGS_GROUPS = ["compress", "summary", "panel", "decompress", "interface"] as const
+/** 设置分组：默认数值、摘要、开关、解压、界面。 */
+export const SETTINGS_GROUPS = ["defaults", "summary", "switches", "decompress", "interface"] as const
 
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number]
 
-/** 每个动作属于哪个分组；用于三层菜单里过滤。 */
+/** 设置第一层的入口：五个分组 + 按模型。 */
+export type SettingsSection = SettingsGroup | "models"
+
+/** 每个动作属于哪个分组；用于分层菜单里过滤。 */
 export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
-  limit: "compress",
-  threshold: "compress",
-  nudge: "compress",
-  autoCompress: "compress",
-  enableCompressTool: "compress",
-  enableDecompressTool: "compress",
-  blockPercent: "summary",
-  totalPercent: "summary",
+  limit: "defaults",
+  threshold: "defaults",
+  nudge: "defaults",
+  blockPercent: "defaults",
+  totalPercent: "defaults",
   summaryLanguage: "summary",
   summaryFormat: "summary",
   showTimeline: "summary",
   showBlockTokens: "summary",
-  show: "panel",
-  showCacheChart: "panel",
-  showCacheLog: "panel",
-  showSummaries: "panel",
+  autoCompress: "switches",
+  enableCompressTool: "switches",
+  enableDecompressTool: "switches",
+  show: "interface",
+  showCacheChart: "interface",
+  showCacheLog: "interface",
+  showSummaries: "interface",
+  language: "interface",
   decompressInlineMax: "decompress",
   decompressTempCap: "decompress",
   decompressTempMaxAgeHours: "decompress",
   decompressShowTokens: "decompress",
-  language: "interface",
 }
 
 /** 输入：全部选项 + 分组；输出：该分组的选项。预期：保持原有顺序。 */
@@ -129,40 +132,14 @@ export function itemsOfGroup(
 
 /**
  * 输入：设置 + 文案 + 当前模型。
- * 输出：设置第一层：全局默认 / 按模型。
- * 预期：两项都带摘要，打开后一眼能看到当前阈值与当前模型。
+ * 输出：设置第一层：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面。
+ * 预期：只有「默认设置」是与模型相关的数值项；开关与界面显示各自独立入口。
  */
 export function buildSectionOptions(input: {
   readonly settings: Settings
   readonly copy: Messages
   readonly currentModel?: string
-}): readonly DialogSelectOption<"global" | "models">[] {
-  const { settings, copy } = input
-  const total = effectiveSummaryTotalPercent(settings)
-  return [
-    {
-      title: copy.settings.sectionGlobal,
-      value: "global",
-      footer: `${copy.settings.threshold} ${settings.triggerPercent.toString()}% · ${copy.settings.summaryTotalPercent} ${total.toString()}%`,
-    },
-    {
-      title: copy.settings.sectionModel,
-      value: "models",
-      footer: input.currentModel ?? copy.settings.overrideNone,
-    },
-  ]
-}
-
-/**
- * 输入：设置 + 文案 + 窗口。
- * 输出：全局默认下的五个分组，每组带一行摘要。
- * 预期：只显示分组，不显示具体项，避免一屏二十多行。
- */
-export function buildGroupOptions(input: {
-  readonly settings: Settings
-  readonly copy: Messages
-  readonly window: number | undefined
-}): readonly DialogSelectOption<SettingsGroup>[] {
+}): readonly DialogSelectOption<SettingsSection>[] {
   const { settings, copy } = input
   const onOff = (value: boolean): string => (value ? copy.settings.on : copy.settings.off)
   const block = effectiveSummaryBlockPercent(settings)
@@ -170,19 +147,28 @@ export function buildGroupOptions(input: {
   const nudge = settings.nudgeGrowthTokens === 0 ? copy.settings.off : formatTokens(settings.nudgeGrowthTokens)
   return [
     {
-      title: copy.settings.categories.compress,
-      value: "compress",
-      footer: `${settings.triggerPercent.toString()}% · ${nudge} · ${onOff(settings.autoCompress)}`,
+      title: copy.settings.categories.defaults,
+      value: "defaults",
+      footer: `${settings.triggerPercent.toString()}% · ${block.toString()}%/${total.toString()}% · ${nudge}`,
+    },
+    {
+      title: copy.settings.sectionModel,
+      value: "models",
+      footer: input.currentModel ?? copy.settings.overrideNone,
     },
     {
       title: copy.settings.categories.summary,
       value: "summary",
-      footer: `${block.toString()}% / ${total.toString()}% · ${summaryFormatLabel(settings, copy)} · ${summaryLanguageLabel(settings, copy)}`,
+      footer: `${summaryFormatLabel(settings, copy)} · ${summaryLanguageLabel(settings, copy)}`,
     },
     {
-      title: copy.settings.categories.panel,
-      value: "panel",
-      footer: [onOff(settings.enabled), onOff(settings.showCacheChart), onOff(settings.showSummaries)].join(" · "),
+      title: copy.settings.categories.switches,
+      value: "switches",
+      footer: [
+        onOff(settings.autoCompress),
+        onOff(settings.enableCompressTool),
+        onOff(settings.enableDecompressTool),
+      ].join(" · "),
     },
     {
       title: copy.settings.categories.decompress,
@@ -192,7 +178,12 @@ export function buildGroupOptions(input: {
     {
       title: copy.settings.categories.interface,
       value: "interface",
-      footer: localeLabel(settings, copy),
+      footer: [
+        onOff(settings.enabled),
+        onOff(settings.showCacheChart),
+        onOff(settings.showSummaries),
+        localeLabel(settings, copy),
+      ].join(" · "),
     },
   ]
 }
@@ -255,42 +246,42 @@ export function buildSettingsOptions(input: {
     footer: string,
     category: string,
   ): DialogSelectOption<SettingsAction> => ({ title, value, footer, category })
-  return [
+  const items: readonly DialogSelectOption<SettingsAction>[] = [
     {
       title: copy.settings.limit,
       value: "limit",
       footer: limitLabel(settings, copy, window),
-      category: copy.settings.categories.compress,
+      category: copy.settings.categories.defaults,
     },
     {
       title: copy.settings.threshold,
       value: "threshold",
       footer: `${settings.triggerPercent.toString()}%`,
-      category: copy.settings.categories.compress,
+      category: copy.settings.categories.defaults,
     },
     {
       title: copy.settings.nudgeGrowth,
       value: "nudge",
       footer: nudgeLabel(settings, copy),
-      category: copy.settings.categories.compress,
+      category: copy.settings.categories.defaults,
     },
     toggle(
       "autoCompress",
       copy.settings.autoCompress,
       onOff(settings.autoCompress),
-      copy.settings.categories.compress,
+      copy.settings.categories.defaults,
     ),
     toggle(
       "enableCompressTool",
       copy.settings.enableCompressTool,
       onOff(settings.enableCompressTool),
-      copy.settings.categories.compress,
+      copy.settings.categories.defaults,
     ),
     toggle(
       "enableDecompressTool",
       copy.settings.enableDecompressTool,
       onOff(settings.enableDecompressTool),
-      copy.settings.categories.compress,
+      copy.settings.categories.defaults,
     ),
     {
       title: copy.settings.summaryBlockPercent,
@@ -328,24 +319,24 @@ export function buildSettingsOptions(input: {
       onOff(settings.showBlockTokens),
       copy.settings.categories.summary,
     ),
-    toggle("show", copy.settings.show, onOff(settings.enabled), copy.settings.categories.panel),
+    toggle("show", copy.settings.show, onOff(settings.enabled), copy.settings.categories.interface),
     toggle(
       "showCacheChart",
       copy.settings.showCacheChart,
       onOff(settings.showCacheChart),
-      copy.settings.categories.panel,
+      copy.settings.categories.interface,
     ),
     toggle(
       "showCacheLog",
       copy.settings.showCacheLog,
       onOff(settings.showCacheLog),
-      copy.settings.categories.panel,
+      copy.settings.categories.interface,
     ),
     toggle(
       "showSummaries",
       copy.settings.showSummaries,
       onOff(settings.showSummaries),
-      copy.settings.categories.panel,
+      copy.settings.categories.interface,
     ),
     {
       title: copy.settings.decompressInlineMax,
@@ -378,4 +369,9 @@ export function buildSettingsOptions(input: {
       category: copy.settings.categories.interface,
     },
   ]
+  return items.map((option) => ({
+    ...option,
+    // 分类按动作所属分组统一覆盖，避免某项被塞进错误的分区。
+    category: copy.settings.categories[ACTION_GROUPS[option.value]],
+  }))
 }

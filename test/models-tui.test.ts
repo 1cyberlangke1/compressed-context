@@ -34,10 +34,15 @@ describe("模型选择器", () => {
     expect(options[0]?.description).toBe(copy.settings.modelCurrent)
   })
 
-  test("只有多提供商同名的模型才出现「仅模型名」项", () => {
+  test("每个模型名都出现「仅模型名」项，不再限制提供商数量", () => {
     const options = buildPickerOptions({ entries: ENTRIES, overrides: {}, currentKey: undefined, copy })
     const nameOnly = options.filter((option) => !option.title.includes("]"))
-    expect(nameOnly.map((option) => option.value)).toEqual([{ key: "gemini-3-pro" }])
+    expect(nameOnly.map((option) => option.value)).toEqual([
+      { key: "gemini-3-pro" },
+      { key: "claude-sonnet-4-5" },
+    ])
+    expect(nameOnly[0]?.title).toBe("仅模型名（影响 2 个提供商）")
+    expect(nameOnly[1]?.title).toBe("仅模型名（按名称匹配）")
     expect(providerCount(ENTRIES, "gemini-3-pro")).toBe(2)
   })
 
