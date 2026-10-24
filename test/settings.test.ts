@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_SETTINGS,
   SUMMARY_WINDOW_RESERVE,
-  effectiveLimit,
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
   effectiveDecompressTempMaxAgeHours,
@@ -20,19 +19,18 @@ import {
   percentToChars,
   resolveSummaryLimits,
   sanitizeLimitInput,
-  type ContextLimit,
+  resolveForModel,
   type Settings,
 } from "../src/shared/settings.ts"
 
 describe("initialSettings / normalizeSettings", () => {
   it("缺字段时补默认值，合法值保留", () => {
     expect(initialSettings({})).toEqual(DEFAULT_SETTINGS)
-    expect(initialSettings({ enabled: false, locale: "en", contextLimit: "200k" })).toEqual({
+    expect(initialSettings({ enabled: false, locale: "en" })).toEqual({
       enabled: false,
       models: {},
       expanded: true,
       locale: "en",
-      contextLimit: 200_000,
       triggerPercent: 80,
       nudgeGrowthTokens: 50_000,
       summaryBlockPercent: 10,
@@ -127,12 +125,11 @@ describe("initialSettings / normalizeSettings", () => {
   })
 
   it("非法值回退默认值", () => {
-    expect(initialSettings({ enabled: "no", expanded: 1, locale: "fr", contextLimit: "abc" })).toEqual(
-      DEFAULT_SETTINGS,
-    )
+    expect(initialSettings({ enabled: "no", expanded: 1, locale: "fr" })).toEqual(DEFAULT_SETTINGS)
     expect(initialSettings({ nativeCompactionPromptDismissed: true }).nativeCompactionPromptDismissed).toBe(true)
     expect(initialSettings({ nativeCompactionPromptDismissed: "yes" }).nativeCompactionPromptDismissed).toBe(false)
-    expect(normalizeSettings({ enabled: true, locale: "zh" }).contextLimit).toBe("auto")
+    // 旧配置残留的全局 contextLimit 被忽略；窗口只来自按模型覆盖。
+    expect("contextLimit" in normalizeSettings({ contextLimit: "200k" })).toBe(false)
     expect(normalizeSettings({ summaryBlockPercent: 200 }).summaryBlockPercent).toBe(10)
     expect(initialSettings({ summaryFormat: "babel" }).summaryFormat).toBe("babel")
     expect(initialSettings({ summaryFormat: "xml" }).summaryFormat).toBe("markdown")
@@ -276,19 +273,28 @@ describe("localeArgument", () => {
   })
 })
 
-describe("effectiveLimit", () => {
-  const base: Settings = DEFAULT_SETTINGS
-
-  it("自定义优先，auto 回退模型原生值", () => {
-    expect(effectiveLimit({ ...base, contextLimit: 200_000 }, 1_000_000)).toBe(200_000)
-    // 数字设置是上限：模型原生窗口更小时取原生值。
-    expect(effectiveLimit({ ...base, contextLimit: 200_000 }, 32_000)).toBe(32_000)
-    expect(effectiveLimit(base, 128_000)).toBe(128_000)
-    expect(effectiveLimit(base, 0)).toBeUndefined()
+describe("resolveForModel", () => {
+  it("窗口只来自按模型覆盖，未覆盖时回落 auto", () => {
+    const settings = normalizeSettings({
+      models: {
+        "a/b": { contextLimit: 200_000, triggerPercent: 88 },
+        c: { triggerPercent: 85 },
+      },
+    })
+    const exact = resolveForModel(settings, { providerID: "a", id: "b" })
+    expect(exact.contextLimit).toBe(200_000)
+    expect(exact.triggerPercent).toBe(88)
+    const named = resolveForModel(settings, { providerID: "x", id: "c" })
+    expect(named.contextLimit).toBe("auto")
+    expect(named.triggerPercent).toBe(85)
+    expect(resolveForModel(settings, undefined).contextLimit).toBe("auto")
   })
 
-  it("运行时的非法值按 auto 处理", () => {
-    const broken = { ...base, contextLimit: undefined as unknown as ContextLimit }
-    expect(effectiveLimit(broken, 128_000)).toBe(128_000)
+  it("pruneModelOverride 只留与继承值不同的字段", async () => {
+    const { pruneModelOverride } = await import("../src/shared/settings.ts")
+    const settings = normalizeSettings({ models: { "a/b": { contextLimit: 200_000 } } })
+    const base = resolveForModel(settings, { providerID: "a", id: "b" })
+    expect(pruneModelOverride({ contextLimit: 200_000 }, base)).toBeUndefined()
+    expect(pruneModelOverride({ contextLimit: "auto" }, base)).toEqual({ contextLimit: "auto" })
   })
 })

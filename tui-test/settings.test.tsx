@@ -122,7 +122,6 @@ describe("SettingsCommand", () => {
       await app.waitFor(() => captured.history.length >= 2)
       const options = captured.history[1]?.options ?? []
       expect(options.map((option) => option.value)).toEqual([
-        "limit",
         "threshold",
         "nudge",
         "blockPercent",
@@ -241,14 +240,14 @@ describe("SettingsCommand", () => {
     }
   })
 
-  test("limit 选自定义时只继续开输入框", async () => {
-    const { app, captured } = await mount(["defaults", "limit", "custom"])
+  test("threshold 预设当场写回，不重开菜单", async () => {
+    const { app, captured } = await mount(["defaults", "threshold", 80])
     try {
       captured.run?.()
       await app.waitFor(() => captured.shows === 1)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      // 第一层 + 分组 + limit 选择 + limit 自己的选项；自定义输入框已打开，不能再弹菜单。
-      expect(captured.selects).toBe(3)
+      // 第一层 + 分组 + threshold 选择；预设当场写回，不再弹任何菜单。
+      expect(captured.selects).toBe(2)
     } finally {
       app.renderer.destroy()
     }

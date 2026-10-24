@@ -298,11 +298,4 @@ export async function saveSettings(
   }
   // 写盘后立刻失效，避免随后的 settingsGet 读到旧缓存。
   configCache.delete(configCacheKey(paths))
-  // 旧版本写过全局 contextLimit：保存时顺手删掉，配置里不再留一个不生效的键。
-  const legacyKeys: (readonly string[])[] = merged.values["contextLimit"] === undefined ? [] : [["contextLimit"]]
-  if (legacyKeys.length > 0) {
-    const result = await removeConfigValues(target, legacyKeys)
-    if (!result.ok) throw new Error(result.error)
-    configCache.delete(configCacheKey(paths))
-  }
 }

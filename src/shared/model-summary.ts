@@ -3,8 +3,8 @@ import { formatTokens } from "./format.ts"
 import {
   resolveSummaryLimits,
   triggerTokens,
-  type CompressionSettings,
   type ModelOverrideField,
+  type ScopedSettings,
   type Settings,
 } from "./settings.ts"
 
@@ -64,7 +64,7 @@ export function layerLabel(
 }
 
 /** 输入：生效窗口设置 + 模型原生窗口；输出：实际窗口。预期：数字是上限，与原生取小。 */
-export function effectiveWindow(scoped: CompressionSettings, native: number | undefined): number | undefined {
+export function effectiveWindow(scoped: ScopedSettings, native: number | undefined): number | undefined {
   if (scoped.contextLimit === "auto") return native
   return native === undefined ? scoped.contextLimit : Math.min(scoped.contextLimit, native)
 }
@@ -75,7 +75,7 @@ export function effectiveWindow(scoped: CompressionSettings, native: number | un
  * 预期：窗口未知时明确写「未知」；提醒间隔为 0 时写「关」。
  */
 export function summarySegments(input: {
-  readonly scoped: CompressionSettings
+  readonly scoped: ScopedSettings
   readonly native: number | undefined
   readonly layers: Readonly<Record<ModelOverrideField, Layer>>
   readonly copy: Messages
@@ -96,17 +96,17 @@ export function summarySegments(input: {
     {
       layer: layers.triggerPercent,
       text: `${copy.modelPanel.icons.threshold} ${scoped.triggerPercent.toString()}%${
-        threshold === undefined ? "" : `（${formatTokens(threshold)}）`
+        threshold === undefined ? "" : copy.modelPanel.wrap(formatTokens(threshold))
       }`,
     },
     { layer: layers.contextLimit, text: `${copy.modelPanel.icons.window} ${window}` },
     {
       layer: layers.summaryBlockPercent,
-      text: `${copy.modelPanel.icons.block} ${scoped.summaryBlockPercent.toString()}%（${formatTokens(limits.blockChars)}）`,
+      text: `${copy.modelPanel.icons.block} ${scoped.summaryBlockPercent.toString()}%${copy.modelPanel.wrap(formatTokens(limits.blockChars))}`,
     },
     {
       layer: layers.summaryTotalPercent,
-      text: `${copy.modelPanel.icons.total} ${scoped.summaryTotalPercent.toString()}%（${formatTokens(limits.totalChars)}）`,
+      text: `${copy.modelPanel.icons.total} ${scoped.summaryTotalPercent.toString()}%${copy.modelPanel.wrap(formatTokens(limits.totalChars))}`,
     },
     {
       layer: layers.nudgeGrowthTokens,

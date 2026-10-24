@@ -277,7 +277,7 @@ describe("Panel", () => {
 
   test("上下文构成使用真实 usage 计算百分比", async () => {
     const app = await testRender(
-      () => <Fixture initial={{ contextLimit: 50_000 }} used={31_419} />,
+      () => <Fixture initial={{ models: { model: { contextLimit: 50_000 } } }} used={31_419} />,
       { width: 42, height: 40 },
     )
     app.renderer.start()

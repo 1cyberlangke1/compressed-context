@@ -5,7 +5,7 @@ import type { SummaryBlock } from "../../shared/blocks.ts"
 import type { CacheSample } from "../../shared/cache.ts"
 import { contextRpc, rpcLocation } from "../../shared/rpc.ts"
 import type { Settings } from "../../shared/settings.ts"
-import { parseStats, STATS_KEY, TERMINAL_KEY, type ContextStats } from "../../shared/stats.ts"
+import { parseStats, STATS_KEY, type ContextStats } from "../../shared/stats.ts"
 
 /** 面板分区各自需要的数据范围；独立 slot 时只拉自己那份。 */
 export type PanelDataScope = "all" | "context" | "cache" | "summaries"
@@ -13,14 +13,13 @@ export type PanelDataScope = "all" | "context" | "cache" | "summaries"
 /** Panel 需要的服务端数据；全部是响应式 accessor。 */
 export interface PanelData {
   readonly stats: Accessor<ContextStats | undefined>
-  readonly terminal: Accessor<string | undefined>
   readonly cache: Accessor<readonly CacheSample[]>
   readonly blocks: Accessor<readonly SummaryBlock[]>
 }
 
 /**
  * 输入：TUI 上下文 + sessionID + 设置 accessor。
- * 输出：统计 / 终止原因 / 缓存历史 / 摘要块。
+ * 输出：统计 / 缓存历史 / 摘要块。
  * 预期：挂载时拉取，usage/compaction/idle 时刷新；设置开关变化时重新拉取。
  */
 export function usePanelData(input: {
@@ -34,7 +33,6 @@ export function usePanelData(input: {
   const needCache = scope === "all" || scope === "cache"
   const needBlocks = scope === "all" || scope === "summaries"
   const [stats, setStats] = createSignal<ContextStats>()
-  const [terminal, setTerminal] = createSignal<string>()
   const [cache, setCache] = createSignal<readonly CacheSample[]>([])
   const [blocks, setBlocks] = createSignal<readonly SummaryBlock[]>([])
   const rpc = () => contextRpc(input.context.client)
@@ -67,8 +65,6 @@ export function usePanelData(input: {
     try {
       const info = await input.context.client.session.get({ sessionID: input.sessionID })
       setStats(parseStats(info.metadata?.[STATS_KEY]))
-      const rawTerminal = info.metadata?.[TERMINAL_KEY]
-      setTerminal(typeof rawTerminal === "string" ? rawTerminal : undefined)
     } catch {
       // 统计缺失不影响主界面，保持上一次的值
     }
@@ -111,5 +107,5 @@ export function usePanelData(input: {
     }),
   )
 
-  return { stats, terminal, cache, blocks }
+  return { stats, cache, blocks }
 }

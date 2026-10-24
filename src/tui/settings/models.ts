@@ -5,10 +5,10 @@ import { formatTokens } from "../../shared/format.ts"
 import {
   resolveForModel,
   triggerTokens,
-  type CompressionSettings,
   type ModelIdentity,
   type ModelOverride,
   type ModelOverrideField,
+  type ScopedSettings,
   type Settings,
 } from "../../shared/settings.ts"
 
@@ -137,7 +137,7 @@ export function filterPicker(
 
 /** 输入：合并后的设置 + 模型原生窗口；输出：生效窗口。预期：数字上限与原生窗口取小。 */
 export function effectiveWindow(
-  settings: CompressionSettings,
+  settings: ScopedSettings,
   native: number | undefined,
 ): number | undefined {
   if (settings.contextLimit === "auto") return native
@@ -211,7 +211,7 @@ function formatPreview(
   field: ModelOverrideField,
   limit: number | undefined,
   threshold: number | undefined,
-  settings: CompressionSettings,
+  settings: ScopedSettings,
   native: number | undefined,
   copy: Messages,
 ): string {
@@ -235,7 +235,7 @@ function formatPreview(
  * 输出：该键对应的合并设置。
  * 预期：精确键按 provider 拆分；模型名键用空 provider 只命中名称级。
  */
-export function resolveScoped(settings: Settings, key: string): CompressionSettings {
+export function resolveScoped(settings: Settings, key: string): ScopedSettings {
   if (isExactKey(key)) {
     const slash = key.indexOf("/")
     return resolveForModel(settings, { providerID: key.slice(0, slash), id: key.slice(slash + 1) })

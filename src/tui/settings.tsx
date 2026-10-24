@@ -22,7 +22,6 @@ import {
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
   maxSummaryPercent,
-  type ContextLimit,
   type LocaleSetting,
   type ModelIdentity,
   type ModelOverride,
@@ -91,15 +90,8 @@ export function SettingsCommand(props: {
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
   const [resolvedWindow, setResolvedWindow] = createSignal<number | undefined>(undefined)
 
-  /** 输入：无；输出：当前生效的窗口；预期：数字设置是上限，取 min(设置, 原生窗口)。 */
-  const currentWindow = (): number | undefined => {
-    const limit: unknown = props.settings.contextLimit
-    const native = resolvedWindow()
-    if (typeof limit === "number" && Number.isFinite(limit)) {
-      return native === undefined ? limit : Math.min(limit, native)
-    }
-    return native
-  }
+  /** 输入：无；输出：当前生效的窗口；预期：只剩模型原生窗口——全局不再有上限设置。 */
+  const currentWindow = (): number | undefined => resolvedWindow()
 
   /** 输入：sessionID；输出：无；预期：按会话模型拉取原生窗口，失败保留旧值。 */
   const fetchWindow = async (sessionID: string | undefined): Promise<void> => {
@@ -241,21 +233,6 @@ export function SettingsCommand(props: {
     })
   }
 
-  const openCustom = (): void => {
-    openTokenField({
-      title: copy().settings.limit,
-      hint: copy().settings.limitHint,
-      invalid: copy().settings.limitInvalid,
-      placeholder: copy().settings.limitPlaceholder,
-      initial: props.settings.contextLimit === "auto" ? "" : props.settings.contextLimit.toString(),
-      min: MIN_CONTEXT_LIMIT,
-      max: MAX_CONTEXT_LIMIT,
-      apply: (draft, value) => {
-        draft.contextLimit = value
-      },
-    })
-  }
-
   const openSummaryBlock = (): void => {
     openPercentField({
       title: copy().settings.summaryBlockPercent,
@@ -360,27 +337,6 @@ export function SettingsCommand(props: {
         draft.decompressTempMaxAgeHours = value
       },
     })
-  }
-
-  const openLimit = async (): Promise<boolean> => {
-    const picked = await props.context.ui.dialog.select<ContextLimit | "custom">({
-      title: copy().settings.limit,
-      current: props.settings.contextLimit,
-      options: [
-        { title: copy().settings.limitAuto, value: "auto" },
-        ...PRESET_LIMITS.map((value) => ({ title: formatTokens(value), value })),
-        { title: copy().settings.limitCustom, value: "custom" as const },
-      ],
-    })
-    if (picked === undefined) return false
-    if (picked === "custom") {
-      openCustom()
-      return true
-    }
-    await props.updateSettings((draft) => {
-      draft.contextLimit = picked
-    })
-    return false
   }
 
   /** 输入：无；输出：当前 TUI 能看到的模型条目。预期：取不到数据时返回空数组，不抛错。 */
@@ -665,7 +621,6 @@ export function SettingsCommand(props: {
       })
       return false
     },
-    limit: async () => openLimit(),
     threshold: () => {
       openThreshold()
       return true

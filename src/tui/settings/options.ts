@@ -9,7 +9,6 @@ import {
   effectiveSummaryBlockPercent,
   effectiveSummaryLanguage,
   effectiveSummaryTotalPercent,
-  isContextLimit,
   percentToChars,
   type Settings,
 } from "../../shared/settings.ts"
@@ -27,18 +26,6 @@ export function summaryLanguageLabel(settings: Settings, copy: Messages): string
   if (language === "zh") return copy.languages.zh
   if (language === "en") return copy.languages.en
   return copy.settings.auto
-}
-
-/** 输入：设置 + 已知窗口；输出：上下文上限标签；数字设置是上限，被模型原生窗口压低时显示箭头。 */
-export function limitLabel(settings: Settings, copy: Messages, window: number | undefined): string {
-  const value: unknown = settings.contextLimit
-  if (!isContextLimit(value) || value === "auto") {
-    return window === undefined ? copy.settings.limitAuto : `${copy.settings.limitAuto} (${formatTokens(window)})`
-  }
-  if (window !== undefined && window < value) {
-    return copy.settings.limitCapped(formatTokens(value), formatTokens(window))
-  }
-  return formatTokens(value)
 }
 
 /** 输入：百分比 + 窗口；输出：`10% ≈ 20k` 这样的标签。 */
@@ -64,7 +51,6 @@ export function summaryFormatLabel(settings: Settings, copy: Messages): string {
 
 /** 设置菜单里所有可选 action；options.ts 与 settings.tsx 共用。 */
 export const SETTINGS_ACTIONS = [
-  "limit",
   "threshold",
   "nudge",
   "autoCompress",
@@ -99,7 +85,6 @@ export type SettingsSection = SettingsGroup | "models"
 
 /** 每个动作属于哪个分组；用于分层菜单里过滤。 */
 export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
-  limit: "defaults",
   threshold: "defaults",
   nudge: "defaults",
   blockPercent: "defaults",
@@ -131,6 +116,16 @@ export function itemsOfGroup(
 }
 
 /**
+ * 输入：若干「名字 + 开关状态」+ 文案。
+ * 输出：全部打开时给「全部开」，否则只列被关掉的那几项。
+ * 预期：只写「开 · 开 · 开」看不出是哪个开关，关掉的项必须带名字。
+ */
+function statesFooter(entries: readonly (readonly [string, boolean])[], copy: Messages): string {
+  const off = entries.filter(([, on]) => !on).map(([label]) => `${label} ${copy.settings.off}`)
+  return off.length === 0 ? copy.settings.allOn : off.join(" · ")
+}
+
+/**
  * 输入：设置 + 文案 + 当前模型。
  * 输出：设置第一层：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面。
  * 预期：只有「默认设置」是与模型相关的数值项；开关与界面显示各自独立入口。
@@ -141,7 +136,6 @@ export function buildSectionOptions(input: {
   readonly currentModel?: string
 }): readonly DialogSelectOption<SettingsSection>[] {
   const { settings, copy } = input
-  const onOff = (value: boolean): string => (value ? copy.settings.on : copy.settings.off)
   const block = effectiveSummaryBlockPercent(settings)
   const total = effectiveSummaryTotalPercent(settings)
   const nudge = settings.nudgeGrowthTokens === 0 ? copy.settings.off : formatTokens(settings.nudgeGrowthTokens)
@@ -164,11 +158,11 @@ export function buildSectionOptions(input: {
     {
       title: copy.settings.categories.switches,
       value: "switches",
-      footer: [
-        onOff(settings.autoCompress),
-        onOff(settings.enableCompressTool),
-        onOff(settings.enableDecompressTool),
-      ].join(" · "),
+      footer: statesFooter([
+        [copy.settings.autoCompress, settings.autoCompress],
+        [copy.settings.enableCompressTool, settings.enableCompressTool],
+        [copy.settings.enableDecompressTool, settings.enableDecompressTool],
+      ], copy),
     },
     {
       title: copy.settings.categories.decompress,
@@ -178,12 +172,15 @@ export function buildSectionOptions(input: {
     {
       title: copy.settings.categories.interface,
       value: "interface",
-      footer: [
-        onOff(settings.enabled),
-        onOff(settings.showCacheChart),
-        onOff(settings.showSummaries),
-        localeLabel(settings, copy),
-      ].join(" · "),
+      footer: `${statesFooter(
+        [
+          [copy.settings.show, settings.enabled],
+          [copy.settings.showCacheChart, settings.showCacheChart],
+          [copy.settings.showCacheLog, settings.showCacheLog],
+          [copy.settings.showSummaries, settings.showSummaries],
+        ],
+        copy,
+      )} · ${localeLabel(settings, copy)}`,
     },
   ]
 }
@@ -247,12 +244,6 @@ export function buildSettingsOptions(input: {
     category: string,
   ): DialogSelectOption<SettingsAction> => ({ title, value, footer, category })
   const items: readonly DialogSelectOption<SettingsAction>[] = [
-    {
-      title: copy.settings.limit,
-      value: "limit",
-      footer: limitLabel(settings, copy, window),
-      category: copy.settings.categories.defaults,
-    },
     {
       title: copy.settings.threshold,
       value: "threshold",

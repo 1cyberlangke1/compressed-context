@@ -3,7 +3,8 @@ import { createMemo, For, Show } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
 import { formatTokens } from "../../shared/format.ts"
-import { effectiveLimit, localeArgument, type Settings } from "../../shared/settings.ts"
+import { effectiveWindow } from "../../shared/model-summary.ts"
+import { localeArgument, resolveForModel, type Settings } from "../../shared/settings.ts"
 import { scaleCategories } from "../../shared/stats.ts"
 import { FALLBACK_ERROR, FALLBACK_SUCCESS, FALLBACK_WARNING, mix, toHex, toRgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
@@ -87,8 +88,19 @@ export function Panel(props: {
   /** 上下文占用：真实 usage 优先，缺失时才回退到服务端估算。 */
   const contextTokens = createMemo(() => realUsed() ?? data.stats()?.estimatedTotal ?? 0)
 
-  /** 实际生效的上下文上限：自定义优先，否则模型原生。 */
-  const limit = createMemo(() => effectiveLimit(props.settings, nativeLimit()))
+  /** 当前消息所用模型的合并设置；没有消息时按全局默认（窗口 auto）解析。 */
+  const scoped = createMemo(() => {
+    const message = lastAssistant()
+    return message === undefined
+      ? resolveForModel(props.settings, undefined)
+      : resolveForModel(props.settings, { providerID: message.model.providerID, id: message.model.id })
+  })
+
+  /** 实际生效的上下文上限：按模型覆盖优先，否则模型原生。 */
+  const limit = createMemo(() => {
+    const native = nativeLimit()
+    return effectiveWindow(scoped(), native > 0 ? native : undefined)
+  })
 
   /** 仅当用户自定义上限时展示百分比（auto 时内置区块已经显示了）。 */
   const percent = createMemo(() => {
@@ -118,18 +130,13 @@ export function Panel(props: {
             <text fg={theme.text.base}>
               <b>{copy().title}</b>
             </text>
-            <Show when={props.settings.contextLimit !== "auto" && percent() !== undefined}>
+            <Show when={scoped().contextLimit !== "auto" && percent() !== undefined}>
               <text fg={occupancyColor(percent() ?? 0, theme)}>
                 {`(${(percent() ?? 0).toString()}%)`}
               </text>
             </Show>
           </box>
         </box>
-        <Show when={data.terminal()}>
-          <text fg={theme.text.feedback.error.base} wrapMode="word">
-            {`⚠ ${copy().terminal}`}
-          </text>
-        </Show>
         <Show when={props.settings.expanded}>
           <box flexDirection="column" width="100%" paddingLeft={2}>
             <For each={rows()}>

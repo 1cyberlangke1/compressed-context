@@ -8,7 +8,6 @@ import {
   buildSectionOptions,
   buildSettingsOptions,
   itemsOfGroup,
-  limitLabel,
   percentLabel,
 } from "../src/tui/settings/options.ts"
 
@@ -18,7 +17,6 @@ describe("buildSettingsOptions", () => {
   it("按压缩/摘要/面板/解压/界面分组", () => {
     const options = buildSettingsOptions({ settings: DEFAULT_SETTINGS, copy, window: 200_000 })
     expect(options.map((option) => option.value)).toEqual([
-      "limit",
       "threshold",
       "nudge",
       "autoCompress",
@@ -68,18 +66,10 @@ describe("buildSettingsOptions", () => {
     expect(options.find((option) => option.value === "showCacheChart")?.footer).toBe("关")
     expect(options.find((option) => option.value === "showSummaries")?.footer).toBe("关")
     expect(options.find((option) => option.value === "showCacheLog")?.footer).toBe("开")
-    expect(options.find((option) => option.value === "limit")?.footer).toBe("模型原生 (32k)")
   })
 })
 
-describe("limitLabel / percentLabel", () => {
-  it("数字上限被原生窗口压低时显示箭头", () => {
-    expect(limitLabel({ ...DEFAULT_SETTINGS, contextLimit: 200_000 }, copy, 32_000)).toBe(
-      "200k（模型上限 32k）",
-    )
-    expect(limitLabel({ ...DEFAULT_SETTINGS, contextLimit: 100_000 }, copy, 200_000)).toBe("100k")
-  })
-
+describe("percentLabel", () => {
   it("百分比标签带窗口换算", () => {
     expect(percentLabel(10, 200_000)).toBe("10% ≈ 20k")
     expect(percentLabel(10, undefined)).toBe("10%")
@@ -108,7 +98,6 @@ describe("三层菜单", () => {
   it("默认设置只放数值项，不含开关与显示", () => {
     const all = buildSettingsOptions({ settings: DEFAULT_SETTINGS, copy, window: 200_000 })
     expect(itemsOfGroup(all, "defaults").map((option) => option.value)).toEqual([
-      "limit",
       "threshold",
       "nudge",
       "blockPercent",

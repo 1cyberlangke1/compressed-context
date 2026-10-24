@@ -34,11 +34,11 @@ export function ModelPanel(props: {
     return list.find((item) => item.providerID === model.providerID && item.modelID === model.modelID)
   })
 
-  /** 合并后的设置：精确 > 同名 > 全局。 */
+  /** 合并后的设置：精确 > 同名 > 全局（窗口未覆盖时为 auto）。 */
   const scoped = createMemo(() => {
     const model = current()
     return model === undefined
-      ? props.settings
+      ? resolveForModel(props.settings, undefined)
       : resolveForModel(props.settings, { providerID: model.providerID, id: model.modelID })
   })
 

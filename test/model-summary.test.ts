@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest"
 
 import { resolveMessages } from "../src/i18n/index.ts"
 import { effectiveWindow, fieldLayers, layerLabel, summarySegments } from "../src/shared/model-summary.ts"
-import { normalizeSettings } from "../src/shared/settings.ts"
+import { normalizeSettings, resolveForModel } from "../src/shared/settings.ts"
 
 // 断言对照语言文件，改文案不用改测试。
 const copy = resolveMessages("zh")
@@ -53,22 +53,25 @@ describe("layerLabel", () => {
 
 describe("effectiveWindow", () => {
   test("auto 用原生窗口", () => {
-    expect(effectiveWindow(normalizeSettings({}), 1_000_000)).toBe(1_000_000)
+    expect(effectiveWindow(resolveForModel(normalizeSettings({}), undefined), 1_000_000)).toBe(1_000_000)
   })
 
-  test("数字上限与原生取小", () => {
-    expect(effectiveWindow(normalizeSettings({ contextLimit: 800_000 }), 1_000_000)).toBe(800_000)
-    expect(effectiveWindow(normalizeSettings({ contextLimit: 2_000_000 }), 1_000_000)).toBe(1_000_000)
+  test("按模型覆盖的上限与原生取小", () => {
+    const settings = normalizeSettings({ models: { test: { contextLimit: 800_000 } } })
+    const scoped = resolveForModel(settings, { providerID: "p", id: "test" })
+    expect(effectiveWindow(scoped, 1_000_000)).toBe(800_000)
+    expect(effectiveWindow(resolveForModel(normalizeSettings({ models: { t: { contextLimit: 2_000_000 } } }), { providerID: "p", id: "t" }), 1_000_000)).toBe(1_000_000)
   })
 
   test("原生未知时用数字上限", () => {
-    expect(effectiveWindow(normalizeSettings({ contextLimit: 200_000 }), undefined)).toBe(200_000)
+    const scoped = resolveForModel(normalizeSettings({ models: { t: { contextLimit: 200_000 } } }), { providerID: "p", id: "t" })
+    expect(effectiveWindow(scoped, undefined)).toBe(200_000)
   })
 })
 
 describe("summarySegments", () => {
   test("完整字段名 + 折算 token + 来源层", () => {
-    const scoped = normalizeSettings({ triggerPercent: 90, summaryBlockPercent: 5, summaryTotalPercent: 7 })
+    const scoped = resolveForModel(normalizeSettings({ triggerPercent: 90, summaryBlockPercent: 5, summaryTotalPercent: 7 }), undefined)
     const segments = summarySegments({
       scoped,
       native: 1_000_000,
@@ -82,9 +85,10 @@ describe("summarySegments", () => {
     expect(segments[4]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.nudge} 50k` })
   })
 
-  test("数字上限被原生窗口压低时走 limitCapped 文案", () => {
+  test("按模型覆盖的窗口被原生压低时走 limitCapped 文案", () => {
+    const scoped = resolveForModel(normalizeSettings({ models: { t: { contextLimit: 2_000_000 } } }), { providerID: "p", id: "t" })
     const segments = summarySegments({
-      scoped: normalizeSettings({ contextLimit: 2_000_000 }),
+      scoped,
       native: 1_000_000,
       layers: fieldLayers(undefined, {}),
       copy,
@@ -96,7 +100,7 @@ describe("summarySegments", () => {
 
   test("窗口未知与提醒关闭", () => {
     const segments = summarySegments({
-      scoped: normalizeSettings({ nudgeGrowthTokens: 0 }),
+      scoped: resolveForModel(normalizeSettings({ nudgeGrowthTokens: 0 }), undefined),
       native: undefined,
       layers: fieldLayers(undefined, {}),
       copy,

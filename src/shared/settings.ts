@@ -100,8 +100,6 @@ export const MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS = 720
 
 /** 服务端关心的压缩设置；TUI 的 Settings 在此基础上加显示项。 */
 export interface CompressionSettings {
-  /** 上下文窗口上限；数字是上限，实际取「设置值」和「模型原生窗口」中较小的那个 */
-  contextLimit: ContextLimit
   /** 强制压缩阈值（占用百分比） */
   triggerPercent: number
   /** 每增长多少 token 提醒模型可以主动压缩；0 关闭 */
@@ -146,7 +144,17 @@ export const MODEL_OVERRIDE_FIELDS = [
 export type ModelOverrideField = (typeof MODEL_OVERRIDE_FIELDS)[number]
 
 /** 单条模型覆盖：只写要改的字段，没写的继承全局默认。 */
-export type ModelOverride = Partial<Pick<CompressionSettings, ModelOverrideField>>
+export interface ModelOverride {
+  /** 上下文窗口上限；不写就是模型原生窗口 */
+  contextLimit?: ContextLimit
+  triggerPercent?: number
+  nudgeGrowthTokens?: number
+  summaryBlockPercent?: number
+  summaryTotalPercent?: number
+}
+
+/** 合并后实际生效的设置：窗口一定存在（模型覆盖值或 "auto"）。 */
+export type ScopedSettings = CompressionSettings & { readonly contextLimit: ContextLimit }
 
 /** 模型身份；`providerID/id` 用于精确匹配，`id` 单独用于「仅模型名」匹配。 */
 export interface ModelIdentity {
@@ -186,7 +194,6 @@ export const DEFAULT_SETTINGS: Settings = {
   models: {},
   expanded: true,
   locale: "auto",
-  contextLimit: "auto",
   triggerPercent: DEFAULT_TRIGGER_PERCENT,
   nudgeGrowthTokens: DEFAULT_NUDGE_GROWTH_TOKENS,
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
@@ -320,13 +327,6 @@ export function isContextLimit(value: unknown): value is ContextLimit {
   )
 }
 
-/** 输入：任意值；输出：合法的上下文上限设置（支持 `200k` 这类字符串）。 */
-function readContextLimit(value: unknown): ContextLimit {
-  if (isContextLimit(value)) return value
-  if (typeof value === "string") return parseTokenLimit(value) ?? DEFAULT_SETTINGS.contextLimit
-  return DEFAULT_SETTINGS.contextLimit
-}
-
 /**
  * 输入：任意值；输出：合法的窗口百分比，非法返回 undefined。
  * 预期：与全局字段同一套范围，但不回退默认值——undefined 表示「没设置」。
@@ -396,27 +396,34 @@ export function normalizeModelOverrides(value: unknown): Record<string, ModelOve
 
 /**
  * 输入：设置 + 当前模型（可为空）。
- * 输出：该模型实际使用的压缩设置。
+ * 输出：该模型实际使用的压缩设置；窗口一定存在（覆盖值或 "auto"）。
  * 预期：内置默认 < 全局字段 < `models[modelID]` < `models[providerID/modelID]`；
- *       模型为空、或没有任何覆盖时，原样返回全局字段。
+ *       全局没有 contextLimit，未覆盖时回落到 "auto"（模型原生窗口）。
  */
 export function resolveForModel(
   settings: CompressionSettings & { readonly models?: Record<string, ModelOverride> },
   model: ModelIdentity | undefined,
-): CompressionSettings {
+): ScopedSettings {
   const { models, ...base } = settings
-  if (model === undefined) return base
-  return { ...base, ...models?.[model.id], ...models?.[`${model.providerID}/${model.id}`] }
+  const named = model === undefined ? undefined : models?.[model.id]
+  const exact = model === undefined ? undefined : models?.[`${model.providerID}/${model.id}`]
+  return {
+    ...base,
+    ...named,
+    ...exact,
+    contextLimit: exact?.contextLimit ?? named?.contextLimit ?? "auto",
+  }
 }
 
 /**
  * 输入：一条覆盖 + 继承基线（合并后不含该条覆盖的设置）。
  * 输出：只保留与基线不同的字段；没有差异返回 undefined。
  * 预期：保存时只落真正的差异，全部等于继承值时整条删除，配置里不会留下冗余。
+ *       基线必须带 contextLimit（未覆盖时是 "auto"），否则窗口差异判不出来。
  */
 export function pruneModelOverride(
   override: ModelOverride,
-  base: CompressionSettings,
+  base: ScopedSettings,
 ): ModelOverride | undefined {
   const result: ModelOverride = {}
   if (override.contextLimit !== undefined && override.contextLimit !== base.contextLimit) {
@@ -464,7 +471,6 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
     models: normalizeModelOverrides(value["models"]),
     expanded: typeof value["expanded"] === "boolean" ? value["expanded"] : DEFAULT_SETTINGS.expanded,
     locale: isLocaleSetting(value["locale"]) ? value["locale"] : DEFAULT_SETTINGS.locale,
-    contextLimit: readContextLimit(value["contextLimit"]),
     triggerPercent:
       typeof percent === "number" && Number.isFinite(percent) && percent >= MIN_TRIGGER_PERCENT && percent <= MAX_TRIGGER_PERCENT
         ? Math.round(percent)
@@ -596,9 +602,12 @@ export function resolveSummaryLimits(
     }
   }
   const physical = Math.max(0, Math.floor(windowTokens) - SUMMARY_WINDOW_RESERVE)
-  const blockChars = Math.min(physical, Math.max(1, Math.round((windowTokens * blockPercent) / 100)))
-  const totalChars = Math.min(physical, Math.max(1, Math.round((windowTokens * totalPercent) / 100)))
-  return { blockChars, totalChars, budgetTokens: totalChars }
+  // 窗口百分比是 token 口径：预算按 token 算。
+  // 提示词的字符上限沿用同一个数字——CJK 1 字≈1 token，英文 4 字符≈1 token，
+  // 所以「字符数 = token 预算」永远是 token 预算的保守下界，模型写不出超预算的摘要。
+  const blockTokens = Math.min(physical, Math.max(1, Math.round((windowTokens * blockPercent) / 100)))
+  const totalTokens = Math.min(physical, Math.max(1, Math.round((windowTokens * totalPercent) / 100)))
+  return { blockChars: blockTokens, totalChars: totalTokens, budgetTokens: totalTokens }
 }
 
 /**
@@ -608,17 +617,4 @@ export function resolveSummaryLimits(
  */
 export function localeArgument(locale: LocaleSetting): string | undefined {
   return locale === "auto" ? undefined : locale
-}
-
-/**
- * 输入：设置 + 模型原生上下文长度。
- * 输出：实际使用的上下文上限；未知时返回 undefined。
- * 预期：数字设置是上限，不能超过模型原生窗口；auto 直接用原生值。
- */
-export function effectiveLimit(settings: Settings, native: number): number | undefined {
-  const value: unknown = settings.contextLimit
-  if (isContextLimit(value) && value !== "auto") {
-    return native > 0 ? Math.min(value, native) : value
-  }
-  return native > 0 ? native : undefined
 }

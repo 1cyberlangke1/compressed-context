@@ -9,7 +9,6 @@ export interface Messages {
   readonly title: string
   readonly labels: Readonly<Record<CategoryKey, string>>
   readonly approximate: string
-  readonly terminal: string
   readonly cacheTitle: string
   readonly cacheChart: string
   readonly cacheLog: string
@@ -78,6 +77,7 @@ export interface Messages {
       readonly interface: string
     }
     readonly sectionModel: string
+    readonly allOn: string
     readonly modelCurrent: string
     readonly modelOverrides: string
     readonly modelsConfigured: (count: number) => string
@@ -117,6 +117,7 @@ export interface Messages {
     readonly window: string
     readonly windowNative: (native: string) => string
     readonly windowUnknown: string
+    readonly wrap: (value: string) => string
     readonly sourceGlobal: string
     readonly sourceName: string
     readonly sourceExact: string
