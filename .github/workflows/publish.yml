@@ -17,6 +17,15 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # tag 名与 package.json 版本必须一致，避免 v0.2.17 实际发出 0.2.16 这类错位。
+      - name: Check tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p 'require("./package.json").version')"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag v$tag does not match package.json version $version"
+            exit 1
+          fi
       # Trusted Publishing 需要 npm >= 11.5.1，Node 22 自带的是 10.x
       - run: npm install -g npm@latest
       - run: npm publish --provenance --access public
