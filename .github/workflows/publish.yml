@@ -17,6 +17,12 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # prepack 用 bun 跑 OpenTUI 的 Solid 变换，先把工具链和依赖装好。
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
       # tag 名与 package.json 版本必须一致，避免 v0.2.17 实际发出 0.2.16 这类错位。
       - name: Check tag matches package version
         run: |
