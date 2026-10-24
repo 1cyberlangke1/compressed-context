@@ -392,11 +392,13 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
 export function buildNudgeText(growthTokens: number, hasCompressed: boolean, autoCompress: boolean): string {
   const scope = hasCompressed ? "since the last compressed block" : "since the session started"
   const fallback = autoCompress
-    ? "If you are busy, ignore this; if you are busy but still need these exact details, keep them for now. Automatic compression will run later."
-    : "If you are busy, ignore this; if you are busy but still need these exact details, keep them for now. Call compress when convenient."
+    ? "Automatic compression will run later, so there is no rush."
+    : "Call compress when convenient."
   return (
     `[context-reminder] Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
-    `You may call compress to checkpoint the entire current conversation flow ${scope}. ` +
+    // 默认不压：任务没做完、或还需要这些精确细节时继续干活；只有到了自然的停顿点才压缩。
+    "Do not compress yet if you are busy or if you still need these exact details: keep working and ignore this reminder. " +
+    `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope}. ` +
     fallback
   )
 }
@@ -462,7 +464,8 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
       await input.ctx.session.synthetic({
         sessionID: input.sessionID,
         text: notice,
-        description: notice.slice(0, 120),
+        // description 就是 TUI 灰字展示的正文；和模型看到的 text 保持逐字一致，不做截断。
+        description: notice,
         delivery: "steer",
         resume: false,
       })

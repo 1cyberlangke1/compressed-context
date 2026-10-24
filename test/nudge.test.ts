@@ -80,7 +80,10 @@ describe("主动压缩提醒", () => {
     const text = buildNudgeText(52_300, true, true)
     expect(text).toContain("about 52k tokens since the last compressed block")
     expect(text).toContain("entire current conversation flow since the last compressed block")
-    expect(text).toContain("still need these exact details")
+    // 明确先劝住：忙或还需要精确细节时不要压缩。
+    expect(text).toContain("Do not compress yet if you are busy or if you still need these exact details")
+    expect(text).toContain("keep working and ignore this reminder")
+    expect(text).toContain("When you reach a natural stopping point")
     expect(text).toContain("Automatic compression will run later")
   })
 
