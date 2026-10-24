@@ -90,18 +90,32 @@ describe("createTempFileStore", () => {
   it("写入后按 cap 删最老，只保留最新的 N 个", () => {
     const directory = tempDirectory()
     try {
-      const oldest = join(directory, `${TEMP_FILE_PREFIX}oldest.txt`)
-      const middle = join(directory, `${TEMP_FILE_PREFIX}middle.txt`)
-      writeFileSync(oldest, "oldest")
-      writeFileSync(middle, "middle")
+      const store = createTempFileStore({ directory, cap: 2 })
+      const oldest = store.writeText("ses_a", "b1", "oldest")
+      const middle = store.writeText("ses_a", "b2", "middle")
       ageFile(oldest, 3)
       ageFile(middle, 2)
-      const store = createTempFileStore({ directory, cap: 1 })
-      const fresh = store.writeText("ses_a", "b1", "fresh")
-      expect(tempNames(directory)).toHaveLength(1)
+      const fresh = store.writeText("ses_a", "b3", "fresh")
+      expect(tempNames(directory)).toHaveLength(2)
       expect(existsSync(oldest)).toBe(false)
-      expect(existsSync(middle)).toBe(false)
+      expect(existsSync(middle)).toBe(true)
       expect(existsSync(fresh)).toBe(true)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("cap 只淘汰同一会话的文件，不删别的会话", () => {
+    const directory = tempDirectory()
+    try {
+      const store = createTempFileStore({ directory, cap: 1 })
+      const other = store.writeText("ses_b", "b1", "keep me")
+      ageFile(other, 5)
+      store.writeText("ses_a", "b1", "a1")
+      const newest = store.writeText("ses_a", "b2", "a2")
+      expect(existsSync(other)).toBe(true)
+      expect(existsSync(newest)).toBe(true)
+      expect(tempNames(directory)).toHaveLength(2)
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

@@ -160,6 +160,10 @@ async function setupDecompress(storage: StorageLike): Promise<DecompressExecute>
   const ctx = {
     storage,
     location: { directory: configDirectories.get(storage) ?? tmpdir() },
+    session: {
+      // 默认主会话，属于本实例目录。
+      get: () => Promise.resolve({ location: { directory: configDirectories.get(storage) ?? tmpdir() } }),
+    },
     tool: {
       transform: (fn: (editor: { add: (tool: { execute: DecompressExecute }) => void }) => void) => {
         fn({ add: (tool) => (execute = tool.execute) })

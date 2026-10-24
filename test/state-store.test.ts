@@ -188,4 +188,33 @@ describe("reconcileAll 与 compaction 事件", () => {
     expect(maxActive).toBe(1)
     expect((await loadState(storage, "ses_race")).blocks.map((item) => item.id)).toEqual(["b1"])
   })
+
+  it("错误文案含 not found 但结构不明确时不删会话状态", async () => {
+    const storage = memoryStorage({ [stateKey("ses_orphan")]: { blocks: [], attempts: 0 } })
+    const ctx = {
+      storage,
+      location: { directory: "/work" },
+      session: { get: () => Promise.reject(new Error("session not found")) },
+    } as unknown as Plugin.Context
+
+    await reconcileAll(ctx)
+
+    expect(await storage.get(stateKey("ses_orphan"))).toBeDefined()
+  })
+
+  it("结构化 Session.NotFoundError 才清理孤儿状态", async () => {
+    const storage = memoryStorage({ [stateKey("ses_gone")]: { blocks: [], attempts: 0 } })
+    const ctx = {
+      storage,
+      location: { directory: "/work" },
+      session: {
+        get: () =>
+          Promise.reject(Object.assign(new Error("session not found"), { _tag: "Session.NotFoundError" })),
+      },
+    } as unknown as Plugin.Context
+
+    await reconcileAll(ctx)
+
+    expect(await storage.get(stateKey("ses_gone"))).toBeUndefined()
+  })
 })

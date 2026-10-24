@@ -9,6 +9,7 @@ import { summaryInputFor } from "./schema.ts"
 import { RESOLVED_WINDOW_KEY, loadServerSettings, resolvedWindowKey, windowKey } from "./settings.ts"
 import { eligibleMessages, messageRange, type MessageLike } from "./select.ts"
 import { sessionMessagesToMessageLikes } from "./session-message.ts"
+import { isSubagentSession } from "./session-role.ts"
 import { summaryShape } from "./shape.ts"
 import { loadState, withPending, type Block } from "./state.ts"
 import { stateStore } from "./state-store.ts"
@@ -104,6 +105,10 @@ export async function registerCompressTool(
       output: CompressOutput,
       execute: async (input, toolCtx) => {
         const sessionID = toolCtx.sessionID
+        // 第二道防线：context 钩子已经对子代理隐藏工具，这里再挡一次直接调用。
+        if (await isSubagentSession(ctx, sessionID)) {
+          return failure("compress is unavailable in subagent sessions")
+        }
         if (isCompactionInFlight(sessionID)) return failure("compression already in progress")
         const state = await loadState(ctx.storage, sessionID)
         if (state.terminal !== undefined) return failure(state.terminal)

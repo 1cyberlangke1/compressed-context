@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { applyEdits, modify, parse, printParseErrorCode, type ParseError } from "jsonc-parser"
 
@@ -51,7 +51,15 @@ export async function disableNativeCompaction(path: string): Promise<NativeCompa
 
   try {
     await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, next, "utf8")
+    // 先写同目录临时文件再 rename：进程被杀时不会留下半截配置文件。
+    const temp = `${path}.${process.pid.toString()}.${Date.now().toString()}.tmp`
+    try {
+      await writeFile(temp, next, "utf8")
+      await rename(temp, path)
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw error
+    }
     return { ok: true }
   } catch (error) {
     return { ok: false, error: errorMessage(error) }

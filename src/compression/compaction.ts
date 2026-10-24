@@ -2,6 +2,7 @@ import type { Plugin } from "@opencode/plugin"
 
 import { resolveSummaryLimits } from "../shared/settings.ts"
 import { mergeTerminalMetadata } from "../shared/stats.ts"
+import { updateSessionMetadata } from "./session-metadata.ts"
 import { renderActiveSummary } from "./active-summary-cache.ts"
 import { measuredPromptTokens, resolveLimit } from "./auto.ts"
 import { createT1Block } from "./block.ts"
@@ -58,19 +59,26 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       phase: CompactionPhase | undefined,
       error: string | undefined,
     ): Promise<void> => {
-      const base: State = {
-        blocks,
-        attempts: state.attempts,
-        ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
-        ...(baseline === undefined ? {} : { nudgeBaselineTokens: baseline }),
-        ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
-        ...(phase === undefined ? {} : { phase }),
-      }
-      const next: State = pending === undefined ? base : { ...base, pending }
-      await stateStore(ctx.storage).transact(event.sessionID, () => ({
-        next: error === undefined ? next : { ...next, lastError: error },
-        result: undefined,
-      }))
+      await stateStore(ctx.storage).transact(event.sessionID, (current) => {
+        // 以锁内的最新状态为基准。钩子开头拿到的快照可能已经过时：
+        // 期间别的分支会改写 nudgeCount / terminal / lastError，用旧快照整体覆盖会丢更新。
+        const lastError = error ?? current.lastError
+        const next: State = {
+          blocks,
+          attempts: current.attempts,
+          ...(pending === undefined ? {} : { pending }),
+          ...(phase === undefined ? {} : { phase }),
+          ...(lastError === undefined ? {} : { lastError }),
+          ...(current.terminal === undefined ? {} : { terminal: current.terminal }),
+          ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
+          ...(baseline !== undefined
+            ? { nudgeBaselineTokens: baseline }
+            : current.nudgeBaselineTokens === undefined
+              ? {}
+              : { nudgeBaselineTokens: current.nudgeBaselineTokens }),
+        }
+        return { next, result: undefined }
+      })
     }
 
     // 第二阶段：T2/T3。older 里没有真实消息，或新消息不足以单独做 T1 时合并块。
@@ -104,23 +112,26 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
           limits.totalChars,
         )
       ) {
-        await stateStore(ctx.storage).transact(event.sessionID, () => ({
-          next: {
+        await stateStore(ctx.storage).transact(event.sessionID, (current) => {
+          const next: State = {
             blocks: result.blocks,
             attempts: 0,
             lastError: TERMINAL_MESSAGE,
             terminal: TERMINAL_MESSAGE,
-            ...(baseline === undefined ? {} : { nudgeBaselineTokens: baseline }),
-          },
-          result: undefined,
-        }))
+            ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
+            ...(baseline !== undefined
+              ? { nudgeBaselineTokens: baseline }
+              : current.nudgeBaselineTokens === undefined
+                ? {}
+                : { nudgeBaselineTokens: current.nudgeBaselineTokens }),
+          }
+          return { next, result: undefined }
+        })
         // 让 TUI 面板能显示终止原因；写失败不影响压缩状态。
         try {
-          const session = await ctx.session.get({ sessionID: event.sessionID })
-          await ctx.session.update({
-            sessionID: event.sessionID,
-            metadata: mergeTerminalMetadata(session.metadata, TERMINAL_MESSAGE),
-          })
+          await updateSessionMetadata(ctx, event.sessionID, (metadata) =>
+            mergeTerminalMetadata(metadata, TERMINAL_MESSAGE),
+          )
         } catch {
           // best effort
         }

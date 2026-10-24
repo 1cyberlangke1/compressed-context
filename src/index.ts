@@ -7,6 +7,8 @@ import { handleCompaction } from "./compression/compaction.ts"
 import { cleanupStaleTempFiles } from "./compression/decompress.ts"
 import { reconcileAll, startSessionEvents } from "./compression/events.ts"
 import { loadServerSettings } from "./compression/settings.ts"
+import { hideTools, isSubagentSession } from "./compression/session-role.ts"
+import { updateSessionMetadata } from "./compression/session-metadata.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
 import { loadState } from "./compression/state.ts"
 import { registerCompressTool } from "./compression/tool.ts"
@@ -38,11 +40,8 @@ export default Plugin.define({
     }
 
     const publishStats = async (sessionID: string, stats: ContextStats): Promise<void> => {
-      const session = await ctx.session.get({ sessionID })
-      await ctx.session.update({
-        sessionID,
-        metadata: mergeMetadata(session.metadata, stats),
-      })
+      // metadata 是整体替换语义；统计和终止原因可能同时写，必须串行合并。
+      await updateSessionMetadata(ctx, sessionID, (metadata) => mergeMetadata(metadata, stats))
     }
 
     const compressTool = await registerCompressTool(ctx)
@@ -69,6 +68,13 @@ export default Plugin.define({
 
     disposables.push(
       await ctx.session.hook("context", async (event) => {
+        // 工具注册表是目录级共享的：开关关闭或子代理会话时，必须在发给模型前删掉，
+        // 否则子代理也能调用 compress/decompress，压掉自己短命会话里的细节。
+        const settings = await loadServerSettings(ctx)
+        const roleHidden = await isSubagentSession(ctx, event.sessionID)
+        if (!settings.enableCompressTool || roleHidden) hideTools(event.tools, ["compress"])
+        if (!settings.enableDecompressTool || roleHidden) hideTools(event.tools, ["decompress"])
+
         await adoptNativeCheckpoint(ctx, event.sessionID, event.messages)
 
         await maybeNudge({

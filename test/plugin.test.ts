@@ -1,4 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { Plugin } from "@opencode/plugin"
 import { describe, expect, it, vi } from "vitest"
 
@@ -20,10 +22,11 @@ interface UpdateInput {
  * 输出：覆盖 setup 所需域的最小假 ctx。
  * 预期：不需要真实 OpenCode 宿主即可跑完注册流程。
  */
-function createFakeContext() {
+function createFakeContext(options: { readonly directory?: string; readonly parentID?: string } = {}) {
   const hooks: RecordedHook[] = []
   const updates: UpdateInput[] = []
   const tools: string[] = []
+  const directory = options.directory ?? tmpdir()
   let disposed = false
 
   const ctx = {
@@ -33,7 +36,7 @@ function createFakeContext() {
       remove: () => Promise.resolve(),
       scan: () => Promise.resolve({ entries: [] }),
     },
-    location: { directory: tmpdir() },
+    location: { directory },
     tool: {
       transform: (fn: (editor: { add: (tool: { name: string }) => void }) => void) => {
         fn({ add: (tool) => tools.push(tool.name) })
@@ -66,7 +69,12 @@ function createFakeContext() {
           },
         })
       },
-      get: () => Promise.resolve({ metadata: { keep: "yes" } }),
+      get: () =>
+        Promise.resolve({
+          metadata: { keep: "yes" },
+          location: { directory },
+          ...(options.parentID === undefined ? {} : { parentID: options.parentID }),
+        }),
       update: (input: UpdateInput) => {
         updates.push(input)
         return Promise.resolve()
@@ -121,6 +129,33 @@ describe("服务端插件入口", () => {
     await vi.waitFor(() => {
       expect(updates).toHaveLength(1)
     })
+  })
+
+  it("context 钩子对子代理隐藏 compress / decompress", async () => {
+    const { ctx, hooks } = createFakeContext({ parentID: "ses_parent" })
+    await plugin.setup(ctx)
+
+    const tools: Record<string, unknown> = { compress: {}, decompress: {}, read: {} }
+    await hooks[0]?.callback({ ...emptyContext, tools })
+
+    expect(Object.keys(tools)).toEqual(["read"])
+  })
+
+  it("开关关闭时在 context 钩子里隐藏对应工具", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "cc-plugin-config-"))
+    mkdirSync(join(directory, ".opencode"), { recursive: true })
+    writeFileSync(
+      join(directory, ".opencode", "compressed-context.json"),
+      JSON.stringify({ enableCompressTool: false }),
+      "utf8",
+    )
+    const { ctx, hooks } = createFakeContext({ directory })
+    await plugin.setup(ctx)
+
+    const tools: Record<string, unknown> = { compress: {}, decompress: {} }
+    await hooks[0]?.callback({ ...emptyContext, tools })
+
+    expect(Object.keys(tools)).toEqual(["decompress"])
   })
 
   it("清理函数会注销注册", async () => {

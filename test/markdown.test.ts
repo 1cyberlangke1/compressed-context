@@ -4,7 +4,7 @@ import { deriveMarkdownTitle, markdownGoal, toMarkdownSummary } from "../src/com
 import { toSummary } from "../src/compression/normalize.ts"
 import { renderSummary } from "../src/compression/render.ts"
 import { isMarkdownSummary } from "../src/compression/schema.ts"
-import { summarize, summarizeWithChoice } from "../src/compression/summarize.ts"
+import { summarizeChoiceInstruction, summarizeInstruction } from "../src/compression/summarize.ts"
 import { summaryChars, summaryGoal, summaryTitle } from "../src/compression/summary.ts"
 import { validateSummary } from "../src/compression/validate.ts"
 
@@ -97,8 +97,8 @@ describe("Markdown 摘要", () => {
   })
 
   it("summarize 支持 markdown 模式", async () => {
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "test prompt",
       sourceChars: 10_000,
       format: "markdown",
       generate: { text: () => Promise.resolve({ text: markdown }) },
@@ -120,8 +120,8 @@ describe("Markdown 摘要", () => {
       files: [],
       facts: ["中".repeat(200)],
     }
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "test prompt",
       sourceChars: 10_000,
       format: "markdown",
       generate: { text: () => Promise.resolve({ text: JSON.stringify(json) }) },
@@ -132,9 +132,8 @@ describe("Markdown 摘要", () => {
   })
 
   it("T2 支持 candidate 行 + markdown 正文", async () => {
-    const result = await summarizeWithChoice({
-      context: markdown,
-      task: "continue",
+    const result = await summarizeChoiceInstruction({
+      prompt: "test choice prompt",
       candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
       format: "markdown",
       generate: {
@@ -157,9 +156,8 @@ describe("Markdown 摘要", () => {
       files: [],
       facts: ["中".repeat(200)],
     }
-    const result = await summarizeWithChoice({
-      context: markdown,
-      task: "continue",
+    const result = await summarizeChoiceInstruction({
+      prompt: "test choice prompt",
       candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
       format: "markdown",
       generate: {
@@ -171,9 +169,8 @@ describe("Markdown 摘要", () => {
   })
 
   it("T2 markdown 模式接受代码围栏里的 candidate 行", async () => {
-    const result = await summarizeWithChoice({
-      context: markdown,
-      task: "continue",
+    const result = await summarizeChoiceInstruction({
+      prompt: "test choice prompt",
       candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
       format: "markdown",
       generate: {
@@ -186,8 +183,8 @@ describe("Markdown 摘要", () => {
 
   it("Markdown 坏格式连续两次后第三次成功", async () => {
     let calls = 0
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "test prompt",
       sourceChars: 10_000,
       format: "markdown",
       generate: {
@@ -203,9 +200,8 @@ describe("Markdown 摘要", () => {
 
   it("Markdown T2 坏格式连续两次后第三次成功", async () => {
     let calls = 0
-    const result = await summarizeWithChoice({
-      context: markdown,
-      task: "continue",
+    const result = await summarizeChoiceInstruction({
+      prompt: "test choice prompt",
       candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
       format: "markdown",
       generate: {

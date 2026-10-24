@@ -3,6 +3,7 @@ import { Schema } from "effect"
 
 import { effectiveDecompressInlineMax, effectiveDecompressTempCap } from "../shared/settings.ts"
 import { loadServerSettings } from "./settings.ts"
+import { isSubagentSession } from "./session-role.ts"
 import type { Disposable } from "./settings-rpc.ts"
 
 const DESCRIPTION =
@@ -39,6 +40,14 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
       input: DecompressInput,
       output: DecompressOutput,
       execute: async (input, toolCtx) => {
+        // 第二道防线：context 钩子已经对子代理隐藏工具，这里再挡一次直接调用。
+        if (await isSubagentSession(ctx, toolCtx.sessionID)) {
+          return {
+            output: { error: "decompress is unavailable in subagent sessions" },
+            content: "ERROR: decompress is unavailable in subagent sessions",
+            metadata: { error: true },
+          }
+        }
         const { resolveDecompress } = await import("./decompress.ts")
         const settings = await loadServerSettings(ctx)
         if (!settings.enableDecompressTool) {

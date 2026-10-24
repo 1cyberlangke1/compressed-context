@@ -33,6 +33,32 @@ import {
 import { resolveConfigFiles } from "../shared/config-paths.ts"
 import { readOptionalInt, readStrictBoolean } from "../shared/parse.ts"
 import { diffConfig, nearestExistingConfig, readMergedConfig, writeConfigValues } from "./config-file.ts"
+import type { ConfigReadResult } from "./config-file.ts"
+
+/** 设置读取缓存有效期；文件改动最迟一秒内可见，保存路径会主动失效。 */
+const CONFIG_CACHE_MS = 1000
+
+/** 路径列表 → 缓存条目。 */
+const configCache = new Map<string, { readonly at: number; readonly result: ConfigReadResult }>()
+
+/** 输入：配置路径列表；输出：稳定的缓存键。 */
+function configCacheKey(paths: readonly string[]): string {
+  return paths.join("\n")
+}
+
+/**
+ * 输入：配置路径列表。
+ * 输出：合并后的配置。
+ * 预期：1 秒内重复读取复用上一次结果，避免每个模型请求都重新读盘解析。
+ */
+async function readMergedConfigCached(paths: readonly string[]): Promise<ConfigReadResult> {
+  const key = configCacheKey(paths)
+  const cached = configCache.get(key)
+  if (cached !== undefined && Date.now() - cached.at < CONFIG_CACHE_MS) return cached.result
+  const result = await readMergedConfig(paths)
+  configCache.set(key, { at: Date.now(), result })
+  return result
+}
 
 /** 服务端从 TUI 收到的设置；字段与 shared 的 CompressionSettings 一致。 */
 export type ServerSettings = CompressionSettings
@@ -201,10 +227,11 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
  * 输入：插件上下文 + 可选 TUI 传来的层路径。
  * 输出：合并后的完整设置。
  * 预期：默认值 < 全局 < 远项目 < 近项目；坏层跳过，字段缺失按默认值补齐。
+ *       结果按路径缓存 1 秒，避免每个模型请求重复读盘；保存后立即失效。
  */
 export async function loadSettings(ctx: SettingsContext, layers?: readonly string[]): Promise<Settings> {
   const paths = resolveConfigFiles(ctx.location?.directory ?? process.cwd(), layers)
-  const merged = await readMergedConfig(paths)
+  const merged = await readMergedConfigCached(paths)
   return normalizeSettings(merged.values)
 }
 
@@ -235,4 +262,6 @@ export async function saveSettings(
   if (target === undefined) throw new Error("no plugin config path")
   const result = await writeConfigValues(target, patch)
   if (!result.ok) throw new Error(result.error)
+  // 写盘后立刻失效，避免随后的 settingsGet 读到旧缓存。
+  configCache.delete(configCacheKey(paths))
 }

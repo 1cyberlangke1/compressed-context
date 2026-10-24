@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { access, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -144,6 +144,19 @@ describe("disableNativeCompaction", () => {
       expect(text).toContain("// keep this comment")
       expect(text).toMatch(/"auto": false/)
       await expect(access(`${path}.bak`)).rejects.toThrow()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("写盘后不留下临时文件", async () => {
+    const directory = await tempDirectory()
+    const path = join(directory, "opencode.json")
+    try {
+      await writeFile(path, "{}\n", "utf8")
+      const result = await disableNativeCompaction(path)
+      expect(result).toEqual({ ok: true })
+      expect(await readdir(directory)).toEqual(["opencode.json"])
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

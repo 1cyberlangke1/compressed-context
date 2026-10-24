@@ -58,7 +58,6 @@ export const DEFAULT_TRIGGER_PERCENT = 80
 
 /** 主动压缩提醒的默认增长量；0 表示关闭。 */
 export const DEFAULT_NUDGE_GROWTH_TOKENS = 50_000
-export const MIN_NUDGE_GROWTH_TOKENS = 0
 export const MAX_NUDGE_GROWTH_TOKENS = 200_000
 
 /** 可用窗口下限：低于它连最小摘要都放不下。 */
@@ -425,28 +424,6 @@ export function effectiveDecompressTempMaxAgeHours(settings: {
     MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
     DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   )
-}
-
-/** 输入：TUI 设置；输出：发给服务端的压缩设置子集；预期：字段列表只在这里维护。 */
-export function serverSettingsPayload(settings: Settings): CompressionSettings {
-  return {
-    contextLimit: settings.contextLimit,
-    triggerPercent: settings.triggerPercent,
-    nudgeGrowthTokens: settings.nudgeGrowthTokens,
-    summaryBlockPercent: effectiveSummaryBlockPercent(settings),
-    summaryTotalPercent: effectiveSummaryTotalPercent(settings),
-    summaryLanguage: effectiveSummaryLanguage(settings),
-    summaryFormat: settings.summaryFormat,
-    autoCompress: settings.autoCompress,
-    enableCompressTool: settings.enableCompressTool,
-    enableDecompressTool: settings.enableDecompressTool,
-    showTimeline: settings.showTimeline,
-    showBlockTokens: settings.showBlockTokens,
-    decompressInlineMax: effectiveDecompressInlineMax(settings),
-    decompressTempCap: effectiveDecompressTempCap(settings),
-    decompressTempMaxAgeHours: effectiveDecompressTempMaxAgeHours(settings),
-    decompressShowTokens: settings.decompressShowTokens,
-  }
 }
 
 /**

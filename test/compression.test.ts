@@ -23,9 +23,8 @@ import {
   buildMergeInstruction,
   buildT1Instruction,
   sessionGenerator,
-  summarize,
+  summarizeChoiceInstruction,
   summarizeInstruction,
-  summarizeWithChoice,
 } from "../src/compression/summarize.ts"
 import { registerCompressTool } from "../src/compression/tool.ts"
 import { buildTranscript } from "../src/compression/transcript.ts"
@@ -394,8 +393,8 @@ describe("transcript", () => {
 
 describe("侧调用摘要", () => {
   it("解析带围栏的 JSON", async () => {
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "x",
       sourceChars: 10_000,
       generate: { text: () => Promise.resolve({ text: "```json\n" + JSON.stringify(summary) + "\n```" }) },
     })
@@ -404,8 +403,8 @@ describe("侧调用摘要", () => {
 
   it("第一次坏 JSON 时重试一次", async () => {
     let calls = 0
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "x",
       sourceChars: 10_000,
       generate: {
         text: () => {
@@ -420,8 +419,8 @@ describe("侧调用摘要", () => {
 
   it("两次都失败时抛出解析原因", async () => {
     await expect(
-      summarize({
-        transcript: "x",
+      summarizeInstruction({
+        prompt: "x",
         sourceChars: 10_000,
         generate: { text: () => Promise.resolve({ text: "nope" }) },
       }),
@@ -459,9 +458,8 @@ describe("侧调用摘要", () => {
   })
 
   it("多候选时一次返回 candidate + 摘要", async () => {
-    const result = await summarizeWithChoice({
-      context: "b1 + b2",
-      task: "continue the task",
+    const result = await summarizeChoiceInstruction({
+      prompt: "b1 + b2",
       candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
       generate: {
         text: () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
@@ -473,9 +471,8 @@ describe("侧调用摘要", () => {
 
   it("多候选返回非法 candidate 时抛出原因", async () => {
     await expect(
-      summarizeWithChoice({
-        context: "b1 + b2",
-        task: "continue",
+      summarizeChoiceInstruction({
+        prompt: "b1 + b2",
         candidates: [{ index: 1, description: "b1+b2", sourceChars: 10_000, tier: 2 }],
         generate: { text: () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }) },
       }),
@@ -484,9 +481,8 @@ describe("侧调用摘要", () => {
 
   it("T2 连续两次坏 JSON 后第三次成功", async () => {
     let calls = 0
-    const result = await summarizeWithChoice({
-      context: "b1 + b2",
-      task: "continue",
+    const result = await summarizeChoiceInstruction({
+      prompt: "b1 + b2",
       candidates: [{ index: 1, description: "b1+b2 → T2", sourceChars: 10_000, tier: 2 }],
       generate: {
         text: () => {
@@ -503,8 +499,8 @@ describe("侧调用摘要", () => {
   })
 
   it("解析前后带说明的 JSON", async () => {
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "x",
       sourceChars: 10_000,
       generate: {
         text: () =>
@@ -517,8 +513,8 @@ describe("侧调用摘要", () => {
   })
 
   it("补齐缺失字段和字符串数组", async () => {
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "x",
       sourceChars: 10_000,
       generate: {
         text: () =>
@@ -537,8 +533,8 @@ describe("侧调用摘要", () => {
   })
 
   it("解析双编码 JSON", async () => {
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "x",
       sourceChars: 10_000,
       generate: { text: () => Promise.resolve({ text: JSON.stringify(JSON.stringify(summary)) }) },
     })
@@ -547,8 +543,8 @@ describe("侧调用摘要", () => {
 
   it("修复截断 JSON", async () => {
     const large = { ...summary, goal: "g".repeat(300) }
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "x",
       sourceChars: 10_000,
       generate: { text: () => Promise.resolve({ text: JSON.stringify(large).slice(0, -1) }) },
     })
@@ -556,8 +552,8 @@ describe("侧调用摘要", () => {
   })
 
   it("超长 title 自动截断", async () => {
-    const result = await summarize({
-      transcript: "x",
+    const result = await summarizeInstruction({
+      prompt: "x",
       sourceChars: 10_000,
       generate: {
         text: () => Promise.resolve({ text: JSON.stringify({ ...summary, title: "x".repeat(100) }) }),
@@ -568,8 +564,8 @@ describe("侧调用摘要", () => {
 
   it("空 goal 抛出精确原因", async () => {
     await expect(
-      summarize({
-        transcript: "x",
+      summarizeInstruction({
+        prompt: "x",
         sourceChars: 10_000,
         generate: { text: () => Promise.resolve({ text: JSON.stringify({ ...summary, goal: "" }) }) },
       }),
@@ -578,8 +574,8 @@ describe("侧调用摘要", () => {
 
   it("摘要超过 maxChars 时抛出精确原因", async () => {
     await expect(
-      summarize({
-        transcript: "x",
+      summarizeInstruction({
+        prompt: "x",
         sourceChars: 10_000,
         maxChars: 100,
         generate: { text: () => Promise.resolve({ text: JSON.stringify(summary) }) },
@@ -589,8 +585,8 @@ describe("侧调用摘要", () => {
 
   it("摘要不小于原文时抛出精确原因", async () => {
     await expect(
-      summarize({
-        transcript: "x",
+      summarizeInstruction({
+        prompt: "x",
         sourceChars: 100,
         generate: { text: () => Promise.resolve({ text: JSON.stringify(summary) }) },
       }),
@@ -1540,6 +1536,12 @@ describe("compress 工具只做 T1", () => {
       },
       session: {
         compact,
+        // 默认会话是主会话且属于本实例目录；子代理用例可覆盖 get。
+        get: () =>
+          Promise.resolve({
+            location: { directory: configDirectories.get(storage) ?? tmpdir() },
+            model: undefined,
+          }),
       },
     } as unknown as Plugin.Context
     return {
@@ -1578,6 +1580,24 @@ describe("compress 工具只做 T1", () => {
     expect(state.pending?.tier).toBe(1)
     expect(state.pending?.sourceBlockIds).toBeUndefined()
     expect(state.phase).toBeUndefined()
+  })
+
+  it("子代理会话调用 compress 直接拒绝", async () => {
+    const storage = memoryStorage()
+    const { ctx, tool } = toolCtx(storage)
+    // 覆盖 get：返回带 parentID 的会话，模拟子代理。
+    Object.assign(ctx.session as unknown as Record<string, unknown>, {
+      get: () =>
+        Promise.resolve({
+          location: { directory: configDirectories.get(storage) ?? tmpdir() },
+          parentID: "ses_parent",
+        }),
+    })
+    await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
+    const result = await tool().execute(summary, { sessionID: "ses_test" })
+    expect(result.output?.status).toBe("error")
+    expect(result.output?.error).toContain("subagent")
+    expect(result.output?.block).toBeUndefined()
   })
 
   it("pending 或 phase 非空时拒绝，不改状态", async () => {

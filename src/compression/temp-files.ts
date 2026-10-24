@@ -75,11 +75,17 @@ export function createTempFileStore(options: TempFileStoreOptions = {}): TempFil
     }
   }
 
-  /** 输入：路径 + 上限；输出：无；预期：超过上限时按 mtime 删最老，绝不抛错。 */
-  const enforceCap = (cap: number): void => {
+  /**
+   * 输入：会话 ID + 上限。
+   * 输出：无。
+   * 预期：只淘汰该会话自己的文件，绝不因为一个会话写得太多而删掉别的会话的解压内容。
+   */
+  const enforceCap = (sessionID: string, cap: number): void => {
     if (cap <= 0) return
+    const tokenPrefix = `${prefix}${sessionToken(sessionID)}-`
     const entries: { path: string; mtimeMs: number }[] = []
     for (const path of listFiles()) {
+      if (!basename(path).startsWith(tokenPrefix)) continue
       try {
         entries.push({ path, mtimeMs: statSync(path).mtimeMs })
       } catch {
@@ -101,7 +107,7 @@ export function createTempFileStore(options: TempFileStoreOptions = {}): TempFil
     const name = `${prefix}${sessionToken(sessionID)}-${safePart(blockID)}-${randomUUID()}.txt`
     const path = join(directory, name)
     writeFileSync(path, body, { encoding: "utf8", mode: 0o600 })
-    enforceCap(cap)
+    enforceCap(sessionID, cap)
     return path
   }
 
@@ -120,7 +126,7 @@ export function createTempFileStore(options: TempFileStoreOptions = {}): TempFil
       `${suffix}-${randomUUID()}.bin`
     const path = join(directory, name)
     writeFileSync(path, Buffer.from(data, "base64"), { mode: 0o600 })
-    enforceCap(cap)
+    enforceCap(sessionID, cap)
     return path
   }
 

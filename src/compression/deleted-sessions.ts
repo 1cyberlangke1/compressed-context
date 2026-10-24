@@ -8,9 +8,21 @@
  */
 const deleted = new Set<string>()
 
-/** 输入：sessionID；输出：无；预期：标记会话已删除。 */
+/** 墓碑上限。删除事件只影响清理时机，超过上限时淘汰最老的墓碑不会造成数据错误。 */
+const MAX_DELETED_SESSIONS = 500
+
+/**
+ * 输入：sessionID。
+ * 输出：无。
+ * 预期：标记会话已删除；集合超过上限时按插入顺序淘汰最老的墓碑，避免进程长期运行后无限增长。
+ */
 export function markSessionDeleted(sessionID: string): void {
   deleted.add(sessionID)
+  while (deleted.size > MAX_DELETED_SESSIONS) {
+    const oldest = deleted.values().next()
+    if (oldest.done === true) return
+    deleted.delete(oldest.value)
+  }
 }
 
 /** 输入：sessionID；输出：是否已删除。 */

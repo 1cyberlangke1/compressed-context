@@ -153,28 +153,6 @@ function rulesFor(tier: Tier, format?: SummaryFormat): string {
   return TIER1_RULES
 }
 
-function openingFor(tier: Tier): string {
-  if (tier === 1) {
-    return "You are writing a checkpoint that will replace an older part of a conversation."
-  }
-  return "You are merging existing checkpoint blocks into one denser checkpoint."
-}
-
-function buildPrompt(transcript: string, tier: Tier, options?: SummaryPromptOptions): string {
-  return [
-    openingFor(tier),
-    "The checkpoint and the messages after it are all the next reader will see; make it self-contained.",
-    "",
-    ...shapeLines(options?.format, false),
-    "",
-    rulesFor(tier, options?.format),
-    ...promptRules(options),
-    "",
-    "Sources:",
-    transcript,
-  ].join("\n")
-}
-
 /** T1 的会话内指令：历史已经在 session 前缀里，只追加这段。 */
 export function buildT1Instruction(options?: SummaryPromptOptions): string {
   return [
@@ -250,37 +228,6 @@ const BABEL_CHOICE_RULES = `Guidance for choosing and merging:
 - Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
 - If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts.`
-
-function buildChoicePrompt(
-  context: string,
-  task: string,
-  candidates: readonly SummaryChoiceCandidate[],
-  options?: SummaryPromptOptions,
-): string {
-  const lines = candidates.map((candidate) => `${candidate.index.toString()}. ${candidate.description}`)
-  return [
-    "You are merging existing checkpoint blocks into one denser checkpoint.",
-    "The checkpoint chain is over its token budget. The algorithm has listed every legal adjacent merge below.",
-    "",
-    ...shapeLines(options?.format, true),
-    "",
-    options?.format === "babel"
-      ? BABEL_CHOICE_RULES
-      : options?.format === "markdown"
-        ? MARKDOWN_CHOICE_RULES
-        : CHOICE_RULES,
-    ...promptRules(options),
-    "",
-    "Current task:",
-    task,
-    "",
-    "Candidates (oldest first):",
-    ...lines,
-    "",
-    "Sources (the whole active chain; use it to judge the task, but merge only the chosen pair):",
-    context,
-  ].join("\n")
-}
 
 function parseJson(text: string): unknown {
   const cleaned = text
@@ -362,34 +309,6 @@ async function runSummaryPrompt(
   }
   onFailure?.(reason)
   throw new Error(reason)
-}
-
-/**
- * 输入：transcript、原文长度、generate、模型、目标层级。
- * 输出：校验通过的摘要；失败返回 undefined。
- * 预期：JSON 修复 + schema 解码 + 语义校验；失败重试一次。
- */
-export async function summarize(input: {
-  readonly transcript: string
-  readonly sourceChars: number
-  readonly generate: GenerateLike
-  readonly model?: ModelRefLike
-  readonly tier?: Tier
-  readonly maxChars?: number
-  readonly totalChars?: number
-  readonly language?: SummaryLanguage
-  readonly format?: SummaryFormat
-}): Promise<Summary | undefined> {
-  const tier = input.tier ?? 1
-  const format = input.format ?? "json"
-  return runSummaryPrompt(
-    buildPrompt(input.transcript, tier, input),
-    input.sourceChars,
-    input.generate,
-    input.model,
-    input.maxChars,
-    format,
-  )
 }
 
 /** 输入：已经拼好的会话内指令；输出：摘要；失败返回 undefined。 */
@@ -495,34 +414,6 @@ async function runChoicePrompt(
   }
   onFailure?.(reason)
   throw new Error(reason)
-}
-
-/**
- * 输入：整条 active 链、当前任务、合法候选、generate、模型。
- * 输出：模型选择的候选 + 同一次回复里的摘要；失败返回 undefined。
- * 预期：一次调用同时完成“选哪对”和“写合并摘要”，多一个 candidate 字段。
- */
-export async function summarizeWithChoice(input: {
-  readonly context: string
-  readonly task: string
-  readonly candidates: readonly SummaryChoiceCandidate[]
-  readonly generate: GenerateLike
-  readonly model?: ModelRefLike
-  readonly maxChars?: number
-  readonly totalChars?: number
-  readonly language?: SummaryLanguage
-  readonly format?: SummaryFormat
-  readonly onFailure?: (reason: string) => void
-}): Promise<{ readonly summary: Summary; readonly candidate: SummaryChoiceCandidate } | undefined> {
-  return runChoicePrompt(
-    buildChoicePrompt(input.context, input.task, input.candidates, input),
-    input.candidates,
-    input.generate,
-    input.model,
-    input.maxChars,
-    input.format ?? "json",
-    input.onFailure,
-  )
 }
 
 /** 输入：已经拼好的合并指令 + 候选；输出：选择 + 摘要；失败返回 undefined。 */

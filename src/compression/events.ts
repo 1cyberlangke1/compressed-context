@@ -168,48 +168,90 @@ export function startSessionEvents(
   options: SessionEventOptions = {},
 ): () => void {
   const controller = new AbortController()
+  // 本实例确认过归属的会话。session.deleted 之后已经查不到会话，
+  // 只能靠这份集合判断“这条删除事件是不是我负责清理的”。
+  const owned = new Set<string>()
+
+  /**
+   * 输入：sessionID。
+   * 输出：会话是否属于本实例 location。
+   * 预期：查询失败或查不到一律视为不属于——宁可漏记一次，也不能跨 location 重复记账。
+   */
+  const owns = async (sessionID: string): Promise<boolean> => {
+    if (owned.has(sessionID)) return true
+    const session = await ctx.session.get({ sessionID }).catch(() => undefined)
+    if (session?.location.directory !== ctx.location.directory) return false
+    owned.add(sessionID)
+    return true
+  }
+
+  /** 输入：单条事件；输出：无；预期：处理一条事件，异常由外层兜住，不影响后续事件。 */
+  const handleEvent = async (event: { readonly type: string; readonly data: unknown }): Promise<void> => {
+    switch (event.type) {
+      case "session.step.ended": {
+        const data = event.data as {
+          sessionID: string
+          assistantMessageID?: string
+          tokens?: unknown
+        }
+        // 没有 messageID 的样本无法去重，写进去会和其它空串样本互相吞掉。
+        const messageID = data.assistantMessageID
+        if (typeof messageID !== "string" || messageID.length === 0) return
+        const tokens = readStepTokens(data.tokens)
+        if (tokens === undefined || options.onStepEnded === undefined) return
+        if (!(await owns(data.sessionID))) return
+        await options.onStepEnded({ sessionID: data.sessionID, messageID, tokens })
+        return
+      }
+      case "session.compaction.ended":
+      case "session.compaction.failed": {
+        const data = event.data as { sessionID: string; error?: { message?: string } }
+        if (!(await owns(data.sessionID))) return
+        const type: CompactionEventType = event.type === "session.compaction.ended" ? "ended" : "failed"
+        const failure =
+          event.type === "session.compaction.failed"
+            ? (data.error?.message ?? "compaction failed")
+            : undefined
+        await handleCompactionEvent(ctx, type, data.sessionID, failure)
+        return
+      }
+      case "session.usage.updated":
+      case "session.idle": {
+        const data = event.data as { sessionID: string }
+        if (!(await owns(data.sessionID))) return
+        // session.idle 在新版本里已标记 deprecated，usage.updated 每个 step 都会发；
+        // 两个都接，谁先到都能补写（按 messageID 去重）。
+        await recordCacheHistory(ctx, data.sessionID)
+        if (event.type === "session.idle") options.onSessionIdle?.(data.sessionID)
+        return
+      }
+      case "session.execution.succeeded": {
+        // 2.1.x 起 session.idle 是 ephemeral，到不了插件；真正表示“这一轮跑完了”的是
+        // execution.succeeded。这里只做内存清理，不重复写缓存历史。
+        const data = event.data as { sessionID: string }
+        if (!(await owns(data.sessionID))) return
+        options.onSessionIdle?.(data.sessionID)
+        return
+      }
+      case "session.deleted": {
+        const data = event.data as { sessionID: string }
+        // 删除事件不带 location，会话本身也已经不存在；只清理本实例确认过的会话。
+        if (!owned.has(data.sessionID)) return
+        owned.delete(data.sessionID)
+        await forgetSession(ctx, data.sessionID)
+        options.onSessionDeleted?.(data.sessionID)
+        return
+      }
+    }
+  }
+
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        switch (event.type) {
-          case "session.step.ended": {
-            const data = event.data as {
-              sessionID: string
-              assistantMessageID?: string
-              tokens?: unknown
-            }
-            const tokens = readStepTokens(data.tokens)
-            if (tokens !== undefined && options.onStepEnded !== undefined) {
-              await options.onStepEnded({
-                sessionID: data.sessionID,
-                messageID: data.assistantMessageID ?? "",
-                tokens,
-              })
-            }
-            break
-          }
-          case "session.compaction.ended":
-          case "session.compaction.failed": {
-            const type: CompactionEventType =
-              event.type === "session.compaction.ended" ? "ended" : "failed"
-            const failure =
-              event.type === "session.compaction.failed"
-                ? ((event.data as { error?: { message?: string } }).error?.message ?? "compaction failed")
-                : undefined
-            await handleCompactionEvent(ctx, type, event.data.sessionID, failure)
-            break
-          }
-          case "session.usage.updated":
-          case "session.idle":
-            // session.idle 在新版本里已标记 deprecated，usage.updated 每个 step 都会发；
-            // 两个都接，谁先到都能补写（按 messageID 去重）。
-            await recordCacheHistory(ctx, event.data.sessionID)
-            if (event.type === "session.idle") options.onSessionIdle?.(event.data.sessionID)
-            break
-          case "session.deleted":
-            await forgetSession(ctx, event.data.sessionID)
-            options.onSessionDeleted?.(event.data.sessionID)
-            break
+        try {
+          await handleEvent(event)
+        } catch {
+          // 单条事件失败不能让订阅退出：事件流没有重放，退出就再也不会收到后续事件。
         }
       }
     } catch {
@@ -221,16 +263,18 @@ export function startSessionEvents(
   }
 }
 
-/** 输入：任意错误；输出：是否明确的“会话不存在”。 */
+/**
+ * 输入：任意错误。
+ * 输出：是否明确的“会话不存在”。
+ * 预期：只认结构化标记（TaggedError `_tag` 或 HTTP 404），
+ *       不再用错误文案正则——文案里带 "not found" 的瞬时错误会误删会话数据。
+ */
 function isSessionMissing(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) {
-    return /not found|404/i.test(String(error))
-  }
+  if (typeof error !== "object" || error === null) return false
   const record = error as Record<string, unknown>
+  if (record["_tag"] === "Session.NotFoundError") return true
   const status = record["status"] ?? record["statusCode"] ?? record["code"]
-  if (status === 404 || status === "404" || status === "not_found") return true
-  const message = typeof record["message"] === "string" ? record["message"] : ""
-  return /not found|404/i.test(message)
+  return status === 404 || status === "404" || status === "not_found"
 }
 
 /**

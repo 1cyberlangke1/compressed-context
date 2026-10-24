@@ -46,8 +46,12 @@ export function stateStore(storage: StorageLike): StateStore {
  * 预期：测试可直接创建独立实例；生产代码用 stateStore() 复用。
  */
 export function createStateStore(storage: StorageLike): StateStore {
-  /** 每个会话一条 Promise 链；链尾只表示前一个事务已结束，不传递结果。 */
-  const tails = new Map<string, Promise<void>>()
+  /**
+   * 每个会话一条 Promise 链；链尾只表示前一个事务已结束，不传递结果。
+   * 链表挂在进程级 globalThis 上：插件按 location 各加载一份，每份的 storage 包装对象可能
+   * 不同，但写入的是同一份全局 storage key，所以锁必须跨实例共享，否则并发读改写会互相覆盖。
+   */
+  const tails = stateChains()
 
   const read = async (sessionID: string): Promise<State> =>
     parseState(await storage.get(stateKey(sessionID)))
@@ -79,4 +83,16 @@ export function createStateStore(storage: StorageLike): StateStore {
   }
 
   return { read, transact }
+}
+
+/** 进程级会话锁表；同一个进程里的所有 StateStore 共用。 */
+const CHAINS_KEY = Symbol.for("compressed-context.state-chains")
+
+function stateChains(): Map<string, Promise<void>> {
+  const holder = globalThis as unknown as Record<symbol, Map<string, Promise<void>> | undefined>
+  const existing = holder[CHAINS_KEY]
+  if (existing !== undefined) return existing
+  const created = new Map<string, Promise<void>>()
+  holder[CHAINS_KEY] = created
+  return created
 }

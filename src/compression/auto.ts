@@ -245,9 +245,14 @@ async function rememberWindow(
   sessionID?: string,
 ): Promise<void> {
   try {
+    // 模型原生窗口是模型属性，跨会话共享没有歧义。
     await ctx.storage.set(windowKey(providerID, modelID), limit)
-    await ctx.storage.set(RESOLVED_WINDOW_KEY, limit)
-    if (sessionID !== undefined) await ctx.storage.set(resolvedWindowKey(sessionID), limit)
+    if (sessionID === undefined) {
+      // 不知道会话时才写全局 last；多会话并行时全局值是最后写者赢，不能当会话数据用。
+      await ctx.storage.set(RESOLVED_WINDOW_KEY, limit)
+      return
+    }
+    await ctx.storage.set(resolvedWindowKey(sessionID), limit)
   } catch {
     // best effort：写不进去只影响 TUI 显示，不影响压缩
   }
@@ -283,8 +288,8 @@ export async function resolveLimit(
   const effective = setting === "auto" ? native : native === undefined ? setting : Math.min(setting, native)
   if (typeof effective === "number" && effective > 0) {
     try {
-      await ctx.storage.set(EFFECTIVE_WINDOW_KEY, effective)
-      if (sessionID !== undefined) await ctx.storage.set(effectiveWindowKey(sessionID), effective)
+      if (sessionID === undefined) await ctx.storage.set(EFFECTIVE_WINDOW_KEY, effective)
+      else await ctx.storage.set(effectiveWindowKey(sessionID), effective)
     } catch {
       // best effort：写不进去只影响 step.ended 兜底
     }

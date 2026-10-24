@@ -247,12 +247,3 @@ export async function deleteTranscriptsForSession(
     await storage.remove(entry.key)
   })
 }
-
-/** 输入：storage + 会话 + 块；输出：manifest 是否存在。 */
-export async function hasTranscript(
-  storage: StorageLike,
-  sessionID: string,
-  blockID: string,
-): Promise<boolean> {
-  return (await loadTranscriptManifest(storage, sessionID, blockID)) !== undefined
-}

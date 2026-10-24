@@ -20,10 +20,11 @@ export default Plugin.define({
   async setup(context) {
     const layers = await configFileLayers(context)
     const rpc = contextRpc(context.client)
-    const callOptions = rpcLocation(context)
+    // 每次调用现算路由：setup 时 context.location 可能还没就绪，不能把它固化成常量。
+    const callOptions = (): ReturnType<typeof rpcLocation> => rpcLocation(context)
     let initial = DEFAULT_SETTINGS
     try {
-      initial = normalizeSettings({ ...(await rpc.settingsGet({ layers }, callOptions)) })
+      initial = normalizeSettings({ ...(await rpc.settingsGet({ layers }, callOptions())) })
     } catch {
       // 服务端插件尚未加载：先用默认值，保存时再报错。
     }
@@ -35,7 +36,7 @@ export default Plugin.define({
       const next = normalizeSettings(draft)
       setSettings(reconcile(next))
       try {
-        const result = await rpc.settingsSet({ ...next, layers }, callOptions)
+        const result = await rpc.settingsSet({ ...next, layers }, callOptions())
         if (!result.ok) throw new Error(result.error ?? "settings write failed")
       } catch (error) {
         setSettings(reconcile(previous))
