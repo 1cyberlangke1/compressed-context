@@ -94,15 +94,16 @@ describe("模型覆盖归一化", () => {
     expect(models["m"]).toEqual({ summaryTotalPercent: 40, nudgeGrowthTokens: 0, contextLimit: 200_000 })
   })
 
-  test("保留区块数越界丢弃，合法值保留", () => {
+  test("保留区块数原样保留，不设上下限", () => {
     const models = normalizeModelOverrides({
       m: { recentT1Blocks: 11 },
       n: { recentT1Blocks: 0 },
       p: { recentT1Blocks: -1 },
     })
-    expect(models["m"]).toBeUndefined()
+    expect(models["m"]).toEqual({ recentT1Blocks: 11 })
     expect(models["n"]).toEqual({ recentT1Blocks: 0 })
-    expect(models["p"]).toBeUndefined()
+    // 负数没有意义，但配置层不做钳制；合并时按 0 处理（distill 里 Math.max(0, ...)）。
+    expect(models["p"]).toEqual({ recentT1Blocks: -1 })
   })
 
   test("按模型覆盖保留区块数", () => {

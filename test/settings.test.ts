@@ -41,6 +41,7 @@ describe("initialSettings / normalizeSettings", () => {
       autoCompress: true,
       enableCompressTool: true,
       enableDecompressTool: true,
+      enableCheckpointTreeTool: true,
       showTimeline: false,
       showBlockTokens: false,
       cacheExpanded: true,

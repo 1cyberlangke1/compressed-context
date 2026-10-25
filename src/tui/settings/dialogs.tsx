@@ -111,6 +111,38 @@ function DialogInput(props: {
   )
 }
 
+/** 输入：TUI 上下文 + 文案 + 标题/提示 + 初始值 + 确认回调；输出：非负整数对话框。
+ *  预期：块数这类计数不设上下限，填多少就是多少；空或非整数才算非法。 */
+export function CountDialog(props: {
+  readonly context: Context
+  readonly copy: Messages
+  readonly title: string
+  readonly hint: string
+  readonly invalid: string
+  readonly initial: string
+  readonly onConfirm: (value: number) => void
+}) {
+  return (
+    <DialogInput
+      context={props.context}
+      copy={props.copy}
+      title={props.title}
+      hint={props.hint}
+      invalid={props.invalid}
+      placeholder="0"
+      initial={props.initial}
+      parse={(text) => {
+        const trimmed = text.trim()
+        if (!/^\d+$/.test(trimmed)) return undefined
+        const value = Number(trimmed)
+        return Number.isSafeInteger(value) ? value : undefined
+      }}
+      preview={(value) => value.toString()}
+      onConfirm={props.onConfirm}
+    />
+  )
+}
+
 /** 输入：TUI 上下文 + 文案 + 标题/提示 + 初始值 + 合法范围 + 确认回调。 */
 export function TokenDialog(props: {
   readonly context: Context

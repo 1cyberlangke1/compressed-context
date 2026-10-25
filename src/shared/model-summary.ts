@@ -111,7 +111,10 @@ export function summarySegments(input: {
     },
     {
       layer: layers.recentT1Blocks,
-      text: `${copy.modelPanel.icons.recent} ${copy.modelPanel.recent(scoped.recentT1Blocks.toString())}`,
+      // 和其余字段保持同一写法：只留图标 + 数字，关闭时写「关」。
+      text: `${copy.modelPanel.icons.recent} ${
+        scoped.recentT1Blocks === 0 ? copy.settings.off : scoped.recentT1Blocks.toString()
+      }`,
     },
     {
       layer: layers.nudgeGrowthTokens,

@@ -59,6 +59,7 @@ export const en: Messages = {
     summaryTotalPercentHint: "Max share of the window for all summaries; enter 50% or 100k",
     recentT1Blocks: "Retained blocks",
     recentT1BlocksHint: "The newest N tier-1 blocks stay unmerged; older ones merge first. 0 disables the retention zone",
+    recentT1BlocksInvalid: "Retained blocks must be an integer between 0 and 10",
     summaryPercentInvalid: "Enter 1% to 90%, or a token count that fits the window",
     windowKnown: (value) => `Current window: ${value}`,
     windowUnknown: "Current window unknown (run one model request first)",
@@ -70,6 +71,7 @@ export const en: Messages = {
     autoCompress: "Auto compression",
     enableCompressTool: "compress tool",
     enableDecompressTool: "decompress tool",
+    enableCheckpointTreeTool: "checkpoint_tree tool",
     showTimeline: "Block timeline",
     showBlockTokens: "Block token estimate",
     showCacheChart: "Show cache chart",
@@ -128,7 +130,6 @@ export const en: Messages = {
     sourceGlobal: "global",
     sourceName: "same name",
     sourceExact: "exact",
-    recent: (value) => `keep ${value}`,
     icons: {
       threshold: "⚡",
       window: "🪟",

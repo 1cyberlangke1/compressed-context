@@ -1237,7 +1237,12 @@ try {
   await promptSession(chainSession, "continue")
   await api("POST", `/api/session/${chainSession}/compact`, {})
   await waitSession(chainSession)
-  chainState = stateFor(chainSession)
+  // 压缩钩子先把新块写成 pending，等事件提交后才进 blocks；这里等提交落地，不等固定时间。
+  chainState = await waitForState(
+    chainSession,
+    (state) => (state?.blocks?.length ?? 0) >= 5 && state?.pending === undefined,
+    "low-budget round commits a new block",
+  )
   assert.ok(
     (chainState?.blocks?.length ?? 0) >= 5,
     `low-budget round adds at least one T1 block — actual ${JSON.stringify({
@@ -1374,7 +1379,12 @@ try {
   await promptSession(babelSession, "continue")
   await api("POST", `/api/session/${babelSession}/compact`, {})
   await waitSession(babelSession)
-  babelState = stateFor(babelSession)
+  // 同上：等新块真正提交进 blocks，而不是等 pending 那一刻的快照。
+  babelState = await waitForState(
+    babelSession,
+    (state) => (state?.blocks?.length ?? 0) >= babelBaseBlocks + 1 && state?.pending === undefined,
+    "Babel low-budget round commits a new block",
+  )
   assert.ok(
     (babelState?.blocks?.length ?? 0) >= babelBaseBlocks + 1,
     `Babel low-budget round adds at least one T1 block — actual ${JSON.stringify({

@@ -59,6 +59,7 @@ export const zh: Messages = {
     summaryTotalPercentHint: "所有摘要加起来最多占窗口的百分比；可输入 50% 或 100k",
     recentT1Blocks: "保留区块数",
     recentT1BlocksHint: "最新的这么多个 T1 块不参与合并，越老的越先合并；0 关闭保留区",
+    recentT1BlocksInvalid: "保留块数需要是 0-10 的整数",
     summaryPercentInvalid: "请输入 1% ~ 90%，或一个能换算成百分比的 token 数",
     windowKnown: (value) => `当前窗口：${value}`,
     windowUnknown: "当前窗口未知（先跑一次模型请求）",
@@ -70,6 +71,7 @@ export const zh: Messages = {
     autoCompress: "自动压缩",
     enableCompressTool: "compress 工具",
     enableDecompressTool: "decompress 工具",
+    enableCheckpointTreeTool: "checkpoint_tree 工具",
     showTimeline: "块头时间线",
     showBlockTokens: "块头 token 估算",
     showCacheChart: "显示缓存折线图",
@@ -128,7 +130,6 @@ export const zh: Messages = {
     sourceGlobal: "全局",
     sourceName: "同名",
     sourceExact: "精确",
-    recent: (value) => `保留 ${value} 块`,
     icons: {
       threshold: "⚡",
       window: "🪟",

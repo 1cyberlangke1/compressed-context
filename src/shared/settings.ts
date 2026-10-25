@@ -66,8 +66,6 @@ export const MAX_NUDGE_GROWTH_TOKENS = 200_000
  * 0 表示关闭保留区；预算压力下会临时下调，见 distill.ts 的保留区让位逻辑。
  */
 export const DEFAULT_RECENT_T1_BLOCKS = 2
-export const MIN_RECENT_T1_BLOCKS = 0
-export const MAX_RECENT_T1_BLOCKS = 10
 
 /** 可用窗口下限：低于它连最小摘要都放不下。 */
 export const MIN_CONTEXT_LIMIT = 50_000
@@ -79,6 +77,9 @@ export const DEFAULT_AUTO_COMPRESS = true
 /** 工具开关：关掉后工具仍注册，但调用会返回明确错误。 */
 export const DEFAULT_ENABLE_COMPRESS_TOOL = true
 export const DEFAULT_ENABLE_DECOMPRESS_TOOL = true
+
+/** checkpoint_tree（对话树）工具开关。 */
+export const DEFAULT_ENABLE_CHECKPOINT_TREE_TOOL = true
 
 /** 块头是否显示时间线 / 估算 token；默认关闭，避免多占 token。 */
 export const DEFAULT_SHOW_TIMELINE = false
@@ -128,6 +129,8 @@ export interface CompressionSettings {
   enableCompressTool: boolean
   /** decompress 工具开关 */
   enableDecompressTool: boolean
+  /** checkpoint_tree 工具开关（对话树） */
+  enableCheckpointTreeTool: boolean
   /** 块头显示时间线 */
   showTimeline: boolean
   /** 块头显示估算 token */
@@ -216,6 +219,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCompress: DEFAULT_AUTO_COMPRESS,
   enableCompressTool: DEFAULT_ENABLE_COMPRESS_TOOL,
   enableDecompressTool: DEFAULT_ENABLE_DECOMPRESS_TOOL,
+  enableCheckpointTreeTool: DEFAULT_ENABLE_CHECKPOINT_TREE_TOOL,
   showTimeline: DEFAULT_SHOW_TIMELINE,
   showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
   cacheExpanded: DEFAULT_CACHE_EXPANDED,
@@ -259,15 +263,13 @@ export function readSummaryPercent(value: unknown, fallback: number): number {
   return rounded
 }
 
-/** 输入：任意值；输出：在范围内的保留区块数；非法返回 undefined。 */
+/** 输入：任意值；输出：配置里的保留区块数；不是数字时返回 undefined。预期：不设上下限，填多少用多少。 */
 function readOptionalRecentT1Blocks(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined
-  const rounded = Math.round(value)
-  if (rounded < MIN_RECENT_T1_BLOCKS || rounded > MAX_RECENT_T1_BLOCKS) return undefined
-  return rounded
+  return value
 }
 
-/** 输入：任意值；输出：合法的保留区块数；非法或越界回落到 fallback。 */
+/** 输入：任意值；输出：保留区块数；缺失或不是数字时回落到 fallback。 */
 export function readRecentT1Blocks(value: unknown, fallback: number): number {
   return readOptionalRecentT1Blocks(value) ?? fallback
 }
@@ -517,6 +519,10 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
       typeof value["enableCompressTool"] === "boolean" ? value["enableCompressTool"] : DEFAULT_ENABLE_COMPRESS_TOOL,
     enableDecompressTool:
       typeof value["enableDecompressTool"] === "boolean" ? value["enableDecompressTool"] : DEFAULT_ENABLE_DECOMPRESS_TOOL,
+    enableCheckpointTreeTool:
+      typeof value["enableCheckpointTreeTool"] === "boolean"
+        ? value["enableCheckpointTreeTool"]
+        : DEFAULT_ENABLE_CHECKPOINT_TREE_TOOL,
     showTimeline: typeof value["showTimeline"] === "boolean" ? value["showTimeline"] : DEFAULT_SHOW_TIMELINE,
     showBlockTokens: typeof value["showBlockTokens"] === "boolean" ? value["showBlockTokens"] : DEFAULT_SHOW_BLOCK_TOKENS,
     cacheExpanded: typeof value["cacheExpanded"] === "boolean" ? value["cacheExpanded"] : DEFAULT_CACHE_EXPANDED,

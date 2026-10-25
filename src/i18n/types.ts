@@ -55,6 +55,7 @@ export interface Messages {
     readonly summaryTotalPercentHint: string
     readonly recentT1Blocks: string
     readonly recentT1BlocksHint: string
+    readonly recentT1BlocksInvalid: string
     readonly summaryPercentInvalid: string
     readonly windowKnown: (value: string) => string
     readonly windowUnknown: string
@@ -66,6 +67,7 @@ export interface Messages {
     readonly autoCompress: string
     readonly enableCompressTool: string
     readonly enableDecompressTool: string
+    readonly enableCheckpointTreeTool: string
     readonly showTimeline: string
     readonly showBlockTokens: string
     readonly showCacheChart: string
@@ -123,7 +125,6 @@ export interface Messages {
     readonly sourceGlobal: string
     readonly sourceName: string
     readonly sourceExact: string
-    readonly recent: (value: string) => string
     readonly icons: {
       readonly threshold: string
       readonly window: string

@@ -58,6 +58,7 @@ const SettingsProperties = {
   autoCompress: { type: "boolean" },
   enableCompressTool: { type: "boolean" },
   enableDecompressTool: { type: "boolean" },
+  enableCheckpointTreeTool: { type: "boolean" },
   showTimeline: { type: "boolean" },
   showBlockTokens: { type: "boolean" },
   decompressInlineMax: { type: "number" },

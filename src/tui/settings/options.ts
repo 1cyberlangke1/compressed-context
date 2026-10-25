@@ -58,6 +58,7 @@ export const SETTINGS_ACTIONS = [
   "enableDecompressTool",
   "blockPercent",
   "totalPercent",
+  "recentT1Blocks",
   "summaryLanguage",
   "summaryFormat",
   "showTimeline",
@@ -71,6 +72,7 @@ export const SETTINGS_ACTIONS = [
   "decompressTempMaxAgeHours",
   "decompressShowTokens",
   "language",
+  "enableCheckpointTreeTool",
 ] as const
 
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number]
@@ -89,6 +91,7 @@ export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
   nudge: "defaults",
   blockPercent: "defaults",
   totalPercent: "defaults",
+  recentT1Blocks: "summary",
   summaryLanguage: "summary",
   summaryFormat: "summary",
   showTimeline: "summary",
@@ -96,6 +99,7 @@ export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
   autoCompress: "switches",
   enableCompressTool: "switches",
   enableDecompressTool: "switches",
+  enableCheckpointTreeTool: "switches",
   show: "interface",
   showCacheChart: "interface",
   showCacheLog: "interface",
@@ -162,6 +166,7 @@ export function buildSectionOptions(input: {
         [copy.settings.autoCompress, settings.autoCompress],
         [copy.settings.enableCompressTool, settings.enableCompressTool],
         [copy.settings.enableDecompressTool, settings.enableDecompressTool],
+        [copy.settings.enableCheckpointTreeTool, settings.enableCheckpointTreeTool],
       ], copy),
     },
     {
@@ -216,6 +221,7 @@ export type ToggleSetting = Extract<
   | "autoCompress"
   | "enableCompressTool"
   | "enableDecompressTool"
+  | "enableCheckpointTreeTool"
   | "showTimeline"
   | "showBlockTokens"
   | "showCacheChart"
@@ -274,6 +280,12 @@ export function buildSettingsOptions(input: {
       onOff(settings.enableDecompressTool),
       copy.settings.categories.defaults,
     ),
+    toggle(
+      "enableCheckpointTreeTool",
+      copy.settings.enableCheckpointTreeTool,
+      onOff(settings.enableCheckpointTreeTool),
+      copy.settings.categories.defaults,
+    ),
     {
       title: copy.settings.summaryBlockPercent,
       value: "blockPercent",
@@ -284,6 +296,12 @@ export function buildSettingsOptions(input: {
       title: copy.settings.summaryTotalPercent,
       value: "totalPercent",
       footer: percentLabel(effectiveSummaryTotalPercent(settings), window),
+      category: copy.settings.categories.summary,
+    },
+    {
+      title: copy.settings.recentT1Blocks,
+      value: "recentT1Blocks",
+      footer: settings.recentT1Blocks.toString(),
       category: copy.settings.categories.summary,
     },
     {

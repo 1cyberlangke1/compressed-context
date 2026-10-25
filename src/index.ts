@@ -77,10 +77,10 @@ export default Plugin.define({
     }): Promise<void> => {
       const roleHidden = await isSubagentSession(ctx, input.sessionID)
       const settings = await loadServerSettings(ctx)
+      // 子代理、或者对应开关关掉：都不该把工具广告给模型。
       if (roleHidden || !settings.enableCompressTool) hideTools(input.tools, ["compress"])
-      if (roleHidden || !settings.enableDecompressTool) {
-        hideTools(input.tools, ["decompress", "checkpoint_tree"])
-      }
+      if (roleHidden || !settings.enableDecompressTool) hideTools(input.tools, ["decompress"])
+      if (roleHidden || !settings.enableCheckpointTreeTool) hideTools(input.tools, ["checkpoint_tree"])
     }
 
     disposables.push(

@@ -83,7 +83,7 @@ describe("summarySegments", () => {
     expect(segments[1]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.window} 1.0M（${copy.settings.limitAuto}）` })
     expect(segments[2]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.block} 5%（50k）` })
     expect(segments[3]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.total} 7%（70k）` })
-    expect(segments[4]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.recent} ${copy.modelPanel.recent("2")}` })
+    expect(segments[4]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.recent} 2` })
     expect(segments[5]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.nudge} 50k` })
   })
 

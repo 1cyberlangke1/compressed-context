@@ -30,7 +30,7 @@ import {
   type SummaryFormat,
   type SummaryLanguage,
 } from "../shared/settings.ts"
-import { PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
+import { CountDialog, PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
 import { effectiveWindow } from "../shared/model-summary.ts"
 import {
   buildEditorOptions,
@@ -200,6 +200,25 @@ export function SettingsCommand(props: {
         draft.nudgeGrowthTokens = value
       },
     })
+  }
+
+  /** 输入：无；输出：无。预期：编辑全局默认的保留区块数，不设上下限，0 关闭保留区。 */
+  const openRecentT1 = (): void => {
+    props.context.ui.dialog.show(() => (
+      <CountDialog
+        context={props.context}
+        copy={copy()}
+        title={copy().settings.recentT1Blocks}
+        hint={copy().settings.recentT1BlocksHint}
+        invalid={copy().settings.recentT1BlocksInvalid}
+        initial={props.settings.recentT1Blocks.toString()}
+        onConfirm={(value) => {
+          void props.updateSettings((draft) => {
+            draft.recentT1Blocks = value
+          })
+        }}
+      />
+    ))
   }
 
   const openThreshold = (): void => {
@@ -662,6 +681,14 @@ export function SettingsCommand(props: {
     enableDecompressTool: async () => {
       await toggleSetting("enableDecompressTool")
       return false
+    },
+    enableCheckpointTreeTool: async () => {
+      await toggleSetting("enableCheckpointTreeTool")
+      return false
+    },
+    recentT1Blocks: () => {
+      openRecentT1()
+      return true
     },
     showTimeline: async () => {
       await toggleSetting("showTimeline")

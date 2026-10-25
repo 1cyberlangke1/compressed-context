@@ -22,8 +22,10 @@ describe("buildSettingsOptions", () => {
       "autoCompress",
       "enableCompressTool",
       "enableDecompressTool",
+      "enableCheckpointTreeTool",
       "blockPercent",
       "totalPercent",
+      "recentT1Blocks",
       "summaryLanguage",
       "summaryFormat",
       "showTimeline",
@@ -107,6 +109,7 @@ describe("三层菜单", () => {
       "autoCompress",
       "enableCompressTool",
       "enableDecompressTool",
+      "enableCheckpointTreeTool",
     ])
     expect(itemsOfGroup(all, "interface").map((option) => option.value)).toEqual([
       "show",

@@ -8,6 +8,7 @@ import {
   DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   DEFAULT_ENABLE_COMPRESS_TOOL,
   DEFAULT_ENABLE_DECOMPRESS_TOOL,
+  DEFAULT_ENABLE_CHECKPOINT_TREE_TOOL,
   DEFAULT_NUDGE_GROWTH_TOKENS,
   DEFAULT_RECENT_T1_BLOCKS,
   DEFAULT_SHOW_BLOCK_TOKENS,
@@ -19,14 +20,12 @@ import {
   MAX_DECOMPRESS_TEMP_CAP,
   MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MAX_NUDGE_GROWTH_TOKENS,
-  MAX_RECENT_T1_BLOCKS,
   MAX_SUMMARY_PERCENT,
   MAX_TRIGGER_PERCENT,
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
   MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MIN_NUDGE_GROWTH_TOKENS,
-  MIN_RECENT_T1_BLOCKS,
   MIN_SUMMARY_PERCENT,
   MIN_TRIGGER_PERCENT,
   isSummaryLanguage,
@@ -141,6 +140,7 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   autoCompress: DEFAULT_AUTO_COMPRESS,
   enableCompressTool: DEFAULT_ENABLE_COMPRESS_TOOL,
   enableDecompressTool: DEFAULT_ENABLE_DECOMPRESS_TOOL,
+  enableCheckpointTreeTool: DEFAULT_ENABLE_CHECKPOINT_TREE_TOOL,
   showTimeline: DEFAULT_SHOW_TIMELINE,
   showBlockTokens: DEFAULT_SHOW_BLOCK_TOKENS,
   decompressInlineMax: DEFAULT_DECOMPRESS_INLINE_MAX,
@@ -181,12 +181,14 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   if (!inRange(nudge, MIN_NUDGE_GROWTH_TOKENS, MAX_NUDGE_GROWTH_TOKENS, true)) return undefined
   if (!inRange(blockPercent, MIN_SUMMARY_PERCENT, MAX_SUMMARY_PERCENT)) return undefined
   if (!inRange(totalPercent, MIN_SUMMARY_PERCENT, MAX_SUMMARY_PERCENT)) return undefined
-  if (!inRange(recentT1Blocks, MIN_RECENT_T1_BLOCKS, MAX_RECENT_T1_BLOCKS, true)) return undefined
+  // 保留块数不设上下限：是有限数字就接受。
+  if (typeof recentT1Blocks !== "number" || !Number.isFinite(recentT1Blocks)) return undefined
   if (!isSummaryLanguage(language)) return undefined
   if (!isSummaryFormat(summaryFormat)) return undefined
   const autoCompress = readStrictBoolean(record["autoCompress"], DEFAULT_AUTO_COMPRESS)
   const enableCompressTool = readStrictBoolean(record["enableCompressTool"], DEFAULT_ENABLE_COMPRESS_TOOL)
   const enableDecompressTool = readStrictBoolean(record["enableDecompressTool"], DEFAULT_ENABLE_DECOMPRESS_TOOL)
+  const enableCheckpointTreeTool = readStrictBoolean(record["enableCheckpointTreeTool"], DEFAULT_ENABLE_CHECKPOINT_TREE_TOOL)
   const showTimeline = readStrictBoolean(record["showTimeline"], DEFAULT_SHOW_TIMELINE)
   const showBlockTokens = readStrictBoolean(record["showBlockTokens"], DEFAULT_SHOW_BLOCK_TOKENS)
   const decompressShowTokens = readStrictBoolean(record["decompressShowTokens"], DEFAULT_DECOMPRESS_SHOW_TOKENS)
@@ -194,6 +196,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     autoCompress === undefined ||
     enableCompressTool === undefined ||
     enableDecompressTool === undefined ||
+    enableCheckpointTreeTool === undefined ||
     showTimeline === undefined ||
     showBlockTokens === undefined ||
     decompressShowTokens === undefined
@@ -235,6 +238,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     autoCompress,
     enableCompressTool,
     enableDecompressTool,
+    enableCheckpointTreeTool,
     showTimeline,
     showBlockTokens,
     decompressInlineMax,
