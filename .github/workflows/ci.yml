@@ -69,3 +69,43 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # prepack 会跑 build:tui，产物口径与发布一致。
       - run: bun scripts/ci-plugin-load.mjs
+
+  # 真实 opencode + 假 provider 的端到端压缩链路：单测不覆盖的触发/对账/多轮行为全在这里。
+  e2e:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # 故意不锁版本：上游发新版就让 CI 红，提醒适配。
+      - id: opencode
+        run: echo "version=$(npm view @opencode/cli version)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        id: opencode-cache
+        with:
+          path: .ci/opencode
+          key: opencode-${{ runner.os }}-${{ steps.opencode.outputs.version }}
+
+      - if: steps.opencode-cache.outputs.cache-hit != 'true'
+        run: npm install --prefix .ci/opencode "@opencode/cli@${{ steps.opencode.outputs.version }}"
+
+      - run: echo "$PWD/.ci/opencode/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: opencode --version
+
+      - run: pnpm install --frozen-lockfile
+      # prepack 产物与发布一致；e2e 的 plugins 指向仓库根目录，宿主直接吃源码。
+      - run: bun scripts/e2e-tool-loop.mjs
+      - run: bun scripts/e2e-compress.mjs
+      - run: bun scripts/e2e-nudge.mjs

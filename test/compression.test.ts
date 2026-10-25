@@ -1983,6 +1983,9 @@ describe("摘要单层合并", () => {
       model: { providerID: "fake", id: "model" },
       messages: [
         message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
+        // older 超过 MIN_SOURCE_CHARS：phase 分支让位给 T1 会走这里？不会——
+        // 这 3 条消息里只有 checkpoint 之后的两条短消息，不足 MIN_SOURCE_CHARS，
+        // 所以仍走合并分支：这是「新消息不够长也必须能合并」的回归用例。
         message("user", "continue", "m1"),
         message("assistant", "ok", "m2"),
       ],
@@ -1994,7 +1997,7 @@ describe("摘要单层合并", () => {
     expect(event.result?.summary).toContain("T2")
   })
 
-  it("没有可合并候选时不写终止态，phase 清空等待下一轮", async () => {
+  it("只剩一个块且超预算时自压，压回预算后清 phase", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {
       models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
@@ -2004,7 +2007,7 @@ describe("摘要单层合并", () => {
       summaryFormat: "json",
     })
     await saveState(storage, "ses_terminal", {
-      // 只有一个 T3：没有下一层可合并，摘要又超预算 → 这次不动，也不拒绝以后的压缩。
+      // 只有一个 T3 且超预算：新算法允许它自压，不再「无候选」卡死。
       blocks: [longBlock("b1", 3, 1)],
       attempts: 2,
       phase: 3,
@@ -2026,6 +2029,10 @@ describe("摘要单层合并", () => {
     await handleCompaction(ctx, event)
     const state = await loadState(storage, "ses_terminal")
     expect(state.lastError).toBeUndefined()
+    // 单块也能自压：产物仍是 T3、深度 +1；压回预算内后 phase 正常清空。
+    expect(state.pending?.tier).toBe(3)
+    expect(state.pending?.sourceBlockIds).toEqual(["b1"])
+    expect(state.pending?.depth).toBe(4)
     expect(state.phase).toBeUndefined()
     expect(state.blocks).toHaveLength(1)
   })

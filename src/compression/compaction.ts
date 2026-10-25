@@ -8,6 +8,7 @@ import { distillOnce, planT1Phase } from "./distill.ts"
 import { endCompaction, tryBeginCompaction } from "./inflight.ts"
 import { activeBlocks } from "./render.ts"
 import { messageRange, olderMessages, type MessageLike } from "./select.ts"
+import { MIN_SOURCE_CHARS } from "./validate.ts"
 import { loadServerSettings } from "./settings.ts"
 import { loadState, type Block, type CompactionPhase, type State } from "./state.ts"
 import { stateStore } from "./state-store.ts"
@@ -85,9 +86,10 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
     const older = olderMessages(event.messages)
     const transcript = buildTranscript(older)
     const sourceChars = transcript.length
-    // 第二阶段：T2/T3。phase 有值说明摘要已经超出预算、上一轮就排好了层级，
-    // 这一轮必须先合并摘要链，对象是摘要而不是新对话流，因此不再看新消息多长。
-    if (state.phase !== undefined) {
+    // 第二阶段：T2/T3。phase 有值说明摘要已经超出预算、上一轮就排好了层级。
+    // 但只有「没有足够的新原文」时才先合并：older 够长时必须先 T1 把新块入链，
+    // 否则 active 块数不涨、合并永远没有候选，链会卡死在超预算的单块上。
+    if (state.phase !== undefined && (older.length === 0 || sourceChars < MIN_SOURCE_CHARS)) {
       const result = await distillOnce({
         ctx,
         sessionID: event.sessionID,
@@ -104,15 +106,19 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         showBlockTokens: settings.showBlockTokens,
       })
       // 模型或校验失败时保留 phase，下一次请求重试同一层；成功且预算回落则由 nextPhase 决定。
+      // 但「超预算却没有任何候选」（active<2 或跨层全禁）不能清 phase：
+      // 清掉后新 T1 压出来时没人再排下一层，链会永远停在超预算的单块上。
+      // 这种情况保留 phase，等下一个 T1 入链后自然有候选可合并。
+      const noCandidate = !result.merged && result.error === undefined
       await save(
         result.blocks,
         result.pending,
-        result.error === undefined ? result.nextPhase : state.phase,
+        result.error !== undefined ? state.phase : noCandidate ? state.phase : result.nextPhase,
         result.error,
         result.distillRounds ?? state.distillRounds,
       )
       event.result = { summary: result.summary }
-      // 预算内不会再排下一层；没有合法候选时 distill 自己返回未合并，phase 随之清空。
+      // 预算内不会再排下一层；有候选但模型失败时保留 phase 等重试。
       return
     }
 
