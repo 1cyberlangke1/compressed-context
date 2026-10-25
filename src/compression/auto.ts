@@ -114,6 +114,20 @@ function summaryOverBudget(
 }
 
 /**
+ * 输入：插件上下文 + sessionID。
+ * 输出：无。
+ * 预期：phase 为空时补上「下一层 = 2」。摘要已经超预算但 phase 丢了（压缩钩子被跳过、
+ *       或上一层收尾没排上）时用，保证下一次压缩走合并分支而不是重复 T1。
+ */
+async function armMergePhase(ctx: Plugin.Context, sessionID: string): Promise<void> {
+  await stateStore(ctx.storage).transact(sessionID, (current) =>
+    current.phase !== undefined
+      ? { result: undefined }
+      : { next: { ...current, phase: 2 }, result: undefined },
+  )
+}
+
+/**
  * 输入：插件上下文 + sessionID + 状态 + 设置 + 窗口。
  * 输出：无。
  * 预期：摘要回到预算内时清掉残留的 phase，避免每个请求都入队一次压缩。
@@ -346,6 +360,13 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
 
     // 自动触发：只看开关和用量。
     if (!settings.autoCompress) return
+    // 摘要自己撑爆预算也要合并：与上下文占用无关。否则手动压完就超预算、phase 又丢了时，
+    // 要等到下一次用量过线才会再压一刀，中间一直卡着超预算的摘要。
+    if (summaryOverBudget(state, settings, limit)) {
+      await armMergePhase(input.ctx, input.sessionID)
+      await requestCompaction(input.ctx, input.sessionID)
+      return
+    }
     if (limit === undefined) return
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
     const threshold = triggerTokens(settings, limit)
@@ -396,6 +417,12 @@ export async function maybeAutoCompressStep(input: {
     }
 
     if (!settings.autoCompress) return
+    // 与 context 路径同理：摘要超预算就合并，不等用量过线。
+    if (summaryOverBudget(state, settings, effective)) {
+      await armMergePhase(input.ctx, input.sessionID)
+      await requestCompaction(input.ctx, input.sessionID)
+      return
+    }
     const threshold = triggerTokens(settings, effective)
     if (threshold === undefined || promptTokens(input.tokens) < threshold) return
     // 刚压缩完、还没有新的 user 消息时，历史里只剩 checkpoint，入队只会得到空压缩。

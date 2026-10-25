@@ -1099,6 +1099,37 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
+  it("phase 为空但摘要超预算时 step.ended 也入队合并", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
+        triggerPercent: 80,
+        summaryTotalPercent: 1,
+      },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      // 两个块已经超 1% × 100k 的预算，但 phase 为空：旧逻辑只会等用量到 80%。
+      [stateKey("ses_test")]: { blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    // 用量远低于阈值，只有摘要超预算这一个理由。
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 10, write: 0 } },
+    })
+    expect(compacts).toBe(1)
+    // 同时补上 phase，下一次压缩走合并而不是重复 T1。
+    expect((await loadState(storage, "ses_test")).phase).toBe(2)
+  })
+
   it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {
     const storage = memoryStorage({ [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 } })
     let compacts = 0
@@ -1269,6 +1300,38 @@ describe("自动压缩", () => {
       model: { providerID: "test", id: "test" },
     })
     expect(compacts).toBe(1)
+  })
+
+  it("phase 为空但摘要超预算时下一次模型请求也入队合并", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
+        triggerPercent: 60,
+        summaryTotalPercent: 1,
+      },
+      // 摘要超预算、但没有排下一层：旧逻辑会一直等到用量过线。
+      [stateKey("ses_test")]: { blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    // 消息量远低于阈值：只有摘要预算这一个触发理由。
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: [{ id: "m1", role: "user", content: [{ type: "text", text: "hi" }] }],
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
+    expect((await loadState(storage, "ses_test")).phase).toBe(2)
   })
 
   it("compress 工具关闭时自动压缩仍然生效", async () => {
