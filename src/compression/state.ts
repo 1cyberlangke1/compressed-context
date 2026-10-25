@@ -69,9 +69,6 @@ export interface StorageLike {
 
 export const STATE_PREFIX = "compression:state:"
 
-/** 连续压缩失败达到这个次数后暂停自动压缩；同一层内还会做摘要重试。 */
-export const MAX_COMPRESSION_ATTEMPTS = 3
-
 /** 同一次 T1 之后最多连合几刀：防止「怎么合都压不进预算」时无限连环压缩。 */
 export const MAX_DISTILL_ROUNDS = 8
 
@@ -386,6 +383,7 @@ export function clearPhase(state: State): State {
     blocks: state.blocks,
     attempts: state.attempts,
     ...(state.pending === undefined ? {} : { pending: state.pending }),
+    ...(state.pendingAt === undefined ? {} : { pendingAt: state.pendingAt }),
     ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),

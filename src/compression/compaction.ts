@@ -60,7 +60,8 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       await stateStore(ctx.storage).transact(event.sessionID, (current) => {
         // 以锁内的最新状态为基准。钩子开头拿到的快照可能已经过时：
         // 期间别的分支会改写 nudgeCount / lastError，用旧快照整体覆盖会丢更新。
-        const lastError = error ?? current.lastError
+        // 成功必须清掉旧错误：残留的 lastError 会让后续事件对账把「钩子没跑过」误判成真实失败。
+        const lastError = error
         const next: State = {
           blocks,
           attempts: current.attempts,
@@ -118,6 +119,9 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         result.distillRounds ?? state.distillRounds,
       )
       event.result = { summary: result.summary }
+      // 校验或模型失败时必须走失败路径：否则宿主以为压缩成功、attempts 被清零，
+      // state 留着 phase 和下一条 user 消息的再次入队，形成没有任何退避的循环。
+      if (result.error !== undefined) throw new Error(result.error)
       // 预算内不会再排下一层；有候选但模型失败时保留 phase 等重试。
       return
     }

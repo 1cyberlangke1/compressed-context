@@ -28,9 +28,13 @@ export async function hasBlockInLatestCompaction(
 ): Promise<boolean> {
   try {
     const messages = await ctx.session.context({ sessionID })
-    const latest = messages.find((message) => message.type === "compaction" && message.status === "completed")
-    if (latest === undefined) return false
-    return latest.summary.includes(blockMarker(blockId))
+    // 必须取「最后一条」completed compaction：历史里可能有多条，pending 的标记只在最新那条里。
+    let latestSummary: string | undefined
+    for (const message of messages) {
+      if (message.type === "compaction" && message.status === "completed") latestSummary = message.summary
+    }
+    if (latestSummary === undefined) return false
+    return latestSummary.includes(blockMarker(blockId))
   } catch {
     return false
   }
@@ -48,8 +52,7 @@ export type CompactionEventType = "ended" | "failed"
 /**
  * 输入：服务端上下文 + 事件类型 + sessionID + 事件自带错误（仅 failed 有）。
  * 输出：无。
- * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败时保留 phase 让下一次请求重试，
- *       达到 MAX_COMPRESSION_ATTEMPTS 后清除 phase，记录真实原因。
+ * 预期：只有最新 checkpoint 包含 pending marker 才转正；失败时保留 phase 让下一次请求重试。
  *       事件 error 优先于 state.lastError——钩子没跑过的失败（如 OpenCode 在钩子前判定
  *       「无可压缩内容」）state 里没有任何错误记录，只能从事件拿真实原因。
  */
@@ -79,6 +82,14 @@ export async function handleCompactionEvent(
     }
 
     const detail = eventError ?? state.lastError ?? "compaction failed"
+    // 「没有可压缩内容」不是本层失败：说明已经压干净了（或钩子前就没东西可压）。
+    // 把它计进 attempts / lastError 会在链尾留下一条假失败，掩盖真实错误。
+    if (/nothing to compact/i.test(detail)) {
+      return {
+        next: state.pending === undefined ? { ...state, attempts: 0 } : state,
+        result: undefined,
+      }
+    }
     // 钩子从未运行的失败（state 里没有任何本层错误记录）且已排下一层 phase：
     // 典型是历史里只剩 checkpoint，OpenCode 在钩子前就判定无可压缩内容。
     // 这不是本层失败，保留 phase 等下一次带真实消息的压缩，不计 attempts。

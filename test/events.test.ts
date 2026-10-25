@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { Plugin } from "@opencode/plugin"
 
-import { startSessionEvents } from "../src/compression/events.ts"
+import { hasBlockInLatestCompaction, startSessionEvents } from "../src/compression/events.ts"
 
 /**
  * 输入：要依次派发的事件列表 + 可选会话归属表。
@@ -248,5 +248,31 @@ describe("会话事件订阅", () => {
     await waitFor(() => order.length === 2)
     cancel()
     expect(order).toEqual(["ses_fast", "ses_slow"])
+  })
+})
+
+describe("hasBlockInLatestCompaction", () => {
+  /** 输入：messages；输出：只提供 session.context 的假 ctx。预期：用于直接验证最新 checkpoint 判定。 */
+  const ctxWithContext = (messages: readonly unknown[]): Plugin.Context =>
+    ({ session: { context: () => Promise.resolve(messages) } }) as unknown as Plugin.Context
+
+  it("取最后一条 completed compaction，而不是第一条", async () => {
+    const ctx = ctxWithContext([
+      { type: "compaction", status: "completed", summary: "[Compressed conversation section #b1]" },
+      { type: "user", text: "hi" },
+      { type: "compaction", status: "completed", summary: "no marker here" },
+    ])
+    // b1 只在更早那条里出现：按「第一条」判定会误 commit 一个已经不存在的 pending。
+    expect(await hasBlockInLatestCompaction(ctx, "ses_test", "b1")).toBe(false)
+    expect(await hasBlockInLatestCompaction(ctx, "ses_test", "b9")).toBe(false)
+  })
+
+  it("最新一条包含待确认块时返回 true", async () => {
+    const ctx = ctxWithContext([
+      { type: "compaction", status: "completed", summary: "old" },
+      { type: "user", text: "hi" },
+      { type: "compaction", status: "completed", summary: "[Compressed conversation section #b7] T1" },
+    ])
+    expect(await hasBlockInLatestCompaction(ctx, "ses_test", "b7")).toBe(true)
   })
 })

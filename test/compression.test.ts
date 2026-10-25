@@ -1099,16 +1099,16 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
-  it("phase 为空但摘要超预算时 step.ended 也入队合并", async () => {
+  it("phase 为空但摘要超预算时 step.ended 也入队合并（保留区用默认值）", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: {
         models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
         triggerPercent: 80,
         summaryTotalPercent: 1,
-        recentT1Blocks: 0,
       },
       [EFFECTIVE_WINDOW_KEY]: 100_000,
       // 两个块已经超 1% × 100k 的预算，但 phase 为空：旧逻辑只会等用量到 80%。
+      // recentT1Blocks 故意不写：默认保留 2 个 T1 时也必须能合（闸门与 distill 选组同源）。
       [stateKey("ses_test")]: { blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 },
     })
     let compacts = 0
@@ -1129,6 +1129,34 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
     // 同时补上 phase，下一次压缩走合并而不是重复 T1。
     expect((await loadState(storage, "ses_test")).phase).toBe(2)
+  })
+
+  it("只剩一个块且超预算时也要入队自压", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
+        triggerPercent: 80,
+        summaryTotalPercent: 1,
+      },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      // distill 支持「单块自己升一层」，所以只剩一块也不能把这条收缩路径封死。
+      [stateKey("ses_test")]: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 10, write: 0 } },
+    })
+    expect(compacts).toBe(1)
   })
 
   it("只有 checkpoint 的 recent 撑大总量时不触发", async () => {
@@ -1309,9 +1337,9 @@ describe("自动压缩", () => {
         models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
         triggerPercent: 60,
         summaryTotalPercent: 1,
-        recentT1Blocks: 0,
       },
       // 摘要超预算、但没有排下一层：旧逻辑会一直等到用量过线。
+      // recentT1Blocks 用默认值（2），两个块也必须能合。
       [stateKey("ses_test")]: { blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 },
     })
     let compacts = 0

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { SummaryFields } from "../src/compression/schema.ts"
 import {
   PENDING_TIMEOUT_MS,
+  clearPhase,
   commitPending,
   dropPending,
   expireStalePending,
@@ -243,5 +244,14 @@ describe("expireStalePending", () => {
   it("没有 pending 时原样返回", () => {
     const state: State = { blocks: [block("b1", 1)], attempts: 0 }
     expect(expireStalePending(state, 999_999)).toBe(state)
+  })
+
+  it("clearPhase 保留 pending 与 pendingAt", () => {
+    const state: State = { blocks: [], attempts: 0, phase: 2, pending: block("b1", 1), pendingAt: 1_000 }
+    const next = clearPhase(state)
+    expect(next.phase).toBeUndefined()
+    expect(next.pending?.id).toBe("b1")
+    // pendingAt 丢了会让 pending 的过期窗口从头开始，等于把「已经在路上」的那刀又拖 10 分钟。
+    expect(next.pendingAt).toBe(1_000)
   })
 })

@@ -4,7 +4,7 @@ import { formatTokens } from "../shared/format.ts"
 import { resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
 import { countText, estimateCategories, totalCategories, type ToolDefinitionLike } from "../shared/tokens.ts"
 import { endCompactionRequest, isCompactionInFlight, tryBeginCompactionRequest } from "./inflight.ts"
-import { hasMergeablePair } from "./distill.ts"
+import { pickMergeGroup } from "./distill.ts"
 import { activeBlocks, renderAll } from "./render.ts"
 import { eligibleMessages, type MessageLike } from "./select.ts"
 import { isSubagentSession } from "./session-role.ts"
@@ -16,7 +16,14 @@ import {
   resolvedWindowKey,
   windowKey,
 } from "./settings.ts"
-import { PENDING_TIMEOUT_MS, clearPhase, expireStalePending, loadState, type State } from "./state.ts"
+import {
+  MAX_DISTILL_ROUNDS,
+  PENDING_TIMEOUT_MS,
+  clearPhase,
+  expireStalePending,
+  loadState,
+  type State,
+} from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -34,6 +41,9 @@ const COMPACTION_COMMIT_WAIT_MS = 10_000
 /** 等待轮询间隔。 */
 const COMPACTION_POLL_MS = 200
 
+/** 窗口小于这个值时不判摘要预算：`physical = window - reserve` 会退化成 0/1，压不进去也判不准。 */
+const MIN_SUMMARY_WINDOW_TOKENS = 10_000
+
 /**
  * 输入：服务端上下文 + sessionID + 入队前的 state 快照。
  * 输出：无。
@@ -45,8 +55,10 @@ export async function waitForCompaction(
   sessionID: string,
   before: { blocks: number; lastError: string | undefined },
 ): Promise<void> {
-  const deadline = Date.now() + COMPACTION_WAIT_MS
+  const started = Date.now()
+  const deadline = started + COMPACTION_WAIT_MS
   let pendingSince: number | undefined
+  let sawInFlight = false
   while (Date.now() < deadline) {
     const state = await loadState(ctx.storage, sessionID)
     const settled = state.blocks.length > before.blocks
@@ -56,6 +68,13 @@ export async function waitForCompaction(
       while (isCompactionInFlight(sessionID) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, COMPACTION_POLL_MS))
       }
+      return
+    }
+    if (isCompactionInFlight(sessionID)) {
+      sawInFlight = true
+    } else if (!sawInFlight && Date.now() - started > COMPACTION_POLL_MS * 3) {
+      // 钩子从头到尾没接手（宿主拒绝空压缩、别的实例已处理）：立刻放行，
+      // 否则会占着发起权、并把该会话的事件队列串行阻塞 5 分钟。
       return
     }
     if (state.pending !== undefined) {
@@ -107,6 +126,8 @@ function summaryOverBudget(
 ): boolean {
   if (windowTokens === undefined) return false
   const limits = resolveSummaryLimits(settings, windowTokens)
+  // 窗口本身小于预留区时预算没有意义（budget 会退化成 1），继续入队只会每轮白压 8 刀。
+  if (windowTokens <= MIN_SUMMARY_WINDOW_TOKENS) return false
   const summary = renderAll(state.blocks, state.pending, {
     showTimeline: settings.showTimeline,
     showBlockTokens: settings.showBlockTokens,
@@ -116,23 +137,25 @@ function summaryOverBudget(
 
 /**
  * 输入：状态 + 保留区设置。
- * 输出：是否存在可合并的同层块对。
- * 预期：摘要超预算不等于能合并——只剩单块时宿主会直接回「没有可压缩内容」，
- *       于是每轮都白试一次并留下 lastError，所以只有真能合两块才入队。
+ * 输出：是否还有可合并的块。
+ * 预期：判定必须与 distillOnce 选组逻辑同源（pickMergeGroup），否则会出现
+ *       「闸门说不能合、压缩钩子其实能合」导致超预算摘要一直卡住。
+ *       单块也能自压一层，所以这里不要求必须凑出两块。
  */
 function mergePossible(state: State, recentT1Blocks: number): boolean {
-  return hasMergeablePair(activeBlocks(state.blocks, state.pending), recentT1Blocks)
+  return pickMergeGroup(activeBlocks(state.blocks, state.pending), recentT1Blocks) !== undefined
 }
 
 /**
  * 输入：插件上下文 + sessionID。
- * 输出：无。
- * 预期：phase 为空时补上「下一层 = 2」。摘要已经超预算但 phase 丢了（压缩钩子被跳过、
- *       或上一层收尾没排上）时用，保证下一次压缩走合并分支而不是重复 T1。
+ * 输出：phase 为空时补上「下一层 = 2」；已有 pending 或已有 phase 时不动。
+ * 预期：摘要已经超预算但 phase 丢了（压缩钩子被跳过、或上一层收尾没排上）时用，
+ *       保证下一次压缩走合并分支而不是重复 T1。pending 在场时不能插手：
+ *       那是手动 compress 刚写进去的 T1，会被误当成待合并块。
  */
 async function armMergePhase(ctx: Plugin.Context, sessionID: string): Promise<void> {
   await stateStore(ctx.storage).transact(sessionID, (current) =>
-    current.phase !== undefined
+    current.phase !== undefined || current.pending !== undefined
       ? { result: undefined }
       : { next: { ...current, phase: 2 }, result: undefined },
   )
@@ -171,10 +194,35 @@ async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): P
       if (message?.type === "compaction" && message.status === "completed") latest = index
     }
     if (latest < 0) return true
-    return messages.slice(latest + 1).some((message) => message.type === "user" && message.text.trim().length > 0)
+    return messages.slice(latest + 1).some((message) => {
+      if (message.type !== "user") return false
+      return messageTextOf(message).trim().length > 0
+    })
   } catch {
     return true
   }
+}
+
+/**
+ * 输入：一条 session 消息。
+ * 输出：它的正文。
+ * 预期：不同版本把正文放在 `text` 或 `content[].text`，两种都要认；都没有就返回空串，
+ *       不能抛错——抛错会被外层 catch 当成「读不到历史」而永远放行。
+ */
+function messageTextOf(message: unknown): string {
+  if (typeof message !== "object" || message === null) return ""
+  const record = message as Record<string, unknown>
+  const direct = record["text"]
+  if (typeof direct === "string") return direct
+  const content = record["content"]
+  if (!Array.isArray(content)) return ""
+  return content
+    .map((part) => {
+      if (typeof part !== "object" || part === null) return ""
+      const text = (part as Record<string, unknown>)["text"]
+      return typeof text === "string" ? text : ""
+    })
+    .join("")
 }
 
 /**
@@ -355,12 +403,17 @@ async function requestCompaction(
  */
 export async function maybeAutoCompress(input: AutoInput): Promise<void> {
   try {
+    // 插件按 location 各加载一份：只让会话所属 location 处理，否则会用错项目的设置压别人的会话。
+    const session = await input.ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
+    if (session?.location.directory !== input.ctx.location.directory) return
     if (isCompactionInFlight(input.sessionID)) return
 
     const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
-    const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)
+    const limit =
+      (await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)) ??
+      (await effectiveLimit(input.ctx.storage, input.sessionID))
 
     // 已开头的合并链：与 autoCompress 无关，手动压缩后也要继续 T2/T3。
     // 但要等新的 user 消息：刚压完就再请求一刀，宿主会回「没有可压缩内容」并留下一条虚假失败。
@@ -384,6 +437,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (
       summaryOverBudget(state, settings, limit) &&
       mergePossible(state, settings.recentT1Blocks) &&
+      (state.distillRounds ?? 0) < MAX_DISTILL_ROUNDS &&
       (await hasUserSinceCompaction(input.ctx, input.sessionID))
     ) {
       await armMergePhase(input.ctx, input.sessionID)
@@ -450,6 +504,7 @@ export async function maybeAutoCompressStep(input: {
     if (
       summaryOverBudget(state, settings, effective) &&
       mergePossible(state, settings.recentT1Blocks) &&
+      (state.distillRounds ?? 0) < MAX_DISTILL_ROUNDS &&
       (await hasUserSinceCompaction(input.ctx, input.sessionID))
     ) {
       await armMergePhase(input.ctx, input.sessionID)

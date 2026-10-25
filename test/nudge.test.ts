@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest"
 
 import { buildNudgeText, maybeNudge } from "../src/compression/auto.ts"
 import { DEFAULT_SERVER_SETTINGS, loadServerSettings } from "../src/compression/settings.ts"
-import { loadState, saveState, MAX_COMPRESSION_ATTEMPTS, type Block, type StorageLike } from "../src/compression/state.ts"
+import { loadState, saveState, type Block, type StorageLike } from "../src/compression/state.ts"
 import type { MessageLike } from "../src/compression/select.ts"
 import { CONFIG_FILE } from "../src/shared/config-paths.ts"
 
@@ -167,14 +167,6 @@ describe("主动压缩提醒", () => {
     }
     ctx.session.get = () =>
       Promise.resolve({ parentID: "ses_parent", location: { directory: tmpdir() } })
-    const messages = context("x".repeat(20_000))
-    await maybeNudge(input(storage, messages))
-    expect(messages).toHaveLength(3)
-  })
-
-  it("尝试次数达上限后不追加提醒", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
-    await saveState(storage, "ses_test", { blocks: [], attempts: MAX_COMPRESSION_ATTEMPTS })
     const messages = context("x".repeat(20_000))
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(3)

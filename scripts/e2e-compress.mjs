@@ -1137,10 +1137,10 @@ try {
 
   // case: 摘要压完就超预算时下一次请求自己接合并，不等用量过线
   mode = "normal"
-  usagePromptTokens = 90_000
-  // 窗口 200k、阈值 90% = 180k：假用量 90k 永远到不了，只有摘要预算这一条路能触发。
-  // 保留区关掉，两刀 T1 都算可合并候选。
-  await setSettings(50, 200_000, 90, { recentT1Blocks: 0 })
+  usagePromptTokens = 50_000
+  // 窗口 100k、阈值 95% = 95k + 关提醒 + 先用 autoCompress:false 建块：
+  // 建块阶段不让阈值路径/新闸门插手，保证正好两个 T1、phase 为空。
+  await setSettings(50, 100_000, 95, { nudgeGrowthTokens: 0, autoCompress: false })
   const overBudget = await newSession("e2e-over-budget")
   for (let round = 0; round < 2; round += 1) {
     await promptSession(overBudget, longText)
@@ -1160,19 +1160,31 @@ try {
   )
   // 宽预算（50%）下 T1 收尾不会排下一层：phase 为空，正是线上卡住的形状。
   assert.equal(wideBudget.phase, undefined, "wide budget must not schedule a merge")
-  // 事后把全部摘要预算收紧到 1%：摘要已经超了，但 phase 还是空的。
-  await setSettings(1, 200_000, 90, { recentT1Blocks: 0 })
+  // 事后把全部摘要预算收紧到 1%（保留区用默认 2）：摘要已经超了，但 phase 还是空的。
+  await setSettings(1, 100_000, 95, { nudgeGrowthTokens: 0 })
+  // 用量 50k 远低于阈值 95k：接下来只要有压缩发生，就只可能是「摘要超预算」这条新闸门。
+  const beforeMerging = stateFor(overBudget)?.blocks?.length ?? 0
   await promptSession(overBudget, "continue again")
+  // 第一刀可能仍在收旧原文（T1 优先），继续聊几轮让链自己接上；全程用量不过阈值。
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const current = stateFor(overBudget)
+    if ((current?.blocks?.length ?? 0) > beforeMerging) break
+    await promptSession(overBudget, "continue")
+    await waitSession(overBudget)
+  }
   const mergedState = await waitForStateEvent(
     overBudget,
-    (state) => (state?.blocks ?? []).some((block) => block.tier >= 2),
-    "over-budget auto merge",
+    (state) =>
+      (state?.blocks?.length ?? 0) > beforeMerging ||
+      (state?.blocks ?? []).some((block) => block.tier >= 2),
+    "over-budget auto compaction",
   )
   assert.ok(
-    mergedState.blocks.some((block) => block.tier >= 2),
-    "summary over budget must auto merge without crossing the usage threshold",
+    (mergedState.blocks?.length ?? 0) > beforeMerging ||
+      (mergedState.blocks ?? []).some((block) => block.tier >= 2),
+    "summary over budget must trigger compaction without crossing the usage threshold",
   )
-  console.log("case passed: summary over budget auto merges")
+  console.log("case passed: summary over budget triggers compaction")
   usagePromptTokens = undefined
 
   // case: 父子/子代理状态隔离（显式恢复设置：上一 case 关了 autoCompress）
@@ -1290,11 +1302,11 @@ try {
   assert.equal(chainState?.phase, undefined, "high budget must not schedule a merge")
 
   // 降预算后下一轮 T1 完成时挂合并标记；标记只是数字 2，不再编码目标层。
-  // 预算一收紧，自动压缩自己就在下一次请求里接上（不需要手动 compact）；
-  // 这时再手动压一刀会撞上宿主的「没有可压缩内容」，留下一条与合并无关的失败。
-  await setSettings(1, 1_000_000, 95, { summaryBlockPercent: 20, recentT1Blocks: 0 })
+  // 窗口收到 200k：1% = 2k 预算，五块 1.7k 字符的摘要必然超预算（auto 与 compaction 两条路径口径一致）。
+  await setSettings(1, 200_000, 95, { summaryBlockPercent: 20, recentT1Blocks: 0 })
   await promptSession(chainSession, longText)
   await promptSession(chainSession, "continue")
+  await api("POST", `/api/session/${chainSession}/compact`, {})
   await waitSession(chainSession)
   // 压缩钩子先把新块写成 pending，等事件提交后才进 blocks；这里等提交落地，不等固定时间。
   chainState = await waitForState(
