@@ -117,7 +117,7 @@ describe("state transitions", () => {
     expect(next.lastError).toBe("failed")
   })
 
-  it("retryPending 保留 phase 到上限，第 3 次失败后清掉", () => {
+  it("retryPending 永远保留 phase，失败不关闭合并链", () => {
     const first = retryPending({ blocks: [block("b1", 1)], phase: 2, attempts: 0 }, "bad")
     expect(first.pending).toBeUndefined()
     expect(first.phase).toBe(2)
@@ -126,7 +126,7 @@ describe("state transitions", () => {
     expect(second.phase).toBe(2)
     expect(second.attempts).toBe(2)
     const third = retryPending({ ...second, phase: 2 }, "bad")
-    expect(third.phase).toBeUndefined()
+    expect(third.phase).toBe(2)
     expect(third.attempts).toBe(3)
   })
 

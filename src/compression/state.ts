@@ -362,20 +362,18 @@ export function expireStalePending(state: State, now: number): State {
 
 /**
  * 输入：失败后的状态 + 错误。
- * 输出：清 pending，但保留 phase 以便下一次请求重试。
- * 预期：attempts 达到上限后清掉 phase，避免无限重试。
+ * 输出：清 pending，保留 phase 让下一次请求重试。
+ * 预期：失败只记 lastError，不计数、不关闭自动压缩。
  */
 export function retryPending(state: State, error: string): State {
-  const attempts = state.attempts + 1
-  const keepPhase = state.phase !== undefined && attempts < MAX_COMPRESSION_ATTEMPTS
   return {
     blocks: state.blocks,
-    attempts,
+    attempts: state.attempts + 1,
     lastError: error,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
     ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
-    ...(keepPhase ? { phase: state.phase } : {}),
+    ...(state.phase === undefined ? {} : { phase: state.phase }),
   }
 }
 

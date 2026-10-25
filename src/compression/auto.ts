@@ -1,15 +1,11 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { formatTokens } from "../shared/format.ts"
-import { MIN_SUMMARY_BLOCK_CHARS, SUMMARY_WINDOW_RESERVE, resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
-import { countText, estimateCategories, totalCategories } from "../shared/tokens.ts"
-import {
-  endCompactionRequest,
-  isCompactionInFlight,
-  tryBeginCompactionRequest,
-} from "./inflight.ts"
+import { resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
+import { countText, estimateCategories, totalCategories, type ToolDefinitionLike } from "../shared/tokens.ts"
+import { endCompactionRequest, isCompactionInFlight, tryBeginCompactionRequest } from "./inflight.ts"
 import { renderAll } from "./render.ts"
-import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
+import { eligibleMessages, type MessageLike } from "./select.ts"
 import { isSubagentSession } from "./session-role.ts"
 import {
   EFFECTIVE_WINDOW_KEY,
@@ -19,7 +15,7 @@ import {
   resolvedWindowKey,
   windowKey,
 } from "./settings.ts"
-import { MAX_COMPRESSION_ATTEMPTS, PENDING_TIMEOUT_MS, clearPhase, expireStalePending, loadState, type State } from "./state.ts"
+import { PENDING_TIMEOUT_MS, clearPhase, expireStalePending, loadState, type State } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -40,9 +36,8 @@ const COMPACTION_POLL_MS = 200
 /**
  * 输入：服务端上下文 + sessionID + 入队前的 state 快照。
  * 输出：无。
- * 预期：阻塞直到该次 compaction 落地——blocks 增多（事件已把 pending 转正）、
- *       lastError 出现或变化（失败）、或等待超时。pending 已出现时再给事件一个短窗口，
- *       避免下一步在 pending 尚未转正时启动；超时不抛错，放行请求。
+ * 预期：阻塞直到该次 compaction 落地——blocks 增多、lastError 出现或变化、或等待超时。
+ *       超时不抛错，放行请求；失败由调用方的 catch 记进 lastError。
  */
 export async function waitForCompaction(
   ctx: Plugin.Context,
@@ -53,18 +48,16 @@ export async function waitForCompaction(
   let pendingSince: number | undefined
   while (Date.now() < deadline) {
     const state = await loadState(ctx.storage, sessionID)
-    // blocks 增多 = 事件已把 pending 转正，下一步可以安全地从新上下文开始。
     const settled = state.blocks.length > before.blocks
     const failed = state.lastError !== undefined && state.lastError !== before.lastError
     if (settled || failed) {
-      // 钩子的 finally 可能还没清 in-flight；等它清掉再放行，否则下一步 nudge 会被跳过。
+      // 钩子的 finally 可能还没清 in-flight；等它清掉再放行。
       while (isCompactionInFlight(sessionID) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, COMPACTION_POLL_MS))
       }
       return
     }
     if (state.pending !== undefined) {
-      // 钩子已生成块，但事件还没转正；再等一小段，避免下一次 context hook 被 pending 挡掉。
       pendingSince ??= Date.now()
       if (Date.now() - pendingSince > COMPACTION_COMMIT_WAIT_MS) return
     }
@@ -73,9 +66,9 @@ export async function waitForCompaction(
 }
 
 /**
- * 输入：storage；输出：最近一次解析到的「生效窗口」。
- * 预期：`resolveLimit` 在缓存里保存的是原生窗口，settings 里的数字上限
- *       `contextLimit=100000` 只有在生效窗口里才体现；缺失时 undefined。
+ * 输入：storage + sessionID。
+ * 输出：最近一次解析到的「生效窗口」；没有则 undefined。
+ * 预期：`resolveLimit` 把 min(设置, 原生) 写进会话级键，这里只读结果。
  */
 async function effectiveLimit(
   storage: Plugin.Context["storage"],
@@ -83,20 +76,17 @@ async function effectiveLimit(
 ): Promise<number | undefined> {
   const scoped = await storage.get(effectiveWindowKey(sessionID))
   if (typeof scoped === "number" && scoped > 0) return scoped
-  // 兼容旧数据：没有会话级值时退回旧的全局值。
   const stored = await storage.get(EFFECTIVE_WINDOW_KEY)
   return typeof stored === "number" && stored > 0 ? stored : undefined
 }
 
 /**
  * 输入：会话状态。
- * 输出：本轮自动压缩是否必须跳过。
- * 预期：有 pending 或已达尝试上限时不再入队；没有「终止态」——
- *       摘要压不动只是这一次没有候选，新消息进来后仍会继续压缩。
+ * 输出：本轮是否必须跳过。
+ * 预期：只有「已经有一刀在路上」才跳过。失败次数不关闭自动压缩——和 OpenCode 自身一致，
+ *       下一次请求用量仍在阈值上就自然再触发一次。
  */
 function blockedByState(state: State): boolean {
-  if (state.attempts >= MAX_COMPRESSION_ATTEMPTS) return true
-  // pending 卡住超过兜底时长视为事件丢失：不再挡压缩，等这次入队走完整体生命周期。
   if (state.pending !== undefined) {
     const marked = state.pendingAt
     return marked === undefined || Date.now() - marked < PENDING_TIMEOUT_MS
@@ -106,14 +96,15 @@ function blockedByState(state: State): boolean {
 
 /**
  * 输入：会话状态 + 合并后的设置 + 生效窗口。
- * 输出：摘要链是否真的超过 token 预算。
- * 预期：只按 countText 判断。窗口百分比是 token 口径，字符数不能拿来比较。
+ * 输出：摘要链是否超过 token 预算。
+ * 预期：只按 countText 判断；窗口未知时无法比较，直接返回 false。
  */
 function summaryOverBudget(
   state: State,
   settings: ReturnType<typeof resolveForModel>,
   windowTokens: number | undefined,
 ): boolean {
+  if (windowTokens === undefined) return false
   const limits = resolveSummaryLimits(settings, windowTokens)
   const summary = renderAll(state.blocks, state.pending, {
     showTimeline: settings.showTimeline,
@@ -123,10 +114,9 @@ function summaryOverBudget(
 }
 
 /**
- * 输入：插件上下文 + sessionID + 会话状态 + 设置 + 窗口。
+ * 输入：插件上下文 + sessionID + 状态 + 设置 + 窗口。
  * 输出：无。
- * 预期：摘要回到预算内时清掉残留的 phase。phase 不清会让每个 step 都入队一次压缩，
- *       完全绕过 triggerPercent（之前的「疯狂触发」）。
+ * 预期：摘要回到预算内时清掉残留的 phase，避免每个请求都入队一次压缩。
  */
 async function clearStalePhaseIfWithinBudget(
   ctx: Plugin.Context,
@@ -143,11 +133,9 @@ async function clearStalePhaseIfWithinBudget(
 }
 
 /**
- * 输入：服务端上下文 + sessionID。
+ * 输入：插件上下文 + sessionID。
  * 输出：最近一次 completed compaction 之后是否出现了新的 user 消息。
- * 预期：没有 compaction 或读不到历史时返回 true，保持旧触发行为；
- *       有 completed compaction 且后面只有 assistant/tool 消息时返回 false，
- *       避免同一轮压缩刚结束又入队一次空压缩。
+ * 预期：没有 compaction 或读不到历史时返回 true；读不到时宁可放行，由钩子给出真实错误。
  */
 async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): Promise<boolean> {
   try {
@@ -160,7 +148,6 @@ async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): P
     if (latest < 0) return true
     return messages.slice(latest + 1).some((message) => message.type === "user" && message.text.trim().length > 0)
   } catch {
-    // 读不到历史时不阻断压缩；OpenCode 会在钩子里给出真实错误。
     return true
   }
 }
@@ -169,7 +156,6 @@ async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): P
  * 输入：插件上下文 + sessionID。
  * 输出：过期兜底后的最新状态。
  * 预期：pending 挂起超过 PENDING_TIMEOUT_MS 时强制转正写回；其余原样读。
- *       事件丢失时靠这条路径解卡，而不是永远挡住自动压缩。
  */
 async function expireStalePendingStorage(ctx: Plugin.Context, sessionID: string): Promise<State> {
   const state = await loadState(ctx.storage, sessionID)
@@ -185,9 +171,9 @@ async function expireStalePendingStorage(ctx: Plugin.Context, sessionID: string)
 }
 
 /**
- * 输入：服务端上下文 + sessionID + 捕获到的错误。
+ * 输入：插件上下文 + sessionID + 捕获到的错误。
  * 输出：无。
- * 预期：累加 attempts 并记录 lastError；写状态失败时忽略，避免掩盖原始错误。
+ * 预期：只记录 lastError，不计数、不关闭自动压缩；写状态失败时忽略，避免掩盖原始错误。
  */
 async function recordCompressionFailure(
   ctx: Plugin.Context,
@@ -198,120 +184,12 @@ async function recordCompressionFailure(
     // 压缩钩子自己会记录真实错误；它运行期间不要让等待超时之类的错误覆盖。
     if (isCompactionInFlight(sessionID)) return
     await stateStore(ctx.storage).transact(sessionID, (current) => ({
-      next: {
-        ...current,
-        attempts: current.attempts + 1,
-        lastError: String(error),
-      },
+      next: { ...current, lastError: String(error) },
       result: undefined,
     }))
   } catch {
     // best effort
   }
-}
-
-/**
- * 输入：`session.step.ended` 事件带的 usage + 服务端上下文 + sessionID。
- * 输出：无。
- * 预期：tool loop 的后续 step 不触发 context hook，这里是唯一能在同 turn 内
- *       看到 usage 增长的入口；超过阈值直接入队 compaction。
- */
-export async function maybeAutoCompressStep(input: {
-  readonly ctx: Plugin.Context
-  readonly sessionID: string
-  readonly tokens: {
-    readonly input: number
-    readonly cache: { readonly read: number; readonly write: number }
-  }
-}): Promise<void> {
-  try {
-    // 插件按 location 各加载一份；只让 session 所属 location 处理，
-    // 会话查不到（别的实例的会话）也拒绝，避免同一事件被多实例重复入队压缩。
-    const session = await input.ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
-    if (session?.location.directory !== input.ctx.location.directory) return
-    if (isCompactionInFlight(input.sessionID)) return
-    const state = await expireStalePendingStorage(input.ctx, input.sessionID)
-    if (blockedByState(state)) return
-    // 子代理会话短命：已经压出第一块后不再追加。它的 recent 区本来就会被父会话
-    // 继续携带，再压只会把同一批近期消息折成重复的新块。
-    if (state.blocks.length > 0 && (await isSubagentSession(input.ctx, input.sessionID))) return
-
-    const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
-    if (!settings.autoCompress) return
-    // step.ended 不带模型引用，用会话当前模型解析按模型设置；窗口仍取生效值缓存。
-    // 原生窗口单独是 1M 时阈值会变成 800k，压缩永远不会触发。
-    const effective = await effectiveLimit(input.ctx.storage, input.sessionID)
-    if (effective === undefined || effective <= 0) return
-    if (effective - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
-
-    if (state.phase !== undefined) {
-      // 预算已经回落就不要再压：清掉 phase 后照常走阈值判断。
-      if (summaryOverBudget(state, settings, effective)) {
-        await requestCompaction(input.ctx, input.sessionID)
-        return
-      }
-      await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
-    }
-    const threshold = triggerTokens(settings, effective)
-    if (threshold === undefined) return
-    if (promptTokens(input.tokens) < threshold) return
-    // 刚压缩完、还没有新的 user 消息时，历史里只剩 checkpoint；再入队只会得到
-    // Nothing to compact yet，并在 state 里留下一次无意义的 attempts。
-    if (!(await hasUserSinceCompaction(input.ctx, input.sessionID))) return
-
-    // 入队后同步等压缩落地，对齐 OpenCode 原生压缩的语义：
-    // 下一个 step 的模型请求一定从压缩后的上下文开始，而不是继续放大。
-    await requestCompaction(input.ctx, input.sessionID, {
-      blocks: state.blocks.length,
-      lastError: state.lastError,
-    })
-  } catch (error) {
-    await recordCompressionFailure(input.ctx, input.sessionID, error)
-  }
-}
-
-/**
- * 输入：服务端上下文 + sessionID + 可选的压缩前快照。
- * 输出：是否真的发起了 compaction；被别的请求抢走发起权时为 false。
- * 预期：抢到发起权后入队一次 compact，finally 一定释放；给了 before 就等压缩落地。
- */
-async function requestCompaction(
-  ctx: Plugin.Context,
-  sessionID: string,
-  before?: { blocks: number; lastError: string | undefined },
-): Promise<boolean> {
-  if (!tryBeginCompactionRequest(sessionID)) return false
-  try {
-    await ctx.session.compact({ sessionID })
-    if (before !== undefined) await waitForCompaction(ctx, sessionID, before)
-    return true
-  } finally {
-    endCompactionRequest(sessionID)
-  }
-}
-
-/**
- * 输入：当前请求消息。
- * 输出：最后一条 user 是否是插件自己的压缩指令。
- * 预期：压缩摘要请求不能再触发自动压缩。
- */
-function isCompressionInstruction(messages: readonly MessageLike[]): boolean {
-  const lastUser = [...messages].reverse().find((message) => message.role === "user")
-  if (lastUser === undefined) return false
-  const text = messageText(lastUser).trimStart()
-  return (
-    text.startsWith("You are writing a checkpoint") ||
-    text.startsWith("The checkpoint at the top of the conversation")
-  )
-}
-
-export interface AutoInput {
-  readonly ctx: Plugin.Context
-  readonly sessionID: string
-  readonly messages: readonly MessageLike[]
-  readonly system: readonly { readonly type: string; readonly text: string }[]
-  readonly tools: Readonly<Record<string, { readonly description?: string; readonly input?: unknown }>>
-  readonly model: ModelRefLike
 }
 
 /** 输入：插件上下文 + 模型标识 + 窗口；输出：无；预期：写进 storage 供 TUI 读取，失败不影响压缩。 */
@@ -323,22 +201,20 @@ async function rememberWindow(
   sessionID?: string,
 ): Promise<void> {
   try {
-    // 模型原生窗口是模型属性，跨会话共享没有歧义。
     await ctx.storage.set(windowKey(providerID, modelID), limit)
     if (sessionID === undefined) {
-      // 不知道会话时才写全局 last；多会话并行时全局值是最后写者赢，不能当会话数据用。
       await ctx.storage.set(RESOLVED_WINDOW_KEY, limit)
       return
     }
     await ctx.storage.set(resolvedWindowKey(sessionID), limit)
   } catch {
-    // best effort：写不进去只影响 TUI 显示，不影响压缩
+    // best effort：写不进去只影响 TUI 显示
   }
 }
 
 /**
  * 输入：设置 + 模型；输出：实际使用的窗口大小。
- * 预期：数字设置是上限，先解析模型原生窗口再取 min；auto 直接用原生值。
+ * 预期：数字设置是上限，取 min(设置, 原生)；auto 直接用原生值。
  */
 export async function resolveLimit(
   ctx: Plugin.Context,
@@ -360,7 +236,7 @@ export async function resolveLimit(
         await rememberWindow(ctx, model.providerID, model.id, limit, sessionID)
       }
     } catch {
-      // 原生窗口未知：数字设置按原值使用，auto 则关闭自动压缩
+      // 原生窗口解析失败：数字设置仍可单独使用
     }
   }
   const effective = setting === "auto" ? native : native === undefined ? setting : Math.min(setting, native)
@@ -397,7 +273,7 @@ function promptTokens(tokens: {
 /**
  * 输入：服务端上下文 + sessionID。
  * 输出：最后一个 assistant 的真实 prompt token；没有 usage 时 undefined。
- * 预期：SessionHistory 按 seq 升序返回，从末尾取最新 assistant。
+ * 预期：从历史末尾取最新 assistant。
  */
 export async function measuredPromptTokens(
   ctx: Plugin.Context,
@@ -417,49 +293,116 @@ export async function measuredPromptTokens(
   return undefined
 }
 
+export interface AutoInput {
+  readonly ctx: Plugin.Context
+  readonly sessionID: string
+  readonly messages: readonly MessageLike[]
+  readonly system: readonly { readonly type: string; readonly text: string }[]
+  readonly tools: Readonly<Record<string, ToolDefinitionLike>>
+  readonly model: ModelRefLike
+}
+
+/**
+ * 输入：服务端上下文 + sessionID + 可选压缩前快照。
+ * 输出：是否真的发起了 compaction。
+ * 预期：抢到发起权才入队；失败原样抛给调用方记录，finally 一定释放发起权。
+ */
+async function requestCompaction(
+  ctx: Plugin.Context,
+  sessionID: string,
+  before?: { blocks: number; lastError: string | undefined },
+): Promise<boolean> {
+  if (!tryBeginCompactionRequest(sessionID)) return false
+  try {
+    await ctx.session.compact({ sessionID })
+    if (before !== undefined) await waitForCompaction(ctx, sessionID, before)
+    return true
+  } finally {
+    endCompactionRequest(sessionID)
+  }
+}
+
 /**
  * 输入：服务端上下文 + 当前请求。
  * 输出：无。
- * 预期：占用超过 triggerPercent 时只入队 compaction；真正摘要在 compaction 钩子里做。
+ * 预期：只有两件事——已开头的合并链继续跑；开了自动压缩且用量过线时入队。
+ *       失败只记 lastError，不关闭自动压缩。
  */
 export async function maybeAutoCompress(input: AutoInput): Promise<void> {
   try {
     if (isCompactionInFlight(input.sessionID)) return
-    if (isCompressionInstruction(input.messages)) return
 
     const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return
-    // 与 step 路径同一条子代理规则：压出首块后不再追加。
-    if (state.blocks.length > 0 && (await isSubagentSession(input.ctx, input.sessionID))) return
-
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
-    if (!settings.autoCompress) return
     const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)
-    if (limit === undefined || limit <= 0) return
-    // 窗口小到连最小摘要都放不下：压缩必然失败，别反复入队空压缩。
-    if (limit - SUMMARY_WINDOW_RESERVE < MIN_SUMMARY_BLOCK_CHARS) return
 
-    // 已排下一层蒸馏：只有摘要确实还超预算才入队；预算已回落就清掉 phase。
-    // 不能在 T1 刚结束时入队——那时历史里只剩 checkpoint，OpenCode 会拒绝压缩。
+    // 已开头的合并链：与 autoCompress 无关，手动压缩后也要继续 T2/T3。
     if (state.phase !== undefined) {
-      if (summaryOverBudget(state, settings, limit)) {
-        await requestCompaction(input.ctx, input.sessionID)
-        return
-      }
-      await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
+      if (summaryOverBudget(state, settings, limit)) await requestCompaction(input.ctx, input.sessionID)
+      else await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
+      return
     }
 
+    // 自动触发：只看开关和用量。
+    if (!settings.autoCompress) return
+    if (limit === undefined) return
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
     const threshold = triggerTokens(settings, limit)
     if (threshold === undefined || total < threshold) return
     const eligible = eligibleMessages(input.messages)
-    const sourceChars = buildTranscript(eligible).length
-    // 第一次触发要求有实质内容；失败过（attempts>0）就必须能重试，不能因为短就永远跳过。
-    const retrying = state.attempts > 0 && state.lastError !== undefined
     if (eligible.length === 0) return
-    if (!retrying && sourceChars < MIN_SOURCE_CHARS) return
+    if (buildTranscript(eligible).length < MIN_SOURCE_CHARS) return
 
     await requestCompaction(input.ctx, input.sessionID)
+  } catch (error) {
+    await recordCompressionFailure(input.ctx, input.sessionID, error)
+  }
+}
+
+/**
+ * 输入：`session.step.ended` 事件带的 usage + 服务端上下文 + sessionID。
+ * 输出：无。
+ * 预期：tool loop 的后续 step 不触发 context 钩子，这里是同 turn 内看到 usage 增长的入口。
+ *       规则与 context 路径完全一致，只是用量来自事件。
+ */
+export async function maybeAutoCompressStep(input: {
+  readonly ctx: Plugin.Context
+  readonly sessionID: string
+  readonly tokens: {
+    readonly input: number
+    readonly cache: { readonly read: number; readonly write: number }
+  }
+}): Promise<void> {
+  try {
+    // 插件按 location 各加载一份；只让 session 所属 location 处理。
+    const session = await input.ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
+    if (session?.location.directory !== input.ctx.location.directory) return
+    if (isCompactionInFlight(input.sessionID)) return
+    const state = await expireStalePendingStorage(input.ctx, input.sessionID)
+    if (blockedByState(state)) return
+
+    const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
+    const effective = await effectiveLimit(input.ctx.storage, input.sessionID)
+
+    // 已开头的合并链：与 autoCompress 无关。
+    if (state.phase !== undefined) {
+      if (summaryOverBudget(state, settings, effective)) await requestCompaction(input.ctx, input.sessionID)
+      else await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
+      return
+    }
+
+    if (!settings.autoCompress) return
+    const threshold = triggerTokens(settings, effective)
+    if (threshold === undefined || promptTokens(input.tokens) < threshold) return
+    // 刚压缩完、还没有新的 user 消息时，历史里只剩 checkpoint，入队只会得到空压缩。
+    if (!(await hasUserSinceCompaction(input.ctx, input.sessionID))) return
+
+    // 入队后同步等压缩落地，对齐 OpenCode 原生压缩的语义。
+    await requestCompaction(input.ctx, input.sessionID, {
+      blocks: state.blocks.length,
+      lastError: state.lastError,
+    })
   } catch (error) {
     await recordCompressionFailure(input.ctx, input.sessionID, error)
   }
@@ -488,24 +431,20 @@ export type NudgeInput = Omit<AutoInput, "messages"> & {
 /**
  * 输入：服务端上下文 + 可追加消息。
  * 输出：无。
- * 预期：按 nudgeGrowthTokens 增长量在请求尾部追加一次提醒；压缩中、终止、失败上限或
- *       没有可压缩内容时跳过。
+ * 预期：按 nudgeGrowthTokens 增长量在请求尾部追加一次提醒；压缩中、有 pending、或没有可压缩内容时跳过。
  */
 export async function maybeNudge(input: NudgeInput): Promise<void> {
   try {
     if (isCompactionInFlight(input.sessionID)) return
-    if (isCompressionInstruction(input.messages)) return
-    // 子代理会话短命：提醒它去考虑压缩纯属打扰，直接跳过。
+    // 子代理会话短命：提醒它去考虑压缩纯属打扰。
     if (await isSubagentSession(input.ctx, input.sessionID)) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
     if (settings.nudgeGrowthTokens <= 0) return
     // compress 工具被关闭时提醒没有意义：模型即使看到也调不动。
-    // 只跳过本次提醒，不改用户的 nudgeGrowthTokens / enableCompressTool 设置。
     if (!settings.enableCompressTool) return
 
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
-    // 没有可压缩内容时仍要建立基线；只是不追加提醒，也不推进基线。
     const eligible = eligibleMessages(input.messages)
     const canEmit = eligible.length > 0 && buildTranscript(eligible).length >= MIN_SOURCE_CHARS
 
@@ -537,13 +476,11 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
       role: "user",
       content: [{ type: "text", text: notice }],
     })
-    // 让 TUI 的消息流也能看到这次提醒；内容就是发给模型的那一条，不另写文案。
-    // steer 让它在当前 step 结束后投递，resume:false 不会额外唤醒新一轮。
+    // 让 TUI 的消息流也能看到这次提醒；description 与发给模型的 text 逐字一致。
     try {
       await input.ctx.session.synthetic({
         sessionID: input.sessionID,
         text: notice,
-        // description 就是 TUI 灰字展示的正文；和模型看到的 text 保持逐字一致，不做截断。
         description: notice,
         delivery: "steer",
         resume: false,
@@ -555,4 +492,3 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     // 提醒是 best effort，不能影响模型请求。
   }
 }
-

@@ -1018,29 +1018,6 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
-  it("窗口小到放不下最小摘要时 step.ended 不入队", async () => {
-    const storage = memoryStorage({
-      [SETTINGS_KEY]: { models: { test: { contextLimit: 10_000 }, model: { contextLimit: 10_000 } }, triggerPercent: 80 },
-      [EFFECTIVE_WINDOW_KEY]: 10_000,
-      [stateKey("ses_test")]: { blocks: [], attempts: 0 },
-    })
-    let compacts = 0
-    const ctx = fakeCtx(
-      storage,
-      () => Promise.resolve({ text: JSON.stringify(summary) }),
-      () => {
-        compacts += 1
-        return Promise.resolve()
-      },
-    )
-    await maybeAutoCompressStep({
-      ctx,
-      sessionID: "ses_test",
-      tokens: { input: 1, cache: { read: 9_900, write: 0 } },
-    })
-    expect(compacts).toBe(0)
-  })
-
   it("已排下一层蒸馏但预算回落时 step.ended 不入队并清 phase", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } }, triggerPercent: 80 },
@@ -1162,60 +1139,6 @@ describe("自动压缩", () => {
     expect(state.attempts).toBe(0)
   })
 
-  it("子代理会话压出首块后 context 路径不再自动压缩", async () => {
-    const storage = memoryStorage({
-      [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
-      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
-    })
-    let compacts = 0
-    const ctx = fakeCtx(
-      storage,
-      () => Promise.resolve({ text: JSON.stringify(summary) }),
-      () => {
-        compacts += 1
-        return Promise.resolve()
-      },
-      90_000,
-      undefined,
-      "ses_parent",
-    )
-    await maybeAutoCompress({
-      ctx,
-      sessionID: "ses_test",
-      messages: autoMessages(),
-      system: [],
-      tools: {},
-      model: { providerID: "test", id: "test" },
-    })
-    expect(compacts).toBe(0)
-  })
-
-  it("子代理会话压出首块后 step 路径不再自动压缩", async () => {
-    const storage = memoryStorage({
-      [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
-      [EFFECTIVE_WINDOW_KEY]: 100_000,
-      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
-    })
-    let compacts = 0
-    const ctx = fakeCtx(
-      storage,
-      () => Promise.resolve({ text: JSON.stringify(summary) }),
-      () => {
-        compacts += 1
-        return Promise.resolve()
-      },
-      90_000,
-      undefined,
-      "ses_parent",
-    )
-    await maybeAutoCompressStep({
-      ctx,
-      sessionID: "ses_test",
-      tokens: { input: 90_000, cache: { read: 0, write: 0 } },
-    })
-    expect(compacts).toBe(0)
-  })
-
   it("普通会话压出首块后仍会继续自动压缩", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
@@ -1266,54 +1189,6 @@ describe("自动压缩", () => {
     } finally {
       markCompactionInFlight("ses_test", false)
     }
-    expect(compacts).toBe(0)
-  })
-
-  it("压缩指令本身不再触发自动压缩", async () => {
-    const storage = memoryStorage({ [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 } })
-    let compacts = 0
-    const ctx = fakeCtx(
-      storage,
-      () => Promise.resolve({ text: JSON.stringify(summary) }),
-      () => {
-        compacts += 1
-        return Promise.resolve()
-      },
-    )
-    const messages = [...autoMessages().slice(0, -1), message("user", buildT1Instruction(), "m3")]
-    await maybeAutoCompress({
-      ctx,
-      sessionID: "ses_test",
-      messages,
-      system: [],
-      tools: {},
-      model: { providerID: "test", id: "test" },
-    })
-    expect(compacts).toBe(0)
-  })
-
-  it("失败次数达到上限后不再自动入队", async () => {
-    const storage = memoryStorage({
-      [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
-      [stateKey("ses_test")]: { blocks: [], attempts: 3 },
-    })
-    let compacts = 0
-    const ctx = fakeCtx(
-      storage,
-      () => Promise.resolve({ text: JSON.stringify(summary) }),
-      () => {
-        compacts += 1
-        return Promise.resolve()
-      },
-    )
-    await maybeAutoCompress({
-      ctx,
-      sessionID: "ses_test",
-      messages: autoMessages(),
-      system: [],
-      tools: {},
-      model: { providerID: "test", id: "test" },
-    })
     expect(compacts).toBe(0)
   })
 
@@ -1448,31 +1323,6 @@ describe("自动压缩", () => {
     // 摘要本来就在预算内：phase 必须被清掉，否则每个 step 都会绕过阈值入队压缩。
     const state = await loadState(storage, "ses_test")
     expect(state.phase).toBeUndefined()
-  })
-
-  it("attempts 达到上限时不再自动入队", async () => {
-    const storage = memoryStorage({
-      [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
-      [stateKey("ses_test")]: { blocks: [], attempts: 3, lastError: "boom" },
-    })
-    let compacts = 0
-    const ctx = fakeCtx(
-      storage,
-      () => Promise.resolve({ text: JSON.stringify(summary) }),
-      () => {
-        compacts += 1
-        return Promise.resolve()
-      },
-    )
-    await maybeAutoCompress({
-      ctx,
-      sessionID: "ses_test",
-      messages: autoMessages(),
-      system: [],
-      tools: {},
-      model: { providerID: "test", id: "test" },
-    })
-    expect(compacts).toBe(0)
   })
 
   it("模型窗口未知时不自动入队", async () => {
