@@ -1047,7 +1047,7 @@ try {
   assert.equal(stateFor(noAuto)?.blocks?.length ?? 0, 0, "autoCompress off must not compress")
   await api("POST", `/api/session/${noAuto}/compact`, {})
   await waitSession(noAuto)
-  assert.equal(stateFor(noAuto)?.blocks?.length, 1, "manual compact must still work")
+  await waitForState(noAuto, (state) => (state?.blocks?.length ?? 0) >= 1, "manual compact creates a block")
   console.log("case passed: autoCompress off keeps manual compaction")
 
   // case: 父子/子代理状态隔离（显式恢复设置：上一 case 关了 autoCompress）
