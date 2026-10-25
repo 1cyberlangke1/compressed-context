@@ -350,6 +350,9 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
     const threshold = triggerTokens(settings, limit)
     if (threshold === undefined || total < threshold) return
+    // 一次用户消息最多自动压一刀：刚压完还没有新的 user 消息时，再压只会把只剩 checkpoint 的
+    // 历史重压一遍；这也是 patch 掉「同一轮里反复入队」的唯一确定性判据（不能靠 pending 的时序）。
+    if (!(await hasUserSinceCompaction(input.ctx, input.sessionID))) return
     const eligible = eligibleMessages(input.messages)
     if (eligible.length === 0) return
     if (buildTranscript(eligible).length < MIN_SOURCE_CHARS) return

@@ -1272,6 +1272,77 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
+  /**
+   * 输入：走完一刀之后的会话历史（最后一条 compaction 之后有没有新的 user 消息）。
+   * 输出：无。
+   * 预期：自动压缩只由「有新 user 消息」决定，与 pending/in-flight 的时序无关——
+   *       超算和土豆上看到同一个块数，不靠谁先落地。
+   */
+  it("刚压完还没有新的 user 消息时不再自动压一刀", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
+        triggerPercent: 60,
+      },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      undefined,
+      [
+        { type: "assistant", tokens: { input: 90_000, output: 0, cache: { read: 0, write: 0 } } },
+        { type: "compaction", status: "completed" },
+      ],
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("压完之后有新的 user 消息时会继续自动压", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
+        triggerPercent: 60,
+      },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      undefined,
+      [
+        { type: "assistant", tokens: { input: 90_000, output: 0, cache: { read: 0, write: 0 } } },
+        { type: "compaction", status: "completed" },
+        { type: "user", text: "next turn" },
+      ],
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
+  })
+
   it("autoCompress 关闭时不入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60, autoCompress: false },

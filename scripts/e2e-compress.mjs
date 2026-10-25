@@ -313,6 +313,34 @@ function fakeText(body) {
 /** 假 provider 捕获到的 compress 工具定义；用来断言切换摘要格式后工具真的变了。 */
 let lastCompressTool
 
+/** 输入：任意值；输出：单行短文本。预期：流水账每行不超过 max 字符，避免日志被正文淹没。 */
+const brief = (value, max = 260) => String(value).replace(/\s+/g, " ").slice(0, max)
+
+/** 流水账上限：只留最近 400 条，长跑不吃内存。 */
+const JOURNAL_MAX = 400
+/** 失败时必须能看懂发生了什么，所以模型请求/prompt/compact/状态变化都按时间顺序记在这里。 */
+const journal = []
+/** 输入：事件类型 + 细节；输出：无；预期：追加一条带毫秒时间戳的流水账。 */
+function note(kind, detail) {
+  journal.push({ at: new Date().toISOString().slice(11, 23), kind, detail: brief(detail) })
+  if (journal.length > JOURNAL_MAX) journal.shift()
+}
+
+/**
+ * 输入：模型收到的最后一条 user 文本。
+ * 输出：T1 / merge / babel / chat 分类。
+ * 预期：只用于诊断「这一刀到底在做什么」，不参与任何断言。
+ */
+function classifyPrompt(text) {
+  if (text.includes("You are writing a checkpoint for the older part")) return "T1"
+  if (text.includes("checkpoint at the top of the conversation contains summary blocks")) return "merge"
+  if (text.includes("Babel")) return "babel"
+  return "chat"
+}
+
+/** 每个会话上一次记录的状态签名；用来只在状态真的变化时写流水账。 */
+const lastStateSignature = new Map()
+
 /** 输入：消息文本标记；输出：携带该标记的最近请求的工具名列表。 */
 const capturedRequests = []
 function capturedToolNames(marker) {
@@ -377,6 +405,11 @@ const fake = Bun.serve({
       return Response.json(toolResponse(tool))
     }
     const content = fakeText(body)
+    note(
+      "model",
+      `session=${request.headers.get("x-opencode-session-id") ?? "?"} ` +
+        `kind=${classifyPrompt(prompts.at(-1) ?? "")} reply=${content.length}ch usage=${usagePromptTokens}`,
+    )
     if (body.stream === true) {
       return new Response(chatStream(content), {
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
@@ -456,11 +489,13 @@ void (async () => {
 
 /** 输入：方法/路径/body；输出：API 的 data。 */
 async function api(method, path, body) {
+  const started = Date.now()
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
     method,
     headers: { authorization: basic, "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
+  if (method === "POST") note("api", `${path} -> ${response.status} in ${Date.now() - started}ms`)
   if (!response.ok) {
     throw new Error(`${method} ${path} -> ${response.status}: ${await response.text()}`)
   }
@@ -598,7 +633,41 @@ try {
     const key = `plugin:${pluginHex}:compression:state:${sessionID}`
     const row = conn.query("select value from kv where key = ?").get(key)
     conn.close()
-    return typeof row?.value === "string" ? JSON.parse(row.value) : undefined
+    const state = typeof row?.value === "string" ? JSON.parse(row.value) : undefined
+    // 只有状态真的变了才写一条，否则 waitForState 每 20ms 轮询会把流水账刷满。
+    const signature = JSON.stringify({
+      blocks: (state?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:${block.depth}`),
+      phase: state?.phase,
+      pending: state?.pending?.id,
+      attempts: state?.attempts,
+      distillRounds: state?.distillRounds,
+      lastError: state?.lastError,
+    })
+    if (lastStateSignature.get(sessionID) !== signature) {
+      lastStateSignature.set(sessionID, signature)
+      note("state", `${sessionID.slice(0, 12)} ${signature}`)
+    }
+    return state
+  }
+
+  /**
+   * 输入：sessionID + 期望块数 + 标签。
+   * 输出：断言通过时的 state。
+   * 预期：失败信息里带实际块列表、phase、pending、attempts、lastError，
+   *       这样「expected 1 got 2」时能直接看到是哪两块、当时在合并还是在压 T1。
+   */
+  const assertBlockCount = (sessionID, expected, label) => {
+    const state = stateFor(sessionID)
+    const actual = JSON.stringify({
+      blocks: (state?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:d${block.depth}`),
+      phase: state?.phase,
+      pending: state?.pending?.id,
+      attempts: state?.attempts,
+      distillRounds: state?.distillRounds,
+      lastError: state?.lastError,
+    })
+    assert.equal(state?.blocks?.length, expected, `${label} — actual ${actual}`)
+    return state
   }
 
   /** 输入：sessionID；输出：插件持久化的缓存命中历史。 */
@@ -1004,10 +1073,8 @@ try {
     await promptSession(id, longText)
     await promptSession(id, "continue")
   }
-  const stateA = stateFor(sessionA)
-  const stateB = stateFor(sessionB)
-  assert.equal(stateA?.blocks?.length, 1, "session A should have one block")
-  assert.equal(stateB?.blocks?.length, 1, "session B should have one block")
+  const stateA = assertBlockCount(sessionA, 1, "session A should have one block")
+  const stateB = assertBlockCount(sessionB, 1, "session B should have one block")
   assert.equal(stateA?.blocks?.[0]?.tier, 1)
   assert.equal(stateB?.blocks?.[0]?.tier, 1)
   assert.notEqual(stateA?.blocks?.[0]?.fromId, stateB?.blocks?.[0]?.fromId)
@@ -1156,8 +1223,7 @@ try {
     await waitSession(chainSession)
     await waitForState(chainSession, (state) => (state?.blocks?.length ?? 0) >= round + 1, "chainSession T1 $" + (round + 1).toString())
   }
-  let chainState = stateFor(chainSession)
-  assert.equal(chainState?.blocks?.length, 4, "chain case needs four T1 blocks first")
+  let chainState = assertBlockCount(chainSession, 4, "chain case needs four T1 blocks first")
   assert.equal(
     (chainState?.blocks ?? []).every((block) => block.tier === 1 && block.depth === 1),
     true,
@@ -1172,7 +1238,16 @@ try {
   await api("POST", `/api/session/${chainSession}/compact`, {})
   await waitSession(chainSession)
   chainState = stateFor(chainSession)
-  assert.ok((chainState?.blocks?.length ?? 0) >= 5, "low-budget round adds at least one T1 block")
+  assert.ok(
+    (chainState?.blocks?.length ?? 0) >= 5,
+    `low-budget round adds at least one T1 block — actual ${JSON.stringify({
+      blocks: (chainState?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:d${block.depth}`),
+      phase: chainState?.phase,
+      pending: chainState?.pending?.id,
+      distillRounds: chainState?.distillRounds,
+      lastError: chainState?.lastError,
+    })}`,
+  )
   assert.ok((chainState?.phase === 2) || (chainState?.blocks ?? []).some((block) => block.tier >= 2), "low budget must arm merging")
   console.log("case passed: low budget schedules merge phase after T1")
 
@@ -1300,7 +1375,16 @@ try {
   await api("POST", `/api/session/${babelSession}/compact`, {})
   await waitSession(babelSession)
   babelState = stateFor(babelSession)
-  assert.ok((babelState?.blocks?.length ?? 0) >= babelBaseBlocks + 1, "Babel low-budget round adds at least one T1 block")
+  assert.ok(
+    (babelState?.blocks?.length ?? 0) >= babelBaseBlocks + 1,
+    `Babel low-budget round adds at least one T1 block — actual ${JSON.stringify({
+      blocks: (babelState?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:d${block.depth}`),
+      phase: babelState?.phase,
+      pending: babelState?.pending?.id,
+      distillRounds: babelState?.distillRounds,
+      lastError: babelState?.lastError,
+    })}`,
+  )
   assert.ok((babelState?.phase === 2) || (babelState?.blocks ?? []).some((block) => block.tier >= 2), `Babel low budget must arm merging: ${JSON.stringify({ phase: babelState?.phase, blocks: (babelState?.blocks ?? []).map((block) => `${block.id}:T${block.tier}`), rounds: babelState?.distillRounds })}`)
 
   await promptSession(babelSession, "continue")
@@ -1479,6 +1563,15 @@ try {
   fake.stop()
   // 服务端子进程（git 等）可能还占着临时目录；清理失败不能盖掉真正的断言错误。
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined)
+  // 无论成败都打：失败要看现场，成功要能证明「每一步实际发生了什么」，而不是只相信全绿。
+  if (journal.length > 0) {
+    console.error(
+      `journal (${journal.length} entries, chronological):\n` +
+        journal
+          .map((entry) => `${entry.at} ${entry.kind.padEnd(5)} ${entry.detail}`)
+          .join("\n"),
+    )
+  }
   if (prompts.length > 0) {
     console.error(
       "prompts tail:\n" +

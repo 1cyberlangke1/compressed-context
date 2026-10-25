@@ -13,16 +13,25 @@ const DEEP_TIER = { r: 0.47, g: 0.08, b: 0.08, a: 1 }
 
 /**
  * 输入：块折叠深度 + 当前最大深度；输出：深度色。
- * 预期：深度 1 = 警告色（浅），随深度线性压向 DEEP_TIER（暗红），
- *       三个通道和感知亮度都单调下降，所以"越深越暗"在视觉上成立。
+ * 预期：深度 1 = info（青色），随后沿 info → warning → error → DEEP_TIER 插值，
+ *       深度越大越靠近暗红；同一深度的块颜色相同。
  */
 export function depthColor(depth: number, maxDepth: number, theme: Context["theme"]): RGBA {
-  const from = theme.text.feedback.warning.base
+  const info = theme.text.feedback.info.base
+  const warning = theme.text.feedback.warning.base
+  const error = theme.text.feedback.error.base
+  // 固定四个停靠点：深度 1 落在 info，最大深度落在最深色，中间线性插值。
+  const stops = [info, warning, error, DEEP_TIER]
   const progress = maxDepth <= 1 ? 0 : Math.min(1, Math.max(0, (depth - 1) / (maxDepth - 1)))
+  const scaled = progress * (stops.length - 1)
+  const index = Math.min(stops.length - 2, Math.floor(scaled))
+  const from = stops[index] ?? info
+  const to = stops[index + 1] ?? DEEP_TIER
+  const local = scaled - index
   return RGBA.fromValues(
-    from.r + (DEEP_TIER.r - from.r) * progress,
-    from.g + (DEEP_TIER.g - from.g) * progress,
-    from.b + (DEEP_TIER.b - from.b) * progress,
+    from.r + (to.r - from.r) * local,
+    from.g + (to.g - from.g) * local,
+    from.b + (to.b - from.b) * local,
     from.a,
   )
 }
