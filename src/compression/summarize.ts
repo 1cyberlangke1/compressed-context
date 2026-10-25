@@ -415,10 +415,17 @@ async function runChoicePrompt(
         : format === "markdown"
           ? splitMarkdownCandidate(text)
           : splitCandidate(parseJsonSafe(text))
-    if (split !== undefined && typeof split.candidate === "number" && Number.isInteger(split.candidate)) {
-      // 越界编号夹到 [1, N]：模型多数时候只是在表达"能合多少合多少"，不该整轮失败。
-      const index = Math.min(candidates.length, Math.max(1, split.candidate))
-      const candidate = index >= 1 ? candidates[index - 1] : undefined
+    const candidateIndex: unknown = split === undefined ? undefined : split.candidate
+    // 编号必须是 1..N 的整数；越界或不是数字都算失败，不替模型猜它想合并几个。
+    const index =
+      typeof candidateIndex === "number" &&
+      Number.isInteger(candidateIndex) &&
+      candidateIndex >= 1 &&
+      candidateIndex <= candidates.length
+        ? candidateIndex
+        : undefined
+    if (split !== undefined && index !== undefined) {
+      const candidate = candidates[index - 1]
       if (candidate !== undefined) {
         const decoded = toSummary(split.summary, format)
         if (decoded) {
@@ -436,11 +443,13 @@ async function runChoicePrompt(
       }
     }
     reason =
-      format === "babel"
-        ? "reply was not valid Babel with a valid candidate"
-        : format === "markdown"
-          ? "reply was not valid markdown with a valid candidate"
-          : "reply was not valid JSON with a valid candidate and summary"
+      typeof candidateIndex === "number"
+        ? `candidate ${candidateIndex.toString()} is outside 1..${candidates.length.toString()}`
+        : format === "babel"
+          ? "reply was not valid Babel with a valid candidate"
+          : format === "markdown"
+            ? "reply was not valid markdown with a valid candidate"
+            : "reply was not valid JSON with a valid candidate and summary"
     prompt =
       format === "babel"
         ? `${base}\n\nYour previous reply was not valid Babel. Return the corrected Babel only. First line must be \`c=N\` with N from 1 to ${candidates.length.toString()}; second line must be \`T=<title>|G=<goal>\`.`

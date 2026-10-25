@@ -514,16 +514,37 @@ describe("侧调用摘要", () => {
     expect(jsonSummary(result?.summary)?.goal).toBe(summary.goal)
   })
 
-  it("多候选返回越界 candidate 时夹到最后一个候选", async () => {
-    const result = await summarizeChoiceInstruction({
-      prompt: "b1 + b2",
-      candidates: [
-        { index: 1, description: "b1", sourceChars: 10_000, tier: 2 },
-        { index: 2, description: "b1+b2", sourceChars: 10_000, tier: 2 },
-      ],
-      generate: { text: () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }) },
-    })
-    expect(result?.candidate.index).toBe(2)
+  it("多候选返回越界 candidate 时判失败，不改用最后一个候选", async () => {
+    let failures: string[] = []
+    await expect(
+      summarizeChoiceInstruction({
+        prompt: "b1 + b2",
+        candidates: [
+          { index: 1, description: "b1", sourceChars: 10_000, tier: 2 },
+          { index: 2, description: "b1+b2", sourceChars: 10_000, tier: 2 },
+        ],
+        generate: { text: () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }) },
+        onFailure: (reason) => {
+          failures = [...failures, reason]
+        },
+      }),
+    ).rejects.toThrow("outside 1..2")
+    expect(failures).toHaveLength(1)
+  })
+
+  it("candidate 不是数字时判失败", async () => {
+    let failures: string[] = []
+    await expect(
+      summarizeChoiceInstruction({
+        prompt: "b1 + b2",
+        candidates: [{ index: 1, description: "b1", sourceChars: 10_000, tier: 2 }],
+        generate: { text: () => Promise.resolve({ text: JSON.stringify({ candidate: "1", ...summary }) }) },
+        onFailure: (reason) => {
+          failures = [...failures, reason]
+        },
+      }),
+    ).rejects.toThrow("not valid JSON with a valid candidate")
+    expect(failures).toHaveLength(1)
   })
 
   it("T2 连续两次坏 JSON 后第三次成功", async () => {
@@ -2234,6 +2255,30 @@ describe("摘要单层合并", () => {
     expect(activeBlocks(result.blocks, result.pending).map((item) => item.id)).toEqual([result.pending?.id])
   })
 
+  it("模型给出越界 candidate 时整轮判失败，状态不动", async () => {
+    let calls = 0
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => {
+        calls += 1
+        // 组里只有 2 个块，模型却说要合 5 个。
+        return Promise.resolve({ text: JSON.stringify({ candidate: 5, ...summary }) })
+      },
+      () => Promise.resolve(),
+    )
+    await expect(
+      distillOnce({
+        ctx,
+        sessionID: "ses_test",
+        state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        pending: longBlock("b2", 1, 2),
+        budgetTokens: 5_000,
+        recentT1Blocks: 0,
+      }),
+    ).rejects.toThrow("outside 1..2")
+    expect(calls).toBe(3)
+  })
+
   it("多候选时模型一次返回 candidate 和摘要", async () => {
     let calls = 0
     const ctx = fakeCtx(
@@ -2351,23 +2396,22 @@ describe("摘要单层合并", () => {
     expect(result.merged).toBe(false)
   })
 
-  it("candidate 0 被夹到 1，走自压路径", async () => {
+  it("candidate 0 判失败，不再夹到 1", async () => {
     const ctx = fakeCtx(
       memoryStorage(),
       () => Promise.resolve({ text: JSON.stringify({ candidate: 0, ...summary }) }),
       () => Promise.resolve(),
     )
-    const result = await distillOnce({
-      ctx,
-      sessionID: "ses_test",
-      state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
-      pending: longBlock("b2", 1, 2),
-      budgetTokens: 5_000,
-      recentT1Blocks: 0,
-    })
-    expect(result.merged).toBe(true)
-    expect(result.pending?.sourceBlockIds).toEqual(["b1"])
-    expect(result.pending?.depth).toBe(2)
+    await expect(
+      distillOnce({
+        ctx,
+        sessionID: "ses_test",
+        state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        pending: longBlock("b2", 1, 2),
+        budgetTokens: 5_000,
+        recentT1Blocks: 0,
+      }),
+    ).rejects.toThrow("outside 1..2")
   })
 
   it("连环合并到轮数上限就停，不会无限压缩", async () => {
@@ -2409,22 +2453,22 @@ describe("摘要单层合并", () => {
     expect(result.distillRounds).toBe(1)
   })
 
-  it("越界编号被夹到合法范围，不整轮失败", async () => {
+  it("越界编号判失败，不改用最后一个候选", async () => {
     const ctx = fakeCtx(
       memoryStorage(),
       () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }),
       () => Promise.resolve(),
     )
-    const result = await distillOnce({
-      ctx,
-      sessionID: "ses_test",
-      state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
-      pending: longBlock("b2", 1, 2),
-      budgetTokens: 5_000,
-      recentT1Blocks: 0,
-    })
-    expect(result.merged).toBe(true)
-    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2"])
+    await expect(
+      distillOnce({
+        ctx,
+        sessionID: "ses_test",
+        state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+        pending: longBlock("b2", 1, 2),
+        budgetTokens: 5_000,
+        recentT1Blocks: 0,
+      }),
+    ).rejects.toThrow("outside 1..2")
   })
 
   it("合并摘要校验失败时抛出原因", async () => {

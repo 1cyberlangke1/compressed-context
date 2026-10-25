@@ -209,6 +209,18 @@ function fakeToolCall(body) {
   return undefined
 }
 
+/**
+ * 输入：合并指令文本。
+ * 输出：提示里声明的最大候选块数（至少 1）。
+ * 预期：假模型照真实模型的做法「能合多少合多少」，但必须落在候选范围内；
+ *       越界编号现在会被插件判失败，所以不能写死一个 9。
+ *       上限来自提示词里那句 `Decide how many blocks to merge: from 1 to N.`。
+ */
+function maxCandidate(text) {
+  const match = /Decide how many blocks to merge: from 1 to (\d+)/.exec(text)
+  return match === null ? 1 : Number(match[1])
+}
+
 function fakeText(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : []
   const lastUserMessage = [...messages].reverse().find((message) => message?.role === "user")
@@ -241,6 +253,8 @@ function fakeText(body) {
   const charLimit = maxMatch ? Number(maxMatch[1]) : 20_000
   const factChars = Math.max(200, Math.min(8_000, charLimit - 2_500, totalChars - 2_000))
 
+  // 假模型选择候选数：merge-all 表示「能合多少合多少」，其余场景按 2 个前缀合。
+  const maxC = maxCandidate(lastUser)
   if (mode === "short") return "ok"
   if (lastUser.includes("Babel")) {
     if (lastUser.includes("You are writing a checkpoint for the older part")) {
@@ -249,7 +263,7 @@ function fakeText(body) {
     }
     if (lastUser.includes("checkpoint at the top of the conversation contains summary blocks")) {
       console.log("fake: Babel T2/T3 instruction")
-      return `c=${mode === "merge-all" ? 9 : 1}\nT=Babel merged|G=verify babel merge\nD ${"中".repeat(200)}`
+      return `c=${mode === "merge-all" ? maxC : Math.min(1, maxC)}\nT=Babel merged|G=verify babel merge\nD ${"中".repeat(200)}`
     }
   }
   if (mode === "retry-t1" && lastUser.includes("You are writing a checkpoint for the older part")) {
@@ -296,7 +310,7 @@ function fakeText(body) {
           ? "中".repeat(3_000)
           : "t2 fact"
     return JSON.stringify({
-      candidate: mode === "merge-all" ? 9 : 2,
+      candidate: mode === "merge-all" ? maxC : Math.min(2, maxC),
       title: "E2E T2",
       goal: "verify isolated T2 merge",
       constraints: ["no production interference"],
