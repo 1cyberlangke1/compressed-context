@@ -202,7 +202,7 @@ export function SettingsCommand(props: {
     })
   }
 
-  /** 输入：无；输出：无。预期：编辑全局默认的保留区块数，不设上下限，0 关闭保留区。 */
+  /** 输入：无；输出：无。预期：编辑全局默认的保留压缩块数，不设上下限，0 关闭保留区。 */
   const openRecentT1 = (): void => {
     props.context.ui.dialog.show(() => (
       <CountDialog

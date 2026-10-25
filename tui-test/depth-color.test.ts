@@ -36,16 +36,18 @@ describe("depthColor", () => {
     expect(deepest.g).toBeCloseTo(0.08, 2)
   })
 
-  test("四个色停靠点落在 info/warning/error/最深色上", () => {
-    // maxDepth=7 时 progress = (depth-1)/6，正好命中 0、1/3、2/3、1 四个停靠点。
-    const at = (depth: number) => depthColor(depth, 7, theme)
-    expect(at(1).b).toBeCloseTo(theme.text.feedback.info.base.b, 3)
-    expect(at(3).r).toBeCloseTo(theme.text.feedback.warning.base.r, 3)
-    expect(at(3).g).toBeCloseTo(theme.text.feedback.warning.base.g, 3)
-    expect(at(5).r).toBeCloseTo(theme.text.feedback.error.base.r, 3)
-    expect(at(5).g).toBeCloseTo(theme.text.feedback.error.base.g, 3)
-    expect(at(7).r).toBeCloseTo(0.47, 2)
-    expect(at(7).g).toBeCloseTo(0.08, 2)
+  test("浅层保持青色，只有深层才变红", () => {
+    const shallow = depthColor(2, 7, theme)
+    const middle = depthColor(3, 7, theme)
+    const deep = depthColor(7, 7, theme)
+    // 深度 2、3 仍以蓝（青）为主，红色通道很低。
+    expect(shallow.b).toBeGreaterThan(0.9)
+    expect(shallow.r).toBeLessThan(0.2)
+    expect(middle.b).toBeGreaterThan(0.6)
+    // 越深越偏红：深层的红通道明显高于浅层；最大深度落在暗红。
+    expect(deep.r).toBeGreaterThan(shallow.r)
+    expect(deep.r).toBeCloseTo(0.47, 2)
+    expect(deep.g).toBeCloseTo(0.08, 2)
   })
 
   test("只有一层时不会除零", () => {

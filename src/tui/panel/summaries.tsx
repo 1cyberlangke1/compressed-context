@@ -12,28 +12,65 @@ import type { UpdateSettings } from "../types.ts"
 const DEEP_TIER = { r: 0.47, g: 0.08, b: 0.08, a: 1 }
 
 /**
+ * 色相偏斜：>1 让浅层在青色上多停留一会儿，红只出现在深层。
+ */
+const DEPTH_GAMMA = 1.2
+
+interface Rgb {
+  readonly r: number
+  readonly g: number
+  readonly b: number
+}
+
+/** 输入：0-1 RGB；输出：HSL（h 0-360，s/l 0-1）。预期：只用于深度渐变的色相插值。 */
+function toHsl(color: Rgb): { readonly h: number; readonly s: number; readonly l: number } {
+  const max = Math.max(color.r, color.g, color.b)
+  const min = Math.min(color.r, color.g, color.b)
+  const l = (max + min) / 2
+  if (max === min) return { h: 0, s: 0, l }
+  const delta = max - min
+  const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min)
+  const h =
+    max === color.r
+      ? ((color.g - color.b) / delta + (color.g < color.b ? 6 : 0)) * 60
+      : max === color.g
+        ? ((color.b - color.r) / delta + 2) * 60
+        : ((color.r - color.g) / delta + 4) * 60
+  return { h, s, l }
+}
+
+/** 输入：HSL；输出：0-1 RGB。预期：与 toHsl 互逆，用于把色相渐变写回颜色。 */
+function fromHsl(h: number, s: number, l: number): Rgb {
+  if (s === 0) return { r: l, g: l, b: l }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  /** 输入：色相分量；输出：0-1 通道值。 */
+  const channel = (value: number): number => {
+    const t = ((value % 360) + 360) % 360
+    if (t < 60) return p + ((q - p) * t) / 60
+    if (t < 180) return q
+    if (t < 240) return p + ((q - p) * (240 - t)) / 60
+    return p
+  }
+  return { r: channel(h + 120), g: channel(h), b: channel(h - 120) }
+}
+
+/**
  * 输入：块折叠深度 + 当前最大深度；输出：深度色。
- * 预期：深度 1 = info（青色），随后沿 info → warning → error → DEEP_TIER 插值，
- *       深度越大越靠近暗红；同一深度的块颜色相同。
+ * 预期：深度 1 = info（青色），色相一路向红走（经过绿/黄），亮度同时压向暗红，
+ *       所以是连续渐变——不会「两三级就整块变红」；同一深度的块颜色相同。
  */
 export function depthColor(depth: number, maxDepth: number, theme: Context["theme"]): RGBA {
   const info = theme.text.feedback.info.base
-  const warning = theme.text.feedback.warning.base
-  const error = theme.text.feedback.error.base
-  // 固定四个停靠点：深度 1 落在 info，最大深度落在最深色，中间线性插值。
-  const stops = [info, warning, error, DEEP_TIER]
-  const progress = maxDepth <= 1 ? 0 : Math.min(1, Math.max(0, (depth - 1) / (maxDepth - 1)))
-  const scaled = progress * (stops.length - 1)
-  const index = Math.min(stops.length - 2, Math.floor(scaled))
-  const from = stops[index] ?? info
-  const to = stops[index + 1] ?? DEEP_TIER
-  const local = scaled - index
-  return RGBA.fromValues(
-    from.r + (to.r - from.r) * local,
-    from.g + (to.g - from.g) * local,
-    from.b + (to.b - from.b) * local,
-    from.a,
-  )
+  const raw = maxDepth <= 1 ? 0 : Math.min(1, Math.max(0, (depth - 1) / (maxDepth - 1)))
+  if (raw === 0) return RGBA.fromValues(info.r, info.g, info.b, info.a)
+  const t = Math.pow(raw, DEPTH_GAMMA)
+  const start = toHsl(info)
+  const end = toHsl(DEEP_TIER)
+  // 色相只往「变暖」方向走：从起始色的色相一路降到 0（红），不绕远路。
+  const hue = start.h * (1 - t)
+  const rgb = fromHsl(hue, start.s + (end.s - start.s) * t, start.l + (end.l - start.l) * t)
+  return RGBA.fromValues(rgb.r, rgb.g, rgb.b, info.a)
 }
 
 /** 输入：TUI renderer；输出：共享的 SyntaxStyle，拿不到 resource owner 时返回 undefined。 */

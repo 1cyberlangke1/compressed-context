@@ -263,13 +263,13 @@ export function readSummaryPercent(value: unknown, fallback: number): number {
   return rounded
 }
 
-/** 输入：任意值；输出：配置里的保留区块数；不是数字时返回 undefined。预期：不设上下限，填多少用多少。 */
+/** 输入：任意值；输出：配置里的保留压缩块数；不是数字时返回 undefined。预期：不设上下限，填多少用多少。 */
 function readOptionalRecentT1Blocks(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined
   return value
 }
 
-/** 输入：任意值；输出：保留区块数；缺失或不是数字时回落到 fallback。 */
+/** 输入：任意值；输出：保留压缩块数；缺失或不是数字时回落到 fallback。 */
 export function readRecentT1Blocks(value: unknown, fallback: number): number {
   return readOptionalRecentT1Blocks(value) ?? fallback
 }
