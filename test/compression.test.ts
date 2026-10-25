@@ -1105,6 +1105,7 @@ describe("自动压缩", () => {
         models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
         triggerPercent: 80,
         summaryTotalPercent: 1,
+        recentT1Blocks: 0,
       },
       [EFFECTIVE_WINDOW_KEY]: 100_000,
       // 两个块已经超 1% × 100k 的预算，但 phase 为空：旧逻辑只会等用量到 80%。
@@ -1308,6 +1309,7 @@ describe("自动压缩", () => {
         models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
         triggerPercent: 60,
         summaryTotalPercent: 1,
+        recentT1Blocks: 0,
       },
       // 摘要超预算、但没有排下一层：旧逻辑会一直等到用量过线。
       [stateKey("ses_test")]: { blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 },

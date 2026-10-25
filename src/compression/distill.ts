@@ -131,6 +131,18 @@ function heaviestTierGroup(blocks: readonly Block[]): MergeGroup | undefined {
 }
 
 /**
+ * 输入：active 链 + 保留区设置。
+ * 输出：是否存在「不碰保留区」的同层块对。
+ * 预期：自动触发的合并只能动保留区之外——保留区是用户明确要求最新 N 个 T1 不参与合并的部分，
+ *       不够两块就不合，交给下一次压缩再去判断。
+ */
+export function hasMergeablePair(blocks: readonly Block[], recentT1Blocks: number): boolean {
+  const keep = Math.max(0, Math.round(recentT1Blocks))
+  const group = heaviestTierGroup(withoutRecentT1(blocks, keep))
+  return group !== undefined && group.blocks.length >= 2
+}
+
+/**
  * 输入：选中的同层段。
  * 输出：合并前 1..N 个块的全部选择。
  * 预期：index = 块数，最小值 1 表示「自己压自己」（单个块升一层）。

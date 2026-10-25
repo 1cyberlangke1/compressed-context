@@ -4,7 +4,8 @@ import { formatTokens } from "../shared/format.ts"
 import { resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
 import { countText, estimateCategories, totalCategories, type ToolDefinitionLike } from "../shared/tokens.ts"
 import { endCompactionRequest, isCompactionInFlight, tryBeginCompactionRequest } from "./inflight.ts"
-import { renderAll } from "./render.ts"
+import { hasMergeablePair } from "./distill.ts"
+import { activeBlocks, renderAll } from "./render.ts"
 import { eligibleMessages, type MessageLike } from "./select.ts"
 import { isSubagentSession } from "./session-role.ts"
 import {
@@ -111,6 +112,16 @@ function summaryOverBudget(
     showBlockTokens: settings.showBlockTokens,
   })
   return countText(summary) > limits.budgetTokens
+}
+
+/**
+ * 输入：状态 + 保留区设置。
+ * 输出：是否存在可合并的同层块对。
+ * 预期：摘要超预算不等于能合并——只剩单块时宿主会直接回「没有可压缩内容」，
+ *       于是每轮都白试一次并留下 lastError，所以只有真能合两块才入队。
+ */
+function mergePossible(state: State, recentT1Blocks: number): boolean {
+  return hasMergeablePair(activeBlocks(state.blocks, state.pending), recentT1Blocks)
 }
 
 /**
@@ -352,9 +363,16 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const limit = await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)
 
     // 已开头的合并链：与 autoCompress 无关，手动压缩后也要继续 T2/T3。
+    // 但要等新的 user 消息：刚压完就再请求一刀，宿主会回「没有可压缩内容」并留下一条虚假失败。
     if (state.phase !== undefined) {
-      if (summaryOverBudget(state, settings, limit)) await requestCompaction(input.ctx, input.sessionID)
-      else await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
+      if (
+        summaryOverBudget(state, settings, limit) &&
+        (await hasUserSinceCompaction(input.ctx, input.sessionID))
+      ) {
+        await requestCompaction(input.ctx, input.sessionID)
+      } else if (!summaryOverBudget(state, settings, limit)) {
+        await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
+      }
       return
     }
 
@@ -362,7 +380,12 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (!settings.autoCompress) return
     // 摘要自己撑爆预算也要合并：与上下文占用无关。否则手动压完就超预算、phase 又丢了时，
     // 要等到下一次用量过线才会再压一刀，中间一直卡着超预算的摘要。
-    if (summaryOverBudget(state, settings, limit)) {
+    // 必须等新的 user 消息：压完立刻再请求一刀只会得到宿主的「没有可压缩内容」。
+    if (
+      summaryOverBudget(state, settings, limit) &&
+      mergePossible(state, settings.recentT1Blocks) &&
+      (await hasUserSinceCompaction(input.ctx, input.sessionID))
+    ) {
       await armMergePhase(input.ctx, input.sessionID)
       await requestCompaction(input.ctx, input.sessionID)
       return
@@ -409,16 +432,26 @@ export async function maybeAutoCompressStep(input: {
     const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
     const effective = await effectiveLimit(input.ctx.storage, input.sessionID)
 
-    // 已开头的合并链：与 autoCompress 无关。
+    // 已开头的合并链：与 autoCompress 无关；同样要求有新的 user 消息。
     if (state.phase !== undefined) {
-      if (summaryOverBudget(state, settings, effective)) await requestCompaction(input.ctx, input.sessionID)
-      else await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
+      if (
+        summaryOverBudget(state, settings, effective) &&
+        (await hasUserSinceCompaction(input.ctx, input.sessionID))
+      ) {
+        await requestCompaction(input.ctx, input.sessionID)
+      } else if (!summaryOverBudget(state, settings, effective)) {
+        await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
+      }
       return
     }
 
     if (!settings.autoCompress) return
-    // 与 context 路径同理：摘要超预算就合并，不等用量过线。
-    if (summaryOverBudget(state, settings, effective)) {
+    // 与 context 路径同理：摘要超预算就合并，不等用量过线；同样要求有新的 user 消息。
+    if (
+      summaryOverBudget(state, settings, effective) &&
+      mergePossible(state, settings.recentT1Blocks) &&
+      (await hasUserSinceCompaction(input.ctx, input.sessionID))
+    ) {
       await armMergePhase(input.ctx, input.sessionID)
       await requestCompaction(input.ctx, input.sessionID)
       return
