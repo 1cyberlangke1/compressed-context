@@ -228,8 +228,13 @@ const env = {
   XDG_STATE_HOME: join(root, "state"),
 }
 
-const opencode = process.env.OPENCODE_BIN ?? "opencode.cmd"
-const server = Bun.spawn(["cmd.exe", "/d", "/s", "/c", `${opencode} serve --stdio --port 0 --print-logs`], {
+const isWindows = process.platform === "win32"
+const opencode = process.env.OPENCODE_BIN ?? (isWindows ? "opencode.cmd" : "opencode")
+const server = Bun.spawn(
+  isWindows
+    ? ["cmd.exe", "/d", "/s", "/c", `${opencode} serve --stdio --port 0 --print-logs`]
+    : [opencode, "serve", "--stdio", "--port", "0", "--print-logs"],
+  {
   env,
   stdin: "pipe",
   stdout: "pipe",
