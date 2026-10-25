@@ -64,7 +64,7 @@ const summary: SummaryFields = {
 const block: Block = {
   id: "b1",
   tier: 1,
-  depth: 1,
+  height: 1,
   summary,
   fromId: "m1",
   toId: "m9",
@@ -85,7 +85,7 @@ const tierBlock = (id: string, tier: number, order: number): Block => ({
   ...block,
   id,
   tier,
-  depth: tier,
+  height: tier,
   order,
 })
 
@@ -258,13 +258,13 @@ describe("渲染", () => {
 
   it("块头可以带标题，标记仍可被 includes 命中", () => {
     const titled = renderBlock({ ...block, summary: { ...summary, title: "压缩内核" } })
-    expect(titled.startsWith(`${blockMarker("b1")} [T1] 压缩内核`)).toBe(true)
+    expect(titled.startsWith(`${blockMarker("b1")} [T1] {h1} 压缩内核`)).toBe(true)
     expect(titled).toContain(blockMarker("b1"))
   })
 
   it("块头显示层级与合并来源", () => {
-    const merged = renderBlock({ ...block, id: "b3", tier: 2, sourceBlockIds: ["b1", "b2"] })
-    expect(merged.startsWith(`${blockMarker("b3")} [T2 · merged #b1 + #b2]`)).toBe(true)
+    const merged = renderBlock({ ...block, id: "b3", tier: 2, height: 2, sourceBlockIds: ["b1", "b2"] })
+    expect(merged.startsWith(`${blockMarker("b3")} [T2] {h2} · merged #b1 + #b2`)).toBe(true)
   })
 
   it("token 估算与时间线只在开关打开时出现", () => {
@@ -1976,7 +1976,7 @@ describe("摘要单层合并", () => {
     // 单块也能自压：产物仍是 T3、深度 +1；压回预算内后 phase 正常清空。
     expect(state.pending?.tier).toBe(3)
     expect(state.pending?.sourceBlockIds).toEqual(["b1"])
-    expect(state.pending?.depth).toBe(4)
+    expect(state.pending?.height).toBe(4)
     expect(state.phase).toBeUndefined()
     expect(state.blocks).toHaveLength(1)
   })
@@ -2162,7 +2162,7 @@ describe("摘要单层合并", () => {
     // T3 段只有一个块：自压路径，产物层仍是 3（封顶），深度 +1。
     expect(state.pending?.tier).toBe(3)
     expect(state.pending?.sourceBlockIds).toEqual(["b1"])
-    expect(state.pending?.depth).toBe(4)
+    expect(state.pending?.height).toBe(4)
     // 摘要仍然超预算：留 phase 等下一轮继续压。
     expect(state.phase).toBe(2)
     expect(state.blocks).toHaveLength(2)
@@ -2354,7 +2354,7 @@ describe("摘要单层合并", () => {
     // 封顶：三个 T3 合成一个 T3，不是 T4。
     expect(result.pending?.tier).toBe(3)
     expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2", "b3"])
-    expect(result.pending?.depth).toBe(4)
+    expect(result.pending?.height).toBe(4)
     expect(result.nextPhase).toBeUndefined()
   })
 

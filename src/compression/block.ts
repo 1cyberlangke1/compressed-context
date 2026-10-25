@@ -14,7 +14,7 @@ export function createT1Block(input: {
   return {
     id: nextBlockId(input.blocks),
     tier: 1,
-    depth: 1,
+    height: 1,
     summary: input.summary,
     fromId: input.fromId,
     toId: input.toId,

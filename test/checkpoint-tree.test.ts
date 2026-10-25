@@ -24,7 +24,7 @@ const block = (
 ): Block => ({
   id,
   tier,
-  depth: tier,
+  height: tier,
   summary: { ...summary, title: title ?? `title ${id}` },
   fromId: `${id}-from`,
   toId: `${id}-to`,
@@ -46,7 +46,7 @@ describe("renderCheckpointTree", () => {
     const tree = renderCheckpointTree(state, true)
     expect(tree).toBeDefined()
     expect(tree).toContain("1 blocks")
-    expect(tree).toContain("1 b1:T1/d1 ")
+    expect(tree).toContain("1 b1:T1 {h1} ")
     expect(tree).toContain("会话目标确立")
   })
 

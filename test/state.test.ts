@@ -32,7 +32,7 @@ function block(id: string, order: number): Block {
   return {
     id,
     tier: 1,
-    depth: 1,
+    height: 1,
     summary: summary(id),
     fromId: `m-${id}`,
     toId: `m-${id}`,
@@ -183,20 +183,31 @@ describe("state transitions", () => {
     expect(parsed.blocks[0]).toMatchObject({ sourceTokens: 777, summaryTokens: 77 })
   })
 
-  it("封顶前的 T4/T5 读入后夹到 3，depth 退回 tier", () => {
+  it("封顶前的 T4/T5 读入后夹到 3，height 退回 tier", () => {
     const parsed = parseState({
       blocks: [legacyBlock("b1", 4, 1, 100, 10), legacyBlock("b2", 5, 2, 100, 10)],
       attempts: 0,
     })
     expect(parsed.blocks.map((item) => item.tier)).toEqual([3, 3])
-    expect(parsed.blocks.map((item) => item.depth)).toEqual([3, 3])
+    expect(parsed.blocks.map((item) => item.height)).toEqual([3, 3])
   })
 
-  it("depth 原样读回；缺字段时退回 tier", () => {
-    const withDepth = { ...block("b1", 1), depth: 7 }
-    expect(parseState({ blocks: [withDepth], attempts: 0 }).blocks[0]?.depth).toBe(7)
-    // legacyBlock 不带 depth：回退到它自己的层。
-    expect(parseState({ blocks: [legacyBlock("b2", 2, 2, 10, 1)], attempts: 0 }).blocks[0]?.depth).toBe(2)
+  it("height 原样读回；缺字段时退回 tier", () => {
+    const withHeight = { ...block("b1", 1), height: 7 }
+    expect(parseState({ blocks: [withHeight], attempts: 0 }).blocks[0]?.height).toBe(7)
+    // legacyBlock 不带 height：回退到它自己的层。
+    expect(parseState({ blocks: [legacyBlock("b2", 2, 2, 10, 1)], attempts: 0 }).blocks[0]?.height).toBe(2)
+  })
+
+  it("旧字段 depth 读的时候一次性转成 height，不再写回 depth", () => {
+    const legacy = { ...block("b1", 1), depth: 6 }
+    delete (legacy as { height?: number }).height
+    const parsed = parseState({ blocks: [legacy], attempts: 0 })
+    expect(parsed.blocks[0]?.height).toBe(6)
+    // 序列化后只留 height，depth 不复活。
+    const text = JSON.stringify(parsed)
+    expect(text).toContain('"height":6')
+    expect(text).not.toContain('"depth"')
   })
 })
 

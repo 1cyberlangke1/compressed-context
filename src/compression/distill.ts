@@ -259,8 +259,8 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
   const merged: Block = {
     id: nextBlockId(working),
     tier: chosen.tier,
-    // 深度按子块最大深度 +1：tier 封顶后 depth 仍在增长，供 UI 渐变使用。
-    depth: 1 + Math.max(...chosen.blocks.map((block) => block.depth)),
+    // 深度按子块最大深度 +1：tier 封顶后 height 仍在增长，供 UI 渐变使用。
+    height: 1 + Math.max(...chosen.blocks.map((block) => block.height)),
     summary: picked.summary,
     fromId: first.fromId,
     toId: last.toId,

@@ -24,7 +24,7 @@ const summary = {
 const block = (id: string, tier: 1 | 2 | 3, order: number, sourceIds?: string[]): Block => ({
   id,
   tier,
-  depth: tier,
+  height: tier,
   summary: { ...summary, title: `title ${id}` },
   fromId: `${id}-from`,
   toId: `${id}-to`,

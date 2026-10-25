@@ -141,7 +141,7 @@ const BlockJson = {
   properties: {
     id: { type: "string" },
     tier: { type: "number", minimum: 1 },
-    depth: { type: "number", minimum: 1 },
+    height: { type: "number", minimum: 1 },
     format: { type: "string", enum: ["json", "markdown", "babel"] },
     title: { type: "string" },
     at: { type: "number" },
@@ -150,7 +150,7 @@ const BlockJson = {
     sourceBlockIds: { type: "array", items: { type: "string" } },
     body: { type: "string" },
   },
-  required: ["id", "tier", "depth", "format", "title", "at", "sourceTokens", "summaryTokens", "body"],
+  required: ["id", "tier", "height", "format", "title", "at", "sourceTokens", "summaryTokens", "body"],
   additionalProperties: false,
 } as const
 

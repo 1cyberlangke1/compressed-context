@@ -27,18 +27,21 @@ export function renderSummary(summary: Summary): string {
  */
 export function renderBlock(block: Block, options: RenderOptions = {}): string {
   const body = renderSummary(block.summary)
-  const meta: string[] = [`T${block.tier.toString()}`]
+  // 层号放方括号，树高放花括号紧跟其后：`[T2] {h6}`，两者不混在一起。
+  const tag = `[T${block.tier.toString()}] {h${block.height.toString()}}`
+  const extras: string[] = []
   if (block.sourceBlockIds !== undefined && block.sourceBlockIds.length > 0) {
-    meta.push(`merged ${block.sourceBlockIds.map((id) => `#${id}`).join(" + ")}`)
+    extras.push(`merged ${block.sourceBlockIds.map((id) => `#${id}`).join(" + ")}`)
   }
   if (options.showBlockTokens === true) {
-    meta.push(`≈${countText(body).toString()} tok`)
+    extras.push(`≈${countText(body).toString()} tok`)
   }
   if (options.showTimeline === true) {
-    meta.push(formatTimestamp(block.at))
+    extras.push(formatTimestamp(block.at))
   }
   const title = summaryTitle(block.summary).trim()
-  const header = `${blockMarker(block.id)} [${meta.join(" · ")}]${title ? ` ${title}` : ""}`
+  const meta = extras.length === 0 ? tag : `${tag} · ${extras.join(" · ")}`
+  const header = `${blockMarker(block.id)} ${meta}${title ? ` ${title}` : ""}`
   return `${header}\n\n${body}`
 }
 

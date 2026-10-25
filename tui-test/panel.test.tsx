@@ -59,7 +59,7 @@ function fakeBlocks(): SummaryBlock[] {
     {
       id: "b1",
       tier: 1,
-      depth: 1,
+      height: 1,
       format: "markdown",
       title: "first",
       at: 1,
@@ -70,7 +70,7 @@ function fakeBlocks(): SummaryBlock[] {
     {
       id: "b2",
       tier: 2,
-      depth: 2,
+      height: 2,
       format: "markdown",
       title: "merged",
       at: 2,
@@ -217,8 +217,8 @@ describe("Panel", () => {
       expect(frame).toContain("缓存")
       expect(frame).toContain("命中")
       expect(frame).toContain("摘要块 (2)")
-      expect(frame).toContain("[T1] b1 : first")
-      expect(frame).toContain("[T2] b2 : merged")
+      expect(frame).toContain("[T1] {h1} b1 : first")
+      expect(frame).toContain("[T2] {h2} b2 : merged")
       expect(frame).toContain("≈10")
       expect(frame).toContain("merged #b1")
     } finally {
@@ -244,9 +244,9 @@ describe("Panel", () => {
     const app = await testRender(() => <Fixture />, { width: 42, height: 80 })
     app.renderer.start()
     try {
-      const frame = await app.waitForFrame((value) => value.includes("[T1] b1 : first"))
+      const frame = await app.waitForFrame((value) => value.includes("[T1] {h1} b1 : first"))
       expect(frame).not.toContain("▸")
-      const row = rowOf(app, "[T1] b1 : first")
+      const row = rowOf(app, "[T1] {h1} b1 : first")
       await app.mockMouse.moveTo(2, row)
       await app.waitForFrame((value) => value.includes("▸"))
       await app.mockMouse.moveTo(2, 0)
@@ -261,14 +261,14 @@ describe("Panel", () => {
     const app = await testRender(() => <Fixture />, { width: 42, height: 80 })
     app.renderer.start()
     try {
-      await app.waitForFrame((value) => value.includes("[T1] b1 : first"))
-      await app.mockMouse.click(2, rowOf(app, "[T1] b1 : first"))
+      await app.waitForFrame((value) => value.includes("[T1] {h1} b1 : first"))
+      await app.mockMouse.click(2, rowOf(app, "[T1] {h1} b1 : first"))
       expect(capturedDialog).toBeDefined()
       const dialog = await testRender(capturedDialog!, { width: 50, height: 24 })
       dialog.renderer.start()
       try {
         const frame = await dialog.waitForFrame((value) => value.includes("BODY_MARKER"))
-        expect(frame).toContain("[T1] b1 : first")
+        expect(frame).toContain("[T1] {h1} b1 : first")
       } finally {
         dialog.renderer.destroy()
       }

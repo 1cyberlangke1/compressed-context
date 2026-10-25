@@ -139,7 +139,7 @@ describe("主动压缩提醒", () => {
     const pending: Block = {
       id: "b1",
       tier: 1,
-      depth: 1,
+      height: 1,
       summary: { format: "markdown", title: "old", text: "old" },
       fromId: "m0",
       toId: "m0",

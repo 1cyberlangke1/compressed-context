@@ -18,10 +18,10 @@ export interface Block {
   readonly id: string
   readonly tier: Tier
   /**
-   * 折叠深度：T1 块 = 1；合并块 = 1 + 子块最大 depth。
+   * 树高：T1 块 = 1；合并块 = 1 + 子块最大高度。
    * 与 tier 解耦（tier 封顶 3 后仍会继续增长），供 UI 渐变与统计使用；读取是字段访问，O(1)。
    */
-  readonly depth: number
+  readonly height: number
   readonly summary: Summary
   readonly fromId: string
   readonly toId: string
@@ -159,10 +159,10 @@ function parseBlock(value: unknown): Block | undefined {
   // 旧数据可能存着封顶前的 T4/T5：读得进来，统一夹到当前上限。
   if (typeof rawTier !== "number" || !Number.isInteger(rawTier) || rawTier < 1) return undefined
   const tier = Math.min(MAX_TIER, rawTier)
-  // depth 是后加字段：旧块没有时退回到 tier（封顶前 tier 就等于深度）。
-  const rawDepth = block["depth"]
-  const depth =
-    typeof rawDepth === "number" && Number.isInteger(rawDepth) && rawDepth >= 1 ? rawDepth : tier
+  // 高度字段：新数据叫 height；旧数据叫 depth，读的时候一次性转换。
+  const rawHeight = block["height"] ?? block["depth"]
+  const height =
+    typeof rawHeight === "number" && Number.isInteger(rawHeight) && rawHeight >= 1 ? rawHeight : tier
   if (typeof block["fromId"] !== "string" || typeof block["toId"] !== "string") return undefined
   // 旧版字段 tokensBefore/tokensAfter 继续可读；新字段优先。
   const sourceTokens =
@@ -186,7 +186,7 @@ function parseBlock(value: unknown): Block | undefined {
   return {
     id: block["id"],
     tier,
-    depth,
+    height,
     summary,
     fromId: block["fromId"],
     toId: block["toId"],

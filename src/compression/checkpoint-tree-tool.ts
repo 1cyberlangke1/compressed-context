@@ -101,7 +101,7 @@ export function renderCheckpointTree(state: State, showTokens: boolean): string 
   const total = lines.reduce((sum, line) => sum + line.tokens, 0)
   const body = lines
     .map((line) => {
-      const tier = `T${line.block.tier.toString()}/d${line.block.depth.toString()}`
+      const tier = `T${line.block.tier.toString()} {h${line.block.height.toString()}}`
       const tokens = showTokens ? ` ${line.tokens.toString()}` : ""
       const title = line.title.length > 0 ? ` ${line.title}` : ""
       return `${line.path} ${line.block.id}:${tier}${tokens}${title}`

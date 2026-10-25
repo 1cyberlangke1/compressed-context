@@ -57,7 +57,7 @@ function block(
   return {
     id,
     tier,
-    depth: tier,
+    height: tier,
     summary: summary(`title-${id}`),
     fromId: "m1",
     toId: "m2",

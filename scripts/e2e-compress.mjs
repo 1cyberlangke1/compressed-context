@@ -650,7 +650,7 @@ try {
     const state = typeof row?.value === "string" ? JSON.parse(row.value) : undefined
     // 只有状态真的变了才写一条，否则 waitForState 每 20ms 轮询会把流水账刷满。
     const signature = JSON.stringify({
-      blocks: (state?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:${block.depth}`),
+      blocks: (state?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:${block.height}`),
       phase: state?.phase,
       pending: state?.pending?.id,
       attempts: state?.attempts,
@@ -673,7 +673,7 @@ try {
   const assertBlockCount = (sessionID, expected, label) => {
     const state = stateFor(sessionID)
     const actual = JSON.stringify({
-      blocks: (state?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:d${block.depth}`),
+      blocks: (state?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:{h${block.height}}`),
       phase: state?.phase,
       pending: state?.pending?.id,
       attempts: state?.attempts,
@@ -822,8 +822,12 @@ try {
   assert.ok(raw.includes("[Compressed conversation section #b1]"), "T1 checkpoint missing")
   assert.ok(raw.includes("[Compressed conversation section #b3]"), "T2 checkpoint missing")
   assert.ok(!String(latest?.summary ?? "").includes("[Compressed conversation section #b1]"), "latest checkpoint still shows T1")
-  assert.ok(String(latest?.summary ?? "").includes("[T2 · merged #b1 + #b2]"), "T2 header must show merged sources")
+  assert.ok(
+    String(latest?.summary ?? "").includes("[T2] {h2} · merged #b1 + #b2"),
+    "T2 header must show merged sources",
+  )
   assert.ok(raw.includes("[T1]"), "block header must show tier")
+  assert.ok(raw.includes("{h1}"), "block header must show tree height")
   console.log("T1 and T2 checkpoints found")
 
   assert.ok(
@@ -1239,9 +1243,9 @@ try {
   }
   let chainState = assertBlockCount(chainSession, 4, "chain case needs four T1 blocks first")
   assert.equal(
-    (chainState?.blocks ?? []).every((block) => block.tier === 1 && block.depth === 1),
+    (chainState?.blocks ?? []).every((block) => block.tier === 1 && block.height === 1),
     true,
-    "T1 blocks must be tier 1 with depth 1",
+    "T1 blocks must be tier 1 with height 1",
   )
   assert.equal(chainState?.phase, undefined, "high budget must not schedule a merge")
 
@@ -1260,7 +1264,7 @@ try {
   assert.ok(
     (chainState?.blocks?.length ?? 0) >= 5,
     `low-budget round adds at least one T1 block — actual ${JSON.stringify({
-      blocks: (chainState?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:d${block.depth}`),
+      blocks: (chainState?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:{h${block.height}}`),
       phase: chainState?.phase,
       pending: chainState?.pending?.id,
       distillRounds: chainState?.distillRounds,
@@ -1270,12 +1274,12 @@ try {
   assert.ok((chainState?.phase === 2) || (chainState?.blocks ?? []).some((block) => block.tier >= 2), "low budget must arm merging")
   console.log("case passed: low budget schedules merge phase after T1")
 
-  // 一刀合并：产物封顶 3、depth 递增、active 链 tier 单调不增。
+  // 一刀合并：产物封顶 3、height 递增、active 链 tier 单调不增。
   await promptSession(chainSession, "continue")
   chainState = await waitForState(
     chainSession,
-    (state) => (state?.blocks ?? []).some((block) => block.tier === 2 && block.depth === 2),
-    "first merge produces a T2 block with depth 2",
+    (state) => (state?.blocks ?? []).some((block) => block.tier === 2 && block.height === 2),
+    "first merge produces a T2 block with height 2",
   )
   const firstT2 = chainState.blocks.find((block) => block.tier === 2)
   assert.ok((firstT2?.sourceBlockIds?.length ?? 0) >= 2, "model merged a two-block prefix")
@@ -1303,10 +1307,10 @@ try {
   assert.equal(chainState?.phase, undefined, "chain must end under budget with no merge marker")
   assert.ok(finalActive.length >= 1 && finalActive.length <= 3, "active chain must stay small")
   assert.ok((finalActive[0]?.tier ?? 99) <= 3, "final tier must be capped at 3")
-  assert.ok((finalActive[0]?.depth ?? 0) > 1, "final depth must reflect the foldings")
+  assert.ok((finalActive[0]?.height ?? 0) > 1, "final height must reflect the foldings")
   assert.equal(chainState?.attempts, 0, "no failed attempts may linger")
   assert.equal(chainState?.lastError, undefined, "no compression error may linger")
-  console.log("case passed: chain converges to one capped block with growing depth")
+  console.log("case passed: chain converges to one capped block with growing height")
 
   // case: 编辑保留区设置——RPC 落盘（TUI 走的就是这条）→ 读回确认没被 schema 剥掉 → 下一刀按新值保留。
   mode = "merge-all"
@@ -1402,7 +1406,7 @@ try {
   assert.ok(
     (babelState?.blocks?.length ?? 0) >= babelBaseBlocks + 1,
     `Babel low-budget round adds at least one T1 block — actual ${JSON.stringify({
-      blocks: (babelState?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:d${block.depth}`),
+      blocks: (babelState?.blocks ?? []).map((block) => `${block.id}:T${block.tier}:{h${block.height}}`),
       phase: babelState?.phase,
       pending: babelState?.pending?.id,
       distillRounds: babelState?.distillRounds,
@@ -1484,7 +1488,7 @@ try {
   assert.ok(longMerged.length >= 1, "long session must merge more than once")
   assert.ok(longActive.length <= 3, "merged chain must collapse to a single active block")
   assert.ok((longActive[0]?.tier ?? 99) <= 3, "repeated merges must stay capped at T3")
-  assert.ok((longActive[0]?.depth ?? 0) > 1, "depth must reflect repeated foldings")
+  assert.ok((longActive[0]?.height ?? 0) > 1, "height must reflect repeated foldings")
   assert.equal(longState?.phase, undefined, "chain must be under budget after the last merge")
   assert.equal(longState?.attempts, 0, "no failed attempts may linger")
   assert.equal(longState?.lastError, undefined, "no compression error may linger")

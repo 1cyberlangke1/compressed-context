@@ -56,13 +56,13 @@ function fromHsl(h: number, s: number, l: number): Rgb {
 }
 
 /**
- * 输入：块折叠深度 + 当前最大深度；输出：深度色。
- * 预期：深度 1 = info（青色），色相一路向红走（经过绿/黄），亮度同时压向暗红，
- *       所以是连续渐变——不会「两三级就整块变红」；同一深度的块颜色相同。
+ * 输入：块树高 + 当前最大树高；输出：高度色。
+ * 预期：高度 1 = info（青色），色相一路向红走（经过绿/黄），亮度同时压向暗红，
+ *       所以是连续渐变——不会「两三级就整块变红」；同一高度的块颜色相同。
  */
-export function depthColor(depth: number, maxDepth: number, theme: Context["theme"]): RGBA {
+export function heightColor(height: number, maxHeight: number, theme: Context["theme"]): RGBA {
   const info = theme.text.feedback.info.base
-  const raw = maxDepth <= 1 ? 0 : Math.min(1, Math.max(0, (depth - 1) / (maxDepth - 1)))
+  const raw = maxHeight <= 1 ? 0 : Math.min(1, Math.max(0, (height - 1) / (maxHeight - 1)))
   if (raw === 0) return RGBA.fromValues(info.r, info.g, info.b, info.a)
   const t = Math.pow(raw, DEPTH_GAMMA)
   const start = toHsl(info)
@@ -92,12 +92,12 @@ export function SummaryDialog(props: {
   readonly theme: Context["theme"]
   readonly block: SummaryBlock
 }) {
-  const height = createMemo(() => Math.max(8, Math.min(30, props.context.renderer.height - 8)))
+  const viewportHeight = createMemo(() => Math.max(8, Math.min(30, props.context.renderer.height - 8)))
   return (
     <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <text fg={props.theme.text.base} wrapMode="word">
-          <b>{`[T${props.block.tier.toString()}] ${props.block.id} : ${props.block.title}`}</b>
+          <b>{`[T${props.block.tier.toString()}] {h${props.block.height.toString()}} ${props.block.id} : ${props.block.title}`}</b>
         </text>
         <text
           fg={props.theme.text.muted}
@@ -108,7 +108,7 @@ export function SummaryDialog(props: {
           esc
         </text>
       </box>
-      <scrollbox height={height()} scrollY={true} focused={true} width="100%">
+      <scrollbox height={viewportHeight()} scrollY={true} focused={true} width="100%">
         <Show when={props.block.format !== "babel"}>
           <Show
             when={getSyntaxStyle(props.context.renderer)}
@@ -155,7 +155,7 @@ export function SummarySection(props: {
   const [hovered, setHovered] = createSignal<string | undefined>(undefined)
   const [frame, setFrame] = createSignal(0)
   /** 当前链的最大折叠深度；用来把深度归一化到 0..1 的渐变。 */
-  const maxDepth = createMemo(() => props.blocks.reduce((max, block) => Math.max(max, block.depth), 1))
+  const maxHeight = createMemo(() => props.blocks.reduce((max, block) => Math.max(max, block.height), 1))
 
   // 只有 hover 时跑两帧；鼠标移出或销毁时清理，避免后台定时器。
   createEffect(() => {
@@ -226,12 +226,12 @@ export function SummarySection(props: {
                           openSummary(block)
                         }}
                       >
-                        <text width={2} fg={depthColor(block.depth, maxDepth(), props.theme)}>
+                        <text width={2} fg={heightColor(block.height, maxHeight(), props.theme)}>
                           {hovered() === block.id ? (frame() === 0 ? "▸ " : " ▸") : "  "}
                         </text>
                         <text fg={props.theme.text.base} wrapMode="word" flexGrow={1}>
-                          <span style={{ fg: depthColor(block.depth, maxDepth(), props.theme) }}>
-                            <b>{`[T${block.tier.toString()}]`}</b>
+                          <span style={{ fg: heightColor(block.height, maxHeight(), props.theme) }}>
+                            <b>{`[T${block.tier.toString()}] {h${block.height.toString()}}`}</b>
                           </span>
                           <span style={{ fg: props.theme.text.muted }}>
                             {` ${block.id} : `}
