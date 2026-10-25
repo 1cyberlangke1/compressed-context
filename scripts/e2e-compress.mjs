@@ -1154,6 +1154,7 @@ try {
     await promptSession(chainSession, "continue")
     await api("POST", `/api/session/${chainSession}/compact`, {})
     await waitSession(chainSession)
+    await waitForState(chainSession, (state) => (state?.blocks?.length ?? 0) >= round + 1, "chainSession T1 $" + (round + 1).toString())
   }
   let chainState = stateFor(chainSession)
   assert.equal(chainState?.blocks?.length, 4, "chain case needs four T1 blocks first")
@@ -1222,6 +1223,7 @@ try {
     await promptSession(editSession, "continue")
     await api("POST", `/api/session/${editSession}/compact`, {})
     await waitSession(editSession)
+    await waitForState(editSession, (state) => (state?.blocks?.length ?? 0) >= round + 1, "editSession T1 $" + (round + 1).toString())
   }
   let editState = stateFor(editSession)
   assert.equal(editState?.blocks?.length, 5, "edit case needs five T1 blocks")
@@ -1275,6 +1277,7 @@ try {
     await promptSession(babelSession, "continue")
     await api("POST", `/api/session/${babelSession}/compact`, {})
     await waitSession(babelSession)
+    await waitForState(babelSession, (state) => (state?.blocks?.length ?? 0) >= round + 1, "babelSession T1 $" + (round + 1).toString())
   }
   let babelState = stateFor(babelSession)
   const babelBaseBlocks = babelState?.blocks?.length ?? 0
