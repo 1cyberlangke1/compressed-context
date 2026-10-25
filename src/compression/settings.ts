@@ -94,6 +94,11 @@ export function effectiveWindowKey(sessionID: string): string {
   return `window:effective:${sessionID}`
 }
 
+/** 输入：会话 ID；输出：写下该窗口时用的模型 key，用于换模型后识别陈旧缓存。 */
+export function effectiveWindowModelKey(sessionID: string): string {
+  return `window:effective-model:${sessionID}`
+}
+
 /** 输入：模型标识；输出：该模型原生窗口在 storage 里的 key。 */
 export function windowKey(providerID: string, modelID: string): string {
   return `window:${providerID}/${modelID}`

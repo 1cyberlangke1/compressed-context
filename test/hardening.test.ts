@@ -1,6 +1,6 @@
 import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { resolveLimit } from "../src/compression/auto.ts"
 import { clearDeletedSessions, isSessionDeleted, markSessionDeleted } from "../src/compression/deleted-sessions.ts"
@@ -97,8 +97,17 @@ describe("状态锁跨 StateStore 共享", () => {
 describe("已删除会话墓碑有上限", () => {
   it("超过上限时淘汰最老的墓碑，集合不会无限增长", () => {
     clearDeletedSessions()
-    for (let index = 0; index < 600; index += 1) markSessionDeleted(`ses_${index.toString()}`)
-    expect(isSessionDeleted("ses_599")).toBe(true)
+    for (let index = 0; index < 5_100; index += 1) markSessionDeleted(`ses_${index.toString()}`)
+    expect(isSessionDeleted("ses_5099")).toBe(true)
     expect(isSessionDeleted("ses_0")).toBe(false)
+  })
+
+  it("墓碑超过保留期自动失效，避免永久挡住写入", () => {
+    clearDeletedSessions()
+    vi.useFakeTimers()
+    markSessionDeleted("ses_stale")
+    vi.advanceTimersByTime(25 * 60 * 60 * 1000)
+    expect(isSessionDeleted("ses_stale")).toBe(false)
+    vi.useRealTimers()
   })
 })

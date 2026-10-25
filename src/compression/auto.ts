@@ -12,6 +12,7 @@ import {
   EFFECTIVE_WINDOW_KEY,
   RESOLVED_WINDOW_KEY,
   effectiveWindowKey,
+  effectiveWindowModelKey,
   loadServerSettings,
   resolvedWindowKey,
   windowKey,
@@ -93,7 +94,13 @@ export async function waitForCompaction(
 async function effectiveLimit(
   storage: Plugin.Context["storage"],
   sessionID: string,
+  model?: { readonly providerID: string; readonly id: string },
 ): Promise<number | undefined> {
+  // 换了模型就丢掉旧窗口：否则会拿上一个模型的窗口判当前会话的预算。
+  if (model !== undefined) {
+    const owner = await storage.get(effectiveWindowModelKey(sessionID))
+    if (typeof owner === "string" && owner !== `${model.providerID}/${model.id}`) return undefined
+  }
   const scoped = await storage.get(effectiveWindowKey(sessionID))
   if (typeof scoped === "number" && scoped > 0) return scoped
   const stored = await storage.get(EFFECTIVE_WINDOW_KEY)
@@ -196,7 +203,10 @@ async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): P
     if (latest < 0) return true
     return messages.slice(latest + 1).some((message) => {
       if (message.type !== "user") return false
-      return messageTextOf(message).trim().length > 0
+      const text = messageTextOf(message).trim()
+      if (text.length === 0) return false
+      // 我们自己注入的提醒不是用户输入：把它当成新 user 会让「压完就合并」提前触发。
+      return !text.startsWith(NUDGE_PREFIX)
     })
   } catch {
     return true
@@ -315,8 +325,13 @@ export async function resolveLimit(
   const effective = setting === "auto" ? native : native === undefined ? setting : Math.min(setting, native)
   if (typeof effective === "number" && effective > 0) {
     try {
-      if (sessionID === undefined) await ctx.storage.set(EFFECTIVE_WINDOW_KEY, effective)
-      else await ctx.storage.set(effectiveWindowKey(sessionID), effective)
+      if (sessionID === undefined) {
+        await ctx.storage.set(EFFECTIVE_WINDOW_KEY, effective)
+      } else {
+        await ctx.storage.set(effectiveWindowKey(sessionID), effective)
+        // 记下这个窗口是给哪个模型算的：换模型后旧值不能继续用来判预算。
+        await ctx.storage.set(effectiveWindowModelKey(sessionID), `${model.providerID}/${model.id}`)
+      }
     } catch {
       // best effort：写不进去只影响 step.ended 兜底
     }
@@ -413,7 +428,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
     const limit =
       (await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)) ??
-      (await effectiveLimit(input.ctx.storage, input.sessionID))
+      (await effectiveLimit(input.ctx.storage, input.sessionID, input.model))
 
     // 已开头的合并链：与 autoCompress 无关，手动压缩后也要继续 T2/T3。
     // 但要等新的 user 消息：刚压完就再请求一刀，宿主会回「没有可压缩内容」并留下一条虚假失败。
@@ -484,7 +499,7 @@ export async function maybeAutoCompressStep(input: {
     if (blockedByState(state)) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
-    const effective = await effectiveLimit(input.ctx.storage, input.sessionID)
+    const effective = await effectiveLimit(input.ctx.storage, input.sessionID, session.model)
 
     // 已开头的合并链：与 autoCompress 无关；同样要求有新的 user 消息。
     if (state.phase !== undefined) {
@@ -527,13 +542,16 @@ export async function maybeAutoCompressStep(input: {
 }
 
 /** 输入：本次增长量 + 是否已有压缩块 + 自动压缩开关；输出：追加到请求尾部的提醒文本。 */
+/** 提醒正文的固定前缀：既用于拼提示词，也用于识别「这条 user 消息是我们自己注入的」。 */
+const NUDGE_PREFIX = "[context-reminder]"
+
 export function buildNudgeText(growthTokens: number, hasCompressed: boolean, autoCompress: boolean): string {
   const scope = hasCompressed ? "since the last compressed block" : "since the session started"
   const fallback = autoCompress
     ? "Automatic compression will run later, so there is no rush."
     : "Call compress when convenient."
   return (
-    `[context-reminder] Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
+    `${NUDGE_PREFIX} Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
     // 默认不压：任务没做完、或还需要这些精确细节时继续干活；只有到了自然的停顿点才压缩。
     "Do not compress yet if you are busy or if you still need these exact details: keep working and ignore this reminder. " +
     `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope}. ` +
