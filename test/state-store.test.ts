@@ -45,6 +45,7 @@ function block(id: string): Block {
   return {
     id,
     tier: 1,
+    depth: 1,
     summary: {
       title: id,
       goal: id,

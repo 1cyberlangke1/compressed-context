@@ -54,6 +54,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       pending: Block | undefined,
       phase: CompactionPhase | undefined,
       error: string | undefined,
+      rounds: number | undefined,
     ): Promise<void> => {
       await stateStore(ctx.storage).transact(event.sessionID, (current) => {
         // 以锁内的最新状态为基准。钩子开头拿到的快照可能已经过时：
@@ -68,6 +69,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
           ...(phase === undefined ? {} : { phase }),
           ...(lastError === undefined ? {} : { lastError }),
           ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
+          ...(rounds === undefined ? {} : { distillRounds: rounds }),
           ...(baseline !== undefined
             ? { nudgeBaselineTokens: baseline }
             : current.nudgeBaselineTokens === undefined
@@ -92,11 +94,12 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         state,
         pending: state.pending,
         budgetTokens: limits.budgetTokens,
+        recentT1Blocks: settings.recentT1Blocks,
+        distillRounds: state.distillRounds ?? 0,
         summaryBlockChars: limits.blockChars,
         summaryTotalChars: limits.totalChars,
         summaryLanguage: settings.summaryLanguage,
         summaryFormat: settings.summaryFormat,
-        phase: state.phase,
         showTimeline: settings.showTimeline,
         showBlockTokens: settings.showBlockTokens,
       })
@@ -106,6 +109,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
         result.pending,
         result.error === undefined ? result.nextPhase : state.phase,
         result.error,
+        result.distillRounds ?? state.distillRounds,
       )
       event.result = { summary: result.summary }
       // 预算内不会再排下一层；没有合法候选时 distill 自己返回未合并，phase 随之清空。
@@ -174,7 +178,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       renderOptions,
     )
     const nextPhase = planT1Phase(summary, active, limits.budgetTokens)
-    await save(state.blocks, pending, nextPhase, undefined)
+    await save(state.blocks, pending, nextPhase, undefined, 0)
     event.result = { summary }
   } catch (error) {
     // 把钩子里的真实异常留给失败事件和 TUI；不要只留下“compaction failed”。

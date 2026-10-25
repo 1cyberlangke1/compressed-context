@@ -7,16 +7,14 @@ import { isSubagentSession } from "./session-role.ts"
 import type { Disposable } from "./settings-rpc.ts"
 
 const DESCRIPTION =
-  "Restores content from a compressed checkpoint block. Use when you need exact details that were " +
-  "compressed away (exact errors, code lines, file contents, tool outputs). Pass the block id you see " +
-  "in the checkpoint (e.g. b3). By default a merged block expands one level (its child summaries); " +
-  "pass full:true to recurse all the way to the original messages. Large content is written to a " +
-  "temporary file whose path is returned — open it with the read tool. This tool never changes the " +
-  "checkpoint; content returns only as this tool's result."
+  "Restores compressed checkpoint content. Pass the block id (e.g. b3). Depth: default expands one " +
+  "level; depth:N recurses N levels; full:true goes all the way to original messages. Deeper means " +
+  "more content and more tokens — start shallow, go deeper only if needed."
 
 const DecompressInput = Schema.Struct({
   block: Schema.String,
-  full: Schema.Boolean,
+  full: Schema.optional(Schema.Boolean),
+  depth: Schema.optional(Schema.Number),
 })
 
 const DecompressOutput = Schema.Struct({

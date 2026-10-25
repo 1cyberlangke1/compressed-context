@@ -172,6 +172,7 @@ export function buildFieldRows(input: {
     nudgeGrowthTokens: copy.settings.nudgeGrowth,
     summaryBlockPercent: copy.settings.summaryBlockPercent,
     summaryTotalPercent: copy.settings.summaryTotalPercent,
+    recentT1Blocks: copy.settings.recentT1Blocks,
   }
   return (
     [
@@ -180,6 +181,7 @@ export function buildFieldRows(input: {
       "nudgeGrowthTokens",
       "summaryBlockPercent",
       "summaryTotalPercent",
+      "recentT1Blocks",
     ] as const
   ).map((field) => {
     const overridden = override[field] !== undefined
@@ -203,6 +205,9 @@ function formatFieldValue(field: ModelOverrideField, value: unknown, copy: Messa
   if (field === "nudgeGrowthTokens") {
     return typeof value === "number" && value > 0 ? formatTokens(value) : copy.settings.off
   }
+  if (field === "recentT1Blocks") {
+    return typeof value === "number" ? value.toString() : "—"
+  }
   return typeof value === "number" ? `${value.toString()}%` : "—"
 }
 
@@ -222,6 +227,7 @@ function formatPreview(
   }
   if (field === "triggerPercent") return threshold === undefined ? "" : formatTokens(threshold)
   if (field === "nudgeGrowthTokens") return ""
+  if (field === "recentT1Blocks") return ""
   if (limit === undefined) return ""
   const chars =
     field === "summaryBlockPercent"

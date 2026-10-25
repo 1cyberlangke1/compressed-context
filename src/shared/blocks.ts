@@ -5,7 +5,9 @@
  */
 export interface SummaryBlock {
   readonly id: string
-  readonly tier: 1 | 2 | 3
+  readonly tier: number
+  /** 折叠深度：T1=1，合并块 = 1 + 子块最大深度；tier 封顶后仍会增长。 */
+  readonly depth: number
   /** 摘要格式；Babel 正文不能按 Markdown 渲染。 */
   readonly format: "json" | "markdown" | "babel"
   readonly title: string

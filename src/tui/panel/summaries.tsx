@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { SyntaxStyle, type RGBA } from "@opentui/core"
+import { RGBA, SyntaxStyle } from "@opentui/core"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 
 import type { Messages } from "../../i18n/index.ts"
@@ -8,11 +8,23 @@ import { formatTimestamp, formatTokens } from "../../shared/format.ts"
 import type { Settings } from "../../shared/settings.ts"
 import type { UpdateSettings } from "../types.ts"
 
-/** 输入：摘要等级；输出：对应主题色；T1 蓝、T2 黄、T3 红。 */
-function tierColor(tier: SummaryBlock["tier"], theme: Context["theme"]): RGBA {
-  if (tier === 1) return theme.text.feedback.info.base
-  if (tier === 2) return theme.text.feedback.warning.base
-  return theme.text.feedback.error.base
+/** 最深色（0-1 归一化 RGB）：暗红，灰背景上仍清晰可辨。 */
+const DEEP_TIER = { r: 0.47, g: 0.08, b: 0.08, a: 1 }
+
+/**
+ * 输入：块折叠深度 + 当前最大深度；输出：深度色。
+ * 预期：深度 1 = 警告色（浅），随深度线性压向 DEEP_TIER（暗红），
+ *       三个通道和感知亮度都单调下降，所以"越深越暗"在视觉上成立。
+ */
+export function depthColor(depth: number, maxDepth: number, theme: Context["theme"]): RGBA {
+  const from = theme.text.feedback.warning.base
+  const progress = maxDepth <= 1 ? 0 : Math.min(1, Math.max(0, (depth - 1) / (maxDepth - 1)))
+  return RGBA.fromValues(
+    from.r + (DEEP_TIER.r - from.r) * progress,
+    from.g + (DEEP_TIER.g - from.g) * progress,
+    from.b + (DEEP_TIER.b - from.b) * progress,
+    from.a,
+  )
 }
 
 /** 输入：TUI renderer；输出：共享的 SyntaxStyle，拿不到 resource owner 时返回 undefined。 */
@@ -96,6 +108,8 @@ export function SummarySection(props: {
 }) {
   const [hovered, setHovered] = createSignal<string | undefined>(undefined)
   const [frame, setFrame] = createSignal(0)
+  /** 当前链的最大折叠深度；用来把深度归一化到 0..1 的渐变。 */
+  const maxDepth = createMemo(() => props.blocks.reduce((max, block) => Math.max(max, block.depth), 1))
 
   // 只有 hover 时跑两帧；鼠标移出或销毁时清理，避免后台定时器。
   createEffect(() => {
@@ -166,11 +180,11 @@ export function SummarySection(props: {
                           openSummary(block)
                         }}
                       >
-                        <text width={2} fg={tierColor(block.tier, props.theme)}>
+                        <text width={2} fg={depthColor(block.depth, maxDepth(), props.theme)}>
                           {hovered() === block.id ? (frame() === 0 ? "▸ " : " ▸") : "  "}
                         </text>
                         <text fg={props.theme.text.base} wrapMode="word" flexGrow={1}>
-                          <span style={{ fg: tierColor(block.tier, props.theme) }}>
+                          <span style={{ fg: depthColor(block.depth, maxDepth(), props.theme) }}>
                             <b>{`[T${block.tier.toString()}]`}</b>
                           </span>
                           <span style={{ fg: props.theme.text.muted }}>

@@ -54,6 +54,11 @@ function fakeCtx(storage: StorageLike): Plugin.Context {
   return {
     storage,
     location: { directory: configDirectories.get(storage) ?? tmpdir() },
+    // isSubagentSession 是 fail-closed：session.get 缺失会被当成子代理跳过 nudge。
+    // 默认提供「无 parentID」的会话，子代理用例单独覆盖。
+    session: {
+      get: () => Promise.resolve({ location: { directory: configDirectories.get(storage) ?? tmpdir() } }),
+    },
   } as unknown as Plugin.Context
 }
 
@@ -134,6 +139,7 @@ describe("主动压缩提醒", () => {
     const pending: Block = {
       id: "b1",
       tier: 1,
+      depth: 1,
       summary: { format: "markdown", title: "old", text: "old" },
       fromId: "m0",
       toId: "m0",
@@ -153,6 +159,19 @@ describe("主动压缩提醒", () => {
     expect(buildNudgeText(10_000, false, false)).toContain("Call compress when convenient")
   })
 
+  it("子代理会话不追加提醒", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
+    // 覆盖 session.get：返回带 parentID 的会话，命中子代理守卫。
+    const ctx = fakeCtx(storage) as unknown as {
+      session: { get: () => Promise<{ parentID: string; location: { directory: string } }> }
+    }
+    ctx.session.get = () =>
+      Promise.resolve({ parentID: "ses_parent", location: { directory: tmpdir() } })
+    const messages = context("x".repeat(20_000))
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(3)
+  })
+
   it("尝试次数达上限后不追加提醒", async () => {
     const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
     await saveState(storage, "ses_test", { blocks: [], attempts: MAX_COMPRESSION_ATTEMPTS })
@@ -163,7 +182,7 @@ describe("主动压缩提醒", () => {
 
   it("已排下一层蒸馏时跳过提醒", async () => {
     const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
-    await saveState(storage, "ses_test", { blocks: [], attempts: 0, phase: "t2" })
+    await saveState(storage, "ses_test", { blocks: [], attempts: 0, phase: 2 })
     const messages = context("x".repeat(20_000))
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(3)

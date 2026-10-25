@@ -93,6 +93,23 @@ describe("模型覆盖归一化", () => {
     })
     expect(models["m"]).toEqual({ summaryTotalPercent: 40, nudgeGrowthTokens: 0, contextLimit: 200_000 })
   })
+
+  test("保留区块数越界丢弃，合法值保留", () => {
+    const models = normalizeModelOverrides({
+      m: { recentT1Blocks: 11 },
+      n: { recentT1Blocks: 0 },
+      p: { recentT1Blocks: -1 },
+    })
+    expect(models["m"]).toBeUndefined()
+    expect(models["n"]).toEqual({ recentT1Blocks: 0 })
+    expect(models["p"]).toBeUndefined()
+  })
+
+  test("按模型覆盖保留区块数", () => {
+    const settings = normalizeSettings({ models: { "p/m": { recentT1Blocks: 5 } } })
+    expect(resolveForModel(settings, { providerID: "p", id: "m" }).recentT1Blocks).toBe(5)
+    expect(resolveForModel(settings, { providerID: "other", id: "m" }).recentT1Blocks).toBe(2)
+  })
 })
 
 describe("保存前裁剪", () => {
@@ -100,5 +117,8 @@ describe("保存前裁剪", () => {
     const base = resolveForModel(baseSettings(), undefined)
     expect(pruneModelOverride({ triggerPercent: 80 }, base)).toBeUndefined()
     expect(pruneModelOverride({ triggerPercent: 85, summaryTotalPercent: 50 }, base)).toEqual({ triggerPercent: 85 })
+    // 保留区块数与继承值相同就删除，不同才保留。
+    expect(pruneModelOverride({ recentT1Blocks: 2 }, base)).toBeUndefined()
+    expect(pruneModelOverride({ recentT1Blocks: 4 }, base)).toEqual({ recentT1Blocks: 4 })
   })
 })

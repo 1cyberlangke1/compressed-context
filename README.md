@@ -25,7 +25,9 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 
 - **递归分层折叠**：
   - **T1 级**：将溢出的原始对话流折叠为自包含检查点（原始消息移入持久化存储，释放窗口）。
-  - **T2 / T3 级**：当摘要块自身占用接近预算上限时，自动在背景对相邻摘要进行高阶合并（`T1 + T1 → T2`，`T2 + T2 → T3`）。
+  - **T2 / T3 级**：当摘要块自身占用接近预算上限时，自动在后台挑**占用最大的那一层**，由模型决定一次合并前 1..N 个同层块。层级封顶 T3，顶层因此是“滚动累积块”。
+- **保留区**：最新 `recentT1Blocks` 个 T1 块不参与合并，越老的记忆越模糊；预算压不下去时保留区会逐级让位。
+- **深度**：每个块记录折叠深度 `depth`（T1=1，合并块 = 1 + 子块最大深度），是侧栏渐变的依据。
 - **无损按需回溯**：模型可在需要时通过 `decompress` 按块还原历史，支持只解压下一层级摘要或直接恢复原始对话流。
 
 ## 核心特性
@@ -74,7 +76,8 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 | `triggerPercent`       | `80`               | 上下文占用达到百分之多少时触发自动压缩                         |
 | `autoCompress`         | `true`             | 是否开启自动压缩                                               |
 | `summaryBlockPercent`  | `10` | 单个摘要块的 Token 预算（占窗口的百分比）                      |
-| `summaryTotalPercent`  | `50` | 所有摘要的总 Token 预算占比，超出后触发 T2 / T3 合并           |
+| `summaryTotalPercent`  | `50` | 所有摘要的总 Token 预算占比，超出后触发合并（最高 T3）           |
+| `recentT1Blocks`       | `2`  | 保留区：最新这么多个 T1 块不参与合并；`0` 关闭                  |
 | `summaryFormat`        | `"markdown"`       | 摘要格式：`markdown` 或 `babel`                                |
 | `summaryLanguage`      | `"auto"`           | 摘要语言（`babel` 格式下忽略此项）                             |
 | `nudgeGrowthTokens`    | `50000`            | 触发“主动压缩提醒”的 Token 增长阈值，设为 `0` 则关闭；`compress` 工具关闭时跳过 |
@@ -106,7 +109,7 @@ OpenCode 的上下文压缩插件。它会将较早的对话历史折叠成独�
 
 合并顺序：**内置默认 → 全局字段 → `models["模型名"]` → `models["提供商/模型"]`**。
 
-只有这 5 个 token 相关字段可以按模型覆盖：`contextLimit`、`triggerPercent`、`nudgeGrowthTokens`、`summaryBlockPercent`、`summaryTotalPercent`。
+只有这 6 个 token 相关字段可以按模型覆盖：`contextLimit`、`triggerPercent`、`nudgeGrowthTokens`、`summaryBlockPercent`、`summaryTotalPercent`、`recentT1Blocks`。
 
 配置里只保存**真正改过的字段**：某个字段改回与全局相同的值时会自动删除，一条覆盖里的字段全被删掉时整条移除，`models` 为空时连这个键也不留。
 

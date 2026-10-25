@@ -35,6 +35,7 @@ describe("initialSettings / normalizeSettings", () => {
       nudgeGrowthTokens: 50_000,
       summaryBlockPercent: 10,
       summaryTotalPercent: 50,
+      recentT1Blocks: 2,
       summaryLanguage: "auto",
       summaryFormat: "markdown",
       autoCompress: true,

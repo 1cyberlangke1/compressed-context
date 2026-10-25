@@ -59,6 +59,7 @@ function fakeBlocks(): SummaryBlock[] {
     {
       id: "b1",
       tier: 1,
+      depth: 1,
       format: "markdown",
       title: "first",
       at: 1,
@@ -69,6 +70,7 @@ function fakeBlocks(): SummaryBlock[] {
     {
       id: "b2",
       tier: 2,
+      depth: 2,
       format: "markdown",
       title: "merged",
       at: 2,

@@ -53,6 +53,8 @@ export interface Messages {
     readonly summaryBlockPercentHint: string
     readonly summaryTotalPercent: string
     readonly summaryTotalPercentHint: string
+    readonly recentT1Blocks: string
+    readonly recentT1BlocksHint: string
     readonly summaryPercentInvalid: string
     readonly windowKnown: (value: string) => string
     readonly windowUnknown: string
@@ -121,12 +123,14 @@ export interface Messages {
     readonly sourceGlobal: string
     readonly sourceName: string
     readonly sourceExact: string
+    readonly recent: (value: string) => string
     readonly icons: {
       readonly threshold: string
       readonly window: string
       readonly block: string
       readonly total: string
       readonly nudge: string
+      readonly recent: string
     }
   }
   readonly languages: {

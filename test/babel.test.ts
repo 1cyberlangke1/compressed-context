@@ -118,10 +118,11 @@ describe("Babel prompts", () => {
     expect(t1).toContain("Babel")
     expect(t1).not.toContain("## Goal")
 
-    const merge = buildMergeInstruction(
-      [{ index: 1, description: "b1 + b2 → T2", sourceChars: 1_000, tier: 2 }],
-      { format: "babel", maxChars: 2_000 },
-    )
+    const merge = buildMergeInstruction({
+      targetTier: 2,
+      blocks: [{ id: "b1", tier: 1, title: "t1", goal: "g1" }],
+      options: { format: "babel", maxChars: 2_000 },
+    })
     expect(merge).toContain("c=N")
     expect(merge).toContain("T=<short title>|G=<one-line goal>")
     expect(merge).not.toContain("candidate: N")
@@ -137,10 +138,11 @@ describe("Babel prompts", () => {
     // 不允许 babel 独有的 token 目标把内容压得比 markdown/json 更狠。
     expect(t1).not.toMatch(/Target \d+-\d+ tokens for T1/)
 
-    const merge = buildMergeInstruction(
-      [{ index: 1, description: "b1 + b2 → T2", sourceChars: 1_000, tier: 2 }],
-      { format: "babel", maxChars: 2_000 },
-    )
+    const merge = buildMergeInstruction({
+      targetTier: 2,
+      blocks: [{ id: "b1", tier: 1, title: "t1", goal: "g1" }],
+      options: { format: "babel", maxChars: 2_000 },
+    })
     expect(merge).toContain("changes only notation, not content")
     expect(merge).toContain("no rounding")
     expect(merge).not.toMatch(/Target \d+-\d+ tokens for T2/)

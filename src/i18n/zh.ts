@@ -57,6 +57,8 @@ export const zh: Messages = {
     summaryBlockPercentHint: "单条摘要最多占窗口的百分比；可输入 10% 或 20k",
     summaryTotalPercent: "全部摘要上限",
     summaryTotalPercentHint: "所有摘要加起来最多占窗口的百分比；可输入 50% 或 100k",
+    recentT1Blocks: "保留区块数",
+    recentT1BlocksHint: "最新的这么多个 T1 块不参与合并，越老的越先合并；0 关闭保留区",
     summaryPercentInvalid: "请输入 1% ~ 90%，或一个能换算成百分比的 token 数",
     windowKnown: (value) => `当前窗口：${value}`,
     windowUnknown: "当前窗口未知（先跑一次模型请求）",
@@ -126,12 +128,14 @@ export const zh: Messages = {
     sourceGlobal: "全局",
     sourceName: "同名",
     sourceExact: "精确",
+    recent: (value) => `保留 ${value} 块`,
     icons: {
       threshold: "⚡",
       window: "🪟",
       block: "📄",
       total: "📚",
       nudge: "🔔",
+      recent: "🧷",
     },
   },
   languages: {

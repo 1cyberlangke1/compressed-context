@@ -57,6 +57,8 @@ export const en: Messages = {
     summaryBlockPercentHint: "Max share of the window for one summary; enter 10% or 20k",
     summaryTotalPercent: "Total summary limit",
     summaryTotalPercentHint: "Max share of the window for all summaries; enter 50% or 100k",
+    recentT1Blocks: "Retained blocks",
+    recentT1BlocksHint: "The newest N tier-1 blocks stay unmerged; older ones merge first. 0 disables the retention zone",
     summaryPercentInvalid: "Enter 1% to 90%, or a token count that fits the window",
     windowKnown: (value) => `Current window: ${value}`,
     windowUnknown: "Current window unknown (run one model request first)",
@@ -126,12 +128,14 @@ export const en: Messages = {
     sourceGlobal: "global",
     sourceName: "same name",
     sourceExact: "exact",
+    recent: (value) => `keep ${value}`,
     icons: {
       threshold: "⚡",
       window: "🪟",
       block: "📄",
       total: "📚",
       nudge: "🔔",
+      recent: "🧷",
     },
   },
   languages: {

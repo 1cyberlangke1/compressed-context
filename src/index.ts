@@ -12,6 +12,7 @@ import { updateSessionMetadata } from "./compression/session-metadata.ts"
 import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc.ts"
 import { registerCompressTool } from "./compression/tool.ts"
 import { registerDecompressTool } from "./compression/decompress-tool.ts"
+import { registerCheckpointTreeTool } from "./compression/checkpoint-tree-tool.ts"
 import { effectiveDecompressTempMaxAgeHours } from "./shared/settings.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./shared/stats.ts"
 import { estimateCategories } from "./shared/tokens.ts"
@@ -46,6 +47,7 @@ export default Plugin.define({
     const compressTool = await registerCompressTool(ctx)
     disposables.push(compressTool)
     disposables.push(await registerDecompressTool(ctx))
+    disposables.push(await registerCheckpointTreeTool(ctx))
     // 摘要格式存在设置里；保存后让 compress 工具的描述与参数立刻跟着换。
     disposables.push(
       await registerSettingsRpc(ctx, {
@@ -65,14 +67,25 @@ export default Plugin.define({
     await ctx.tool.reload()
     void reconcileAll(ctx)
 
+    // 工具注册表是目录级共享的：开关关闭或子代理会话时，必须在发给模型前删键，
+    // 否则子代理也能调用 compress/decompress，压掉自己短命会话里的细节。
+    // 三条请求路径都要覆盖：context（普通对话）、compaction（原生压缩）、
+    // generate（插件自己的摘要请求，走 summarize.ts 的 session.generate）。
+    const applyToolPolicy = async (input: {
+      readonly sessionID: string
+      readonly tools: Record<string, unknown>
+    }): Promise<void> => {
+      const roleHidden = await isSubagentSession(ctx, input.sessionID)
+      const settings = await loadServerSettings(ctx)
+      if (roleHidden || !settings.enableCompressTool) hideTools(input.tools, ["compress"])
+      if (roleHidden || !settings.enableDecompressTool) {
+        hideTools(input.tools, ["decompress", "checkpoint_tree"])
+      }
+    }
+
     disposables.push(
       await ctx.session.hook("context", async (event) => {
-        // 工具注册表是目录级共享的：开关关闭或子代理会话时，必须在发给模型前删掉，
-        // 否则子代理也能调用 compress/decompress，压掉自己短命会话里的细节。
-        const settings = await loadServerSettings(ctx)
-        const roleHidden = await isSubagentSession(ctx, event.sessionID)
-        if (!settings.enableCompressTool || roleHidden) hideTools(event.tools, ["compress"])
-        if (!settings.enableDecompressTool || roleHidden) hideTools(event.tools, ["decompress"])
+        await applyToolPolicy({ sessionID: event.sessionID, tools: event.tools })
 
         await adoptNativeCheckpoint(ctx, event.sessionID, event.messages)
 
@@ -110,7 +123,19 @@ export default Plugin.define({
     )
 
     disposables.push(
-      await ctx.session.hook("compaction", (event) => handleCompaction(ctx, event)),
+      await ctx.session.hook("compaction", async (event) => {
+        // 原生压缩请求走这里而非 context：同样的隐藏逻辑必须生效。
+        await applyToolPolicy({ sessionID: event.sessionID, tools: event.tools })
+        return handleCompaction(ctx, event)
+      }),
+    )
+
+    disposables.push(
+      await ctx.session.hook("generate", async (event) => {
+        // 插件自己的摘要请求走 generate 流：不隐藏的话，子代理的摘要请求
+        // 仍然会向模型广告 compress/decompress/checkpoint_tree。
+        await applyToolPolicy({ sessionID: event.sessionID, tools: event.tools })
+      }),
     )
 
     return () => {

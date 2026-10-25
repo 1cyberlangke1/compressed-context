@@ -87,11 +87,11 @@ describe("覆盖编辑屏", () => {
     expect(small.find((row) => row.field === "triggerPercent")?.preview).toBe("160k")
   })
 
-  test("编辑项包含 5 个字段与重置/删除", () => {
+  test("编辑项包含 6 个字段与重置/删除", () => {
     const settings = normalizeSettings({})
     const rows = buildFieldRows({ settings, key: "google/gemini-3-pro", window: 1_000_000, copy })
     const options = buildEditorOptions({ rows, copy })
-    expect(options.length).toBe(7)
+    expect(options.length).toBe(8)
     expect(options.at(-1)?.value).toEqual({ kind: "delete" })
   })
 })

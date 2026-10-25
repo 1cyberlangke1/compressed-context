@@ -61,6 +61,14 @@ export const DEFAULT_NUDGE_GROWTH_TOKENS = 50_000
 export const MIN_NUDGE_GROWTH_TOKENS = 1_000
 export const MAX_NUDGE_GROWTH_TOKENS = 200_000
 
+/**
+ * 合并时保留最新的这么多个 T1 块不参与合并（保留区）。
+ * 0 表示关闭保留区；预算压力下会临时下调，见 distill.ts 的保留区让位逻辑。
+ */
+export const DEFAULT_RECENT_T1_BLOCKS = 2
+export const MIN_RECENT_T1_BLOCKS = 0
+export const MAX_RECENT_T1_BLOCKS = 10
+
 /** 可用窗口下限：低于它连最小摘要都放不下。 */
 export const MIN_CONTEXT_LIMIT = 50_000
 export const MAX_CONTEXT_LIMIT = 10_000_000
@@ -108,6 +116,8 @@ export interface CompressionSettings {
   summaryBlockPercent: number
   /** 全部摘要加起来最多占窗口的百分比 */
   summaryTotalPercent: number
+  /** 保留区：最新的这么多个 T1 块不参与合并；0 关闭 */
+  recentT1Blocks: number
   /** 摘要语言；只影响提示词 */
   summaryLanguage: SummaryLanguage
   /** 摘要格式：JSON 结构化 / Markdown 自然语言 / Babel 模型间高密度 */
@@ -139,6 +149,7 @@ export const MODEL_OVERRIDE_FIELDS = [
   "nudgeGrowthTokens",
   "summaryBlockPercent",
   "summaryTotalPercent",
+  "recentT1Blocks",
 ] as const
 
 export type ModelOverrideField = (typeof MODEL_OVERRIDE_FIELDS)[number]
@@ -151,6 +162,7 @@ export interface ModelOverride {
   nudgeGrowthTokens?: number
   summaryBlockPercent?: number
   summaryTotalPercent?: number
+  recentT1Blocks?: number
 }
 
 /** 合并后实际生效的设置：窗口一定存在（模型覆盖值或 "auto"）。 */
@@ -198,6 +210,7 @@ export const DEFAULT_SETTINGS: Settings = {
   nudgeGrowthTokens: DEFAULT_NUDGE_GROWTH_TOKENS,
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
+  recentT1Blocks: DEFAULT_RECENT_T1_BLOCKS,
   summaryLanguage: "auto",
   summaryFormat: DEFAULT_SUMMARY_FORMAT,
   autoCompress: DEFAULT_AUTO_COMPRESS,
@@ -244,6 +257,19 @@ export function readSummaryPercent(value: unknown, fallback: number): number {
   const rounded = Math.round(value * 10) / 10
   if (rounded < MIN_SUMMARY_PERCENT || rounded > MAX_SUMMARY_PERCENT) return fallback
   return rounded
+}
+
+/** 输入：任意值；输出：在范围内的保留区块数；非法返回 undefined。 */
+function readOptionalRecentT1Blocks(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  const rounded = Math.round(value)
+  if (rounded < MIN_RECENT_T1_BLOCKS || rounded > MAX_RECENT_T1_BLOCKS) return undefined
+  return rounded
+}
+
+/** 输入：任意值；输出：合法的保留区块数；非法或越界回落到 fallback。 */
+export function readRecentT1Blocks(value: unknown, fallback: number): number {
+  return readOptionalRecentT1Blocks(value) ?? fallback
 }
 
 /**
@@ -375,6 +401,8 @@ export function normalizeModelOverride(value: unknown): ModelOverride | undefine
   if (block !== undefined) override.summaryBlockPercent = block
   const total = readOptionalPercent(record["summaryTotalPercent"])
   if (total !== undefined) override.summaryTotalPercent = total
+  const recent = readOptionalRecentT1Blocks(record["recentT1Blocks"])
+  if (recent !== undefined) override.recentT1Blocks = recent
   return Object.keys(override).length === 0 ? undefined : override
 }
 
@@ -441,6 +469,9 @@ export function pruneModelOverride(
   if (override.summaryTotalPercent !== undefined && override.summaryTotalPercent !== base.summaryTotalPercent) {
     result.summaryTotalPercent = override.summaryTotalPercent
   }
+  if (override.recentT1Blocks !== undefined && override.recentT1Blocks !== base.recentT1Blocks) {
+    result.recentT1Blocks = override.recentT1Blocks
+  }
   return Object.keys(result).length === 0 ? undefined : result
 }
 
@@ -478,6 +509,7 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
     nudgeGrowthTokens: readNudgeGrowthTokens(value["nudgeGrowthTokens"], DEFAULT_NUDGE_GROWTH_TOKENS),
     summaryBlockPercent: blockPercent,
     summaryTotalPercent: totalPercent,
+    recentT1Blocks: readRecentT1Blocks(value["recentT1Blocks"], DEFAULT_RECENT_T1_BLOCKS),
     summaryLanguage: isSummaryLanguage(value["summaryLanguage"]) ? value["summaryLanguage"] : "auto",
     summaryFormat: isSummaryFormat(value["summaryFormat"]) ? value["summaryFormat"] : DEFAULT_SUMMARY_FORMAT,
     autoCompress: typeof value["autoCompress"] === "boolean" ? value["autoCompress"] : DEFAULT_AUTO_COMPRESS,

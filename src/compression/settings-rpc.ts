@@ -83,6 +83,7 @@ export async function registerSettingsRpc(
       const blocks: SummaryBlock[] = activeBlocks(state.blocks, state.pending).map((block) => ({
         id: block.id,
         tier: block.tier,
+        depth: block.depth,
         format: isBabelSummary(block.summary)
           ? "babel"
           : isMarkdownSummary(block.summary)

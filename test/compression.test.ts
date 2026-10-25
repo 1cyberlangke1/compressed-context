@@ -12,7 +12,7 @@ const SETTINGS_KEY = "settings"
 
 import { maybeAutoCompress, maybeAutoCompressStep } from "../src/compression/auto.ts"
 import { markCompactionInFlight } from "../src/compression/inflight.ts"
-import { distillOnce, mergeCandidates, planT1Phase } from "../src/compression/distill.ts"
+import { distillOnce, groupCandidates, pickMergeGroup, planT1Phase } from "../src/compression/distill.ts"
 import { handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
 import { EFFECTIVE_WINDOW_KEY, effectiveWindowKey, parseServerSettings } from "../src/compression/settings.ts"
@@ -22,7 +22,7 @@ import { loadTranscriptManifest } from "../src/compression/transcript-store.ts"
 import { countText } from "../src/shared/tokens.ts"
 import { isBabelSummary, isMarkdownSummary, type Summary, type SummaryFields } from "../src/compression/schema.ts"
 import { eligibleMessages, isCheckpoint, olderMessages, textChars, type MessageLike } from "../src/compression/select.ts"
-import { commitPending, dropPending, loadState, parseState, saveState, stateKey, withPending, type Block, type CompactionPhase, type State, type StorageLike } from "../src/compression/state.ts"
+import { commitPending, dropPending, loadState, MAX_DISTILL_ROUNDS, parseState, saveState, stateKey, withPending, type Block, type CompactionPhase, type State, type StorageLike } from "../src/compression/state.ts"
 import {
   buildMergeInstruction,
   buildT1Instruction,
@@ -64,6 +64,7 @@ const summary: SummaryFields = {
 const block: Block = {
   id: "b1",
   tier: 1,
+  depth: 1,
   summary,
   fromId: "m1",
   toId: "m9",
@@ -80,10 +81,11 @@ const message = (role: string, text: string, id?: string): MessageLike => ({
 })
 
 /** 输入：id/tier/order；输出：测试用块。 */
-const tierBlock = (id: string, tier: 1 | 2 | 3, order: number): Block => ({
+const tierBlock = (id: string, tier: number, order: number): Block => ({
   ...block,
   id,
   tier,
+  depth: tier,
   order,
 })
 
@@ -134,6 +136,7 @@ function fakeCtx(
   compact: () => Promise<void>,
   usage?: number,
   contextMessages?: readonly unknown[],
+  parentID?: string,
 ): Plugin.Context {
   const measured =
     contextMessages !== undefined
@@ -163,7 +166,11 @@ function fakeCtx(
       compact,
       generate: (input: { sessionID: string; prompt: string }) => text({ prompt: input.prompt }),
       // 默认会话属于本实例目录（守卫放行）；个别用例可覆盖成别的目录或 undefined。
-      get: () => Promise.resolve({ location: { directory: configDirectories.get(storage) ?? tmpdir() } }),
+      get: () =>
+        Promise.resolve({
+          location: { directory: configDirectories.get(storage) ?? tmpdir() },
+          ...(parentID === undefined ? {} : { parentID }),
+        }),
       ...measured,
     },
   } as unknown as Plugin.Context
@@ -231,11 +238,11 @@ describe("状态", () => {
   })
 
   it("phase 在提交时保留、失败时清掉", () => {
-    const pending = withPending({ blocks: [], attempts: 0, phase: "t2" }, block)
-    expect(commitPending(pending).phase).toBe("t2")
+    const pending = withPending({ blocks: [], attempts: 0, phase: 2 }, block)
+    expect(commitPending(pending).phase).toBe(2)
     expect(dropPending(pending, "boom").phase).toBeUndefined()
     expect(withPhase(pending, undefined).phase).toBeUndefined()
-    expect(parseState({ blocks: [], attempts: 0, phase: "t3" }).phase).toBe("t3")
+    expect(parseState({ blocks: [], attempts: 0, phase: 3 }).phase).toBe(3)
   })
 })
 
@@ -323,6 +330,7 @@ describe("服务端设置", () => {
       nudgeGrowthTokens: 50_000,
       summaryBlockPercent: 10,
       summaryTotalPercent: 50,
+      recentT1Blocks: 2,
       summaryLanguage: "auto",
       summaryFormat: "markdown",
       autoCompress: true,
@@ -340,6 +348,7 @@ describe("服务端设置", () => {
         triggerPercent: 95,
         summaryBlockPercent: 30,
         summaryTotalPercent: 60,
+      recentT1Blocks: 2,
         summaryLanguage: "zh",
       }),
     ).toEqual({
@@ -348,6 +357,7 @@ describe("服务端设置", () => {
       nudgeGrowthTokens: 50_000,
       summaryBlockPercent: 30,
       summaryTotalPercent: 60,
+      recentT1Blocks: 2,
       summaryLanguage: "zh",
       summaryFormat: "markdown",
       autoCompress: true,
@@ -502,14 +512,16 @@ describe("侧调用摘要", () => {
     expect(jsonSummary(result?.summary)?.goal).toBe(summary.goal)
   })
 
-  it("多候选返回非法 candidate 时抛出原因", async () => {
-    await expect(
-      summarizeChoiceInstruction({
-        prompt: "b1 + b2",
-        candidates: [{ index: 1, description: "b1+b2", sourceChars: 10_000, tier: 2 }],
-        generate: { text: () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }) },
-      }),
-    ).rejects.toThrow("valid candidate")
+  it("多候选返回越界 candidate 时夹到最后一个候选", async () => {
+    const result = await summarizeChoiceInstruction({
+      prompt: "b1 + b2",
+      candidates: [
+        { index: 1, description: "b1", sourceChars: 10_000, tier: 2 },
+        { index: 2, description: "b1+b2", sourceChars: 10_000, tier: 2 },
+      ],
+      generate: { text: () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }) },
+    })
+    expect(result?.candidate.index).toBe(2)
   })
 
   it("T2 连续两次坏 JSON 后第三次成功", async () => {
@@ -637,10 +649,11 @@ describe("侧调用摘要", () => {
   })
 
   it("合并提示词也带长度和语言约束", () => {
-    const prompt = buildMergeInstruction(
-      [{ index: 1, description: "b1+b2", sourceChars: 10_000, tier: 2 }],
-      { maxChars: 800, totalChars: 2_000, language: "en" },
-    )
+    const prompt = buildMergeInstruction({
+      targetTier: 2,
+      blocks: [{ id: "b1", tier: 1, title: "t1", goal: "g1" }],
+      options: { maxChars: 800, totalChars: 2_000, language: "en" },
+    })
     expect(prompt).toContain("under 800 characters")
     expect(prompt).toContain("under 2000 characters")
     expect(prompt).toContain("Write the summary in English")
@@ -1033,7 +1046,7 @@ describe("自动压缩", () => {
       [SETTINGS_KEY]: { models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } }, triggerPercent: 80 },
       [EFFECTIVE_WINDOW_KEY]: 100_000,
       // 没有块 = 摘要 0 token，预算内；旧逻辑会绕过阈值直接入队。
-      [stateKey("ses_test")]: { blocks: [], attempts: 0, phase: "t2" },
+      [stateKey("ses_test")]: { blocks: [], attempts: 0, phase: 2 },
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -1066,7 +1079,7 @@ describe("自动压缩", () => {
       [stateKey("ses_test")]: {
         blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)],
         attempts: 0,
-        phase: "t2",
+        phase: 2,
       },
     })
     let compacts = 0
@@ -1147,6 +1160,86 @@ describe("自动压缩", () => {
     expect(state.blocks).toHaveLength(1)
     expect(state.pending).toBeUndefined()
     expect(state.attempts).toBe(0)
+  })
+
+  it("子代理会话压出首块后 context 路径不再自动压缩", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
+      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      90_000,
+      undefined,
+      "ses_parent",
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("子代理会话压出首块后 step 路径不再自动压缩", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      90_000,
+      undefined,
+      "ses_parent",
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 90_000, cache: { read: 0, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("普通会话压出首块后仍会继续自动压缩", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
+      [stateKey("ses_test")]: { blocks: [block], attempts: 0 },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      90_000,
+    )
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
   })
 
   it("压缩进行中不再自动入队", async () => {
@@ -1257,7 +1350,7 @@ describe("自动压缩", () => {
         summaryTotalPercent: 1,
       },
       // 两个 24k 字符的块 ≈ 12k token，超过 1% × 50k = 500 的摘要预算。
-      [stateKey("ses_test")]: withPhase({ blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 }, "t2"),
+      [stateKey("ses_test")]: withPhase({ blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 }, 2),
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -1331,7 +1424,7 @@ describe("自动压缩", () => {
   it("phase 已排但预算回落时不再入队，并清掉残留 phase", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 },
-      [stateKey("ses_test")]: { blocks: [tierBlock("b1", 1, 1)], attempts: 0, phase: "t2" },
+      [stateKey("ses_test")]: { blocks: [tierBlock("b1", 1, 1)], attempts: 0, phase: 2 },
     })
     let compacts = 0
     const ctx = fakeCtx(
@@ -1405,55 +1498,72 @@ describe("自动压缩", () => {
   })
 })
 
-describe("合并候选", () => {
-  it("T1 T1 只有一种合法合并", () => {
-    const candidates = mergeCandidates([tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)])
-    expect(candidates).toHaveLength(1)
-    expect(candidates[0]?.tier).toBe(2)
-    expect(candidates[0]?.left.id).toBe("b1")
+describe("合并分组", () => {
+  /** 输入：id/层/顺序/摘要 token 占用；输出：可指定占用的块。 */
+  const heavy = (id: string, tier: number, order: number, summaryTokens: number): Block => ({
+    ...tierBlock(id, tier, order),
+    summaryTokens,
   })
 
-  it("T2 T2 T1 T1 只有前面 T2 对和后面 T1 对", () => {
-    const candidates = mergeCandidates([
-      tierBlock("b1", 2, 1),
-      tierBlock("b2", 2, 2),
-      tierBlock("b3", 1, 3),
-      tierBlock("b4", 1, 4),
-    ])
-    expect(candidates.map((candidate) => `${candidate.left.id}+${candidate.right.id}:T${candidate.tier.toString()}`)).toEqual([
-      "b1+b2:T3",
-      "b3+b4:T2",
-    ])
+  it("按摘要占用选层：一个大的 T2 压过两个小的 T3", () => {
+    const group = pickMergeGroup(
+      [heavy("b1", 3, 1, 40), heavy("b2", 3, 2, 40), heavy("b3", 2, 3, 150)],
+      0,
+    )
+    expect(group?.tier).toBe(2)
+    expect(group?.blocks.map((item) => item.id)).toEqual(["b3"])
   })
 
-  it("T3 T2 T1 相邻跨层都不出候选", () => {
-    // 同层才能合并：T3+T2 与 T2+T1 都是跨层，全部禁止。
-    const candidates = mergeCandidates([
-      tierBlock("b1", 3, 1),
-      tierBlock("b2", 2, 2),
-      tierBlock("b3", 1, 3),
-    ])
-    expect(candidates).toEqual([])
+  it("占用相同时取更靠左（更老）的段", () => {
+    const group = pickMergeGroup([heavy("b1", 3, 1, 100), heavy("b2", 2, 2, 100)], 0)
+    expect(group?.tier).toBe(3)
   })
 
-  it("T3 与更低层相邻时不出候选，T3+T3 仍然合法", () => {
-    // 单个 T3 不能吞掉旁边的 T2/T1——否则它会顺着链把所有块熬成一个。
-    expect(mergeCandidates([tierBlock("b1", 3, 1), tierBlock("b2", 2, 2)])).toEqual([])
-    expect(mergeCandidates([tierBlock("b1", 2, 1), tierBlock("b2", 3, 2)])).toEqual([])
-    expect(mergeCandidates([tierBlock("b1", 3, 1), tierBlock("b2", 1, 2)])).toEqual([])
-    // 两个 T3 相邻：唯一合法的最高层合并。
-    const candidates = mergeCandidates([tierBlock("b1", 3, 1), tierBlock("b2", 3, 2)])
-    expect(candidates).toHaveLength(1)
-    expect(candidates[0]?.tier).toBe(3)
-  })
-
-  it("T1 T1 T1 只能合最前面两块", () => {
-    const candidates = mergeCandidates([
+  it("保留区剔除最新的 N 个 T1", () => {
+    const blocks = [
       tierBlock("b1", 1, 1),
       tierBlock("b2", 1, 2),
       tierBlock("b3", 1, 3),
-    ])
-    expect(candidates.map((candidate) => candidate.left.id)).toEqual(["b1"])
+      tierBlock("b4", 1, 4),
+    ]
+    const group = pickMergeGroup(blocks, 2)
+    expect(group?.blocks.map((item) => item.id)).toEqual(["b1", "b2"])
+  })
+
+  it("保留区吃光候选时让位到能合两个块，而不是只自压一块", () => {
+    const blocks = [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)]
+    const group = pickMergeGroup(blocks, 2)
+    expect(group?.blocks.map((item) => item.id)).toEqual(["b1", "b2"])
+  })
+
+  it("链为空时没有可合并段", () => {
+    expect(pickMergeGroup([], 2)).toBeUndefined()
+  })
+
+  it("保留数大于 T1 数量时让位到能合两个块", () => {
+    const blocks = [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2), tierBlock("b3", 1, 3)]
+    const group = pickMergeGroup(blocks, 10)
+    expect(group?.blocks.map((item) => item.id)).toEqual(["b1", "b2"])
+  })
+
+  it("只剩一个高层块时给出自压段", () => {
+    const group = pickMergeGroup([tierBlock("b1", 2, 1)], 2)
+    expect(group?.tier).toBe(2)
+    expect(group?.blocks.map((item) => item.id)).toEqual(["b1"])
+  })
+
+  it("候选是 1..N 个块的前缀，产物层封顶 3", () => {
+    const group = {
+      tier: 2,
+      blocks: [tierBlock("b1", 2, 1), tierBlock("b2", 2, 2), tierBlock("b3", 2, 3)],
+    }
+    const candidates = groupCandidates(group)
+    expect(candidates.map((candidate) => candidate.index)).toEqual([1, 2, 3])
+    expect(candidates.every((candidate) => candidate.tier === 3)).toBe(true)
+    expect(candidates[2]?.blocks.map((item) => item.id)).toEqual(["b1", "b2", "b3"])
+
+    const capped = groupCandidates({ tier: 3, blocks: [tierBlock("b1", 3, 1), tierBlock("b2", 3, 2)] })
+    expect(capped.every((candidate) => candidate.tier === 3)).toBe(true)
   })
 })
 
@@ -1482,15 +1592,14 @@ describe("active 链", () => {
 })
 
 describe("T1 phase 决策", () => {
-  it("预算内或没有合法候选不排 T2", () => {
+  it("预算内或链为空不排合并", () => {
     expect(planT1Phase("short", [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], 5_000)).toBeUndefined()
-    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1)], 5_000)).toBeUndefined()
+    expect(planT1Phase("x".repeat(30_000), [], 5_000)).toBeUndefined()
   })
 
-  it("超预算且有合法候选排 T2", () => {
-    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], 5_000)).toBe(
-      "t2",
-    )
+  it("超预算且链非空就排合并：最短路径是自己压自己", () => {
+    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1)], 5_000)).toBe(2)
+    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], 5_000)).toBe(2)
   })
 
   it("只按 token 预算判断，字符数不再参与比较", () => {
@@ -1498,7 +1607,7 @@ describe("T1 phase 决策", () => {
     // 1000 个 ASCII 字符 ≈ 250 token：字符数大于预算不代表 token 超预算。
     expect(planT1Phase("x".repeat(1_000), blocks, 5_000)).toBeUndefined()
     // 1000 个汉字 ≈ 1000 token，超过 500 的 token 预算就要排 T2。
-    expect(planT1Phase("摘".repeat(1_000), blocks, 500)).toBe("t2")
+    expect(planT1Phase("摘".repeat(1_000), blocks, 500)).toBe(2)
   })
 })
 
@@ -1508,7 +1617,7 @@ describe("会话隔离", () => {
     await saveState(storage, "ses_a", {
       blocks: [tierBlock("b1", 1, 1)],
       attempts: 0,
-      phase: "t2",
+      phase: 2,
     })
     await saveState(storage, "ses_b", {
       blocks: [tierBlock("b1", 2, 1)],
@@ -1517,7 +1626,7 @@ describe("会话隔离", () => {
     const a = await loadState(storage, "ses_a")
     const b = await loadState(storage, "ses_b")
     expect(a.blocks[0]?.tier).toBe(1)
-    expect(a.phase).toBe("t2")
+    expect(a.phase).toBe(2)
     expect(b.blocks[0]?.tier).toBe(2)
     expect(b.phase).toBeUndefined()
   })
@@ -1559,14 +1668,14 @@ describe("compaction 事件", () => {
     const storage = memoryStorage({
       // 钩子跑过并失败时，catch 已经写过 lastError；这里模拟同样的状态。
       [stateKey("ses_event")]: {
-        ...withPhase(withPending({ blocks: [], attempts: 0 }, block), "t2"),
+        ...withPhase(withPending({ blocks: [], attempts: 0 }, block), 2),
         lastError: "network down",
       },
     })
     await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "network down")
     const state = await loadState(storage, "ses_event")
     expect(state.pending).toBeUndefined()
-    expect(state.phase).toBe("t2")
+    expect(state.phase).toBe(2)
     expect(state.attempts).toBe(1)
     expect(state.lastError).toContain("network down")
   })
@@ -1584,11 +1693,11 @@ describe("compaction 事件", () => {
 
   it("钩子没跑过的空压缩失败 + 已排 phase：保留 phase 不计失败", async () => {
     const storage = memoryStorage({
-      [stateKey("ses_event")]: { blocks: [block], attempts: 0, phase: "t2" },
+      [stateKey("ses_event")]: { blocks: [block], attempts: 0, phase: 2 },
     })
     await handleCompactionEvent(eventCtx(storage, ""), "failed", "ses_event", "Nothing to compact yet")
     const state = await loadState(storage, "ses_event")
-    expect(state.phase).toBe("t2")
+    expect(state.phase).toBe(2)
     expect(state.attempts).toBe(0)
     expect(state.blocks).toHaveLength(1)
   })
@@ -1613,13 +1722,14 @@ describe("compaction 事件", () => {
 describe("缓存尾追加", () => {
   it("T2 指令只追加在会话前缀尾部", () => {
     const prefix = "system\n[checkpoint b1 b2]\nrecent"
-    const instruction = buildMergeInstruction([
-      { index: 1, description: "b1+b2 → T2", sourceChars: 1_000, tier: 2 },
-    ])
+    const instruction = buildMergeInstruction({
+      targetTier: 2,
+      blocks: [{ id: "b1", tier: 1, title: "t1", goal: "g1" }],
+    })
     const request = `${prefix}\n${instruction}`
     expect(request.startsWith(prefix)).toBe(true)
     expect(instruction).not.toContain("Sources:")
-    expect(instruction).toContain("Candidates")
+    expect(instruction).toContain("Block group")
     expect(instruction).toContain("checkpoint")
   })
 })
@@ -1725,7 +1835,7 @@ describe("compress 工具只做 T1", () => {
     expect(pendingResult.output?.block).toBeUndefined()
 
     const phaseStorage = memoryStorage({
-      [stateKey("ses_test")]: withPhase({ blocks: [], attempts: 0 }, "t2"),
+      [stateKey("ses_test")]: withPhase({ blocks: [], attempts: 0 }, 2),
     })
     const phase = toolCtx(phaseStorage)
     await registerCompressTool(phase.ctx, new Map([["ses_test", toolMessages()]]))
@@ -1861,7 +1971,7 @@ describe("摘要单层合并", () => {
     await saveState(storage, "ses_short_t2", {
       blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3)],
       attempts: 0,
-      phase: "t2",
+      phase: 2,
     })
     const ctx = fakeCtx(
       storage,
@@ -1897,7 +2007,7 @@ describe("摘要单层合并", () => {
       // 只有一个 T3：没有下一层可合并，摘要又超预算 → 这次不动，也不拒绝以后的压缩。
       blocks: [longBlock("b1", 3, 1)],
       attempts: 2,
-      phase: "t3",
+      phase: 3,
     })
     const ctx = fakeCtx(
       storage,
@@ -1920,26 +2030,27 @@ describe("摘要单层合并", () => {
     expect(state.blocks).toHaveLength(1)
   })
 
-  it("phase=t3 时 T3 没有同层邻居，但其余同层对仍可合并", async () => {
+  it("按占用选层：两个 T1 的占用压过单个 T3", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {
       models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
       triggerPercent: 60,
       summaryBlockPercent: 20,
       summaryTotalPercent: 1,
+      recentT1Blocks: 0,
       summaryFormat: "json",
     })
     await saveState(storage, "ses_t3_then_t1", {
       blocks: [longBlock("b1", 3, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3)],
       attempts: 0,
-      phase: "t3",
+      phase: 3,
     })
     const ctx = fakeCtx(
       storage,
-      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 2, ...summary }) }),
       () => Promise.resolve(),
     )
-    // 工具输出全文远超 5000，但 transcript 只保留 2000；跨层合并被禁后这里不该再碰块。
+    // 两段占用打平（各 100）时取更靠左的 T3；这里 T1 两个块合计 200，所以选 T1 段。
     const event: CompactionEvent = {
       sessionID: "ses_t3_then_t1",
       model: { providerID: "fake", id: "model" },
@@ -2046,7 +2157,7 @@ describe("摘要单层合并", () => {
     await saveState(storage, "ses_retry_t3", {
       blocks: [longBlock("b1", 2, 1), longBlock("b2", 2, 2)],
       attempts: 0,
-      phase: "t2",
+      phase: 2,
     })
     const ctx = fakeCtx(
       storage,
@@ -2062,11 +2173,11 @@ describe("摘要单层合并", () => {
     await expect(handleCompaction(ctx, event)).rejects.toThrow("boom")
 
     const state = await loadState(storage, "ses_retry_t3")
-    expect(state.phase).toBe("t2")
+    expect(state.phase).toBe(2)
     expect(state.lastError).toContain("boom")
   })
 
-  it("T3 与 T1 不再合并：链保持原样，phase 清空", async () => {
+  it("T3 没有同层伙伴时自压，层数仍封顶 3", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {
       models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
@@ -2078,7 +2189,7 @@ describe("摘要单层合并", () => {
     await saveState(storage, "ses_t3_ceiling", {
       blocks: [longBlock("b1", 3, 1), longBlock("b2", 1, 2)],
       attempts: 0,
-      phase: "t3",
+      phase: 3,
     })
     const ctx = fakeCtx(
       storage,
@@ -2097,9 +2208,12 @@ describe("摘要单层合并", () => {
     await handleCompaction(ctx, event)
 
     const state = await loadState(storage, "ses_t3_ceiling")
-    // T3 旁边只有更低层：没有合法候选，不合并、不终止、phase 清掉。
-    expect(state.phase).toBeUndefined()
-    expect(state.pending).toBeUndefined()
+    // T3 段只有一个块：自压路径，产物层仍是 3（封顶），深度 +1。
+    expect(state.pending?.tier).toBe(3)
+    expect(state.pending?.sourceBlockIds).toEqual(["b1"])
+    expect(state.pending?.depth).toBe(4)
+    // 摘要仍然超预算：留 phase 等下一轮继续压。
+    expect(state.phase).toBe(2)
     expect(state.blocks).toHaveLength(2)
   })
 
@@ -2115,7 +2229,7 @@ describe("摘要单层合并", () => {
     await saveState(storage, "ses_parallel_compaction", {
       blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3)],
       attempts: 0,
-      phase: "t2",
+      phase: 2,
     })
     let calls = 0
     const ctx = fakeCtx(
@@ -2156,20 +2270,20 @@ describe("摘要单层合并", () => {
       state: { blocks: [block], attempts: 0 },
       pending: { ...block, id: "b2", order: 2 },
       budgetTokens: 50_000,
-      phase: "t2",
+      recentT1Blocks: 0,
     })
     expect(result.merged).toBe(false)
     expect(result.pending?.id).toBe("b2")
     expect(calls).toBe(0)
   })
 
-  it("超预算时只合并一对", async () => {
+  it("超预算时只合并模型给定的前缀", async () => {
     let calls = 0
     const ctx = fakeCtx(
       memoryStorage(),
       () => {
         calls += 1
-        return Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) })
+        return Promise.resolve({ text: JSON.stringify({ candidate: 2, ...summary }) })
       },
       () => Promise.resolve(),
     )
@@ -2179,7 +2293,7 @@ describe("摘要单层合并", () => {
       state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
       pending: longBlock("b2", 1, 2),
       budgetTokens: 5_000,
-      phase: "t2",
+      recentT1Blocks: 0,
     })
     expect(calls).toBe(1)
     expect(result.merged).toBe(true)
@@ -2196,7 +2310,7 @@ describe("摘要单层合并", () => {
       memoryStorage(),
       () => {
         calls += 1
-        return Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) })
+        return Promise.resolve({ text: JSON.stringify({ candidate: 2, ...summary }) })
       },
       () => Promise.resolve(),
     )
@@ -2209,7 +2323,7 @@ describe("摘要单层合并", () => {
       },
       pending: tierBlock("b4", 1, 4),
       budgetTokens: 5_000,
-      phase: "t2",
+      recentT1Blocks: 0,
     })
     expect(calls).toBe(1)
     expect(result.merged).toBe(true)
@@ -2223,10 +2337,10 @@ describe("摘要单层合并", () => {
     ])
   })
 
-  it("T2 后还超预算时返回 nextPhase=t3", async () => {
+  it("合并后还超预算时排下一轮合并", async () => {
     const ctx = fakeCtx(
       memoryStorage(),
-      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 2, ...summary }) }),
       () => Promise.resolve(),
     )
     const result = await distillOnce({
@@ -2238,16 +2352,16 @@ describe("摘要单层合并", () => {
       },
       pending: tierBlock("b4", 1, 4),
       budgetTokens: 5_000,
-      phase: "t2",
+      recentT1Blocks: 0,
     })
     expect(result.merged).toBe(true)
-    expect(result.nextPhase).toBe("t3")
+    expect(result.nextPhase).toBe(2)
   })
 
-  it("T3 后仍超预算且有候选时继续返回 nextPhase=t3", async () => {
+  it("T3 整段合完仍封顶 T3，压进预算后清 phase", async () => {
     const ctx = fakeCtx(
       memoryStorage(),
-      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 3, ...summary }) }),
       () => Promise.resolve(),
     )
     const result = await distillOnce({
@@ -2259,10 +2373,14 @@ describe("摘要单层合并", () => {
       },
       pending: undefined,
       budgetTokens: 5_000,
-      phase: "t3",
+      recentT1Blocks: 0,
     })
     expect(result.merged).toBe(true)
-    expect(result.nextPhase).toBe("t3")
+    // 封顶：三个 T3 合成一个 T3，不是 T4。
+    expect(result.pending?.tier).toBe(3)
+    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2", "b3"])
+    expect(result.pending?.depth).toBe(4)
+    expect(result.nextPhase).toBeUndefined()
   })
 
   it("合并摘要失败时抛出原因", async () => {
@@ -2278,7 +2396,7 @@ describe("摘要单层合并", () => {
         state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
         pending: longBlock("b2", 1, 2),
         budgetTokens: 5_000,
-        phase: "t2",
+        recentT1Blocks: 0,
       }),
     ).rejects.toThrow("not valid JSON")
   })
@@ -2298,27 +2416,85 @@ describe("摘要单层合并", () => {
       budgetTokens: 999_999,
       summaryTotalChars: 10,
       summaryBlockChars: 20_000,
-      phase: "t2",
+      recentT1Blocks: 0,
     })
     expect(result.merged).toBe(false)
   })
 
-  it("模型选择不存在的候选时抛出原因", async () => {
+  it("candidate 0 被夹到 1，走自压路径", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 0, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    const result = await distillOnce({
+      ctx,
+      sessionID: "ses_test",
+      state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+      pending: longBlock("b2", 1, 2),
+      budgetTokens: 5_000,
+      recentT1Blocks: 0,
+    })
+    expect(result.merged).toBe(true)
+    expect(result.pending?.sourceBlockIds).toEqual(["b1"])
+    expect(result.pending?.depth).toBe(2)
+  })
+
+  it("连环合并到轮数上限就停，不会无限压缩", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    const result = await distillOnce({
+      ctx,
+      sessionID: "ses_test",
+      state: { blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 },
+      pending: undefined,
+      budgetTokens: 5_000,
+      recentT1Blocks: 0,
+      distillRounds: MAX_DISTILL_ROUNDS - 1,
+    })
+    expect(result.merged).toBe(true)
+    expect(result.distillRounds).toBe(MAX_DISTILL_ROUNDS)
+    // 到了上限就不再排下一刀，避免"怎么合都压不进预算"时连环跑飞。
+    expect(result.nextPhase).toBeUndefined()
+  })
+
+  it("普通合并会把连续轮数 +1", async () => {
+    const ctx = fakeCtx(
+      memoryStorage(),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 2, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    const result = await distillOnce({
+      ctx,
+      sessionID: "ses_test",
+      state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+      pending: longBlock("b2", 1, 2),
+      budgetTokens: 5_000,
+      recentT1Blocks: 0,
+    })
+    expect(result.merged).toBe(true)
+    expect(result.distillRounds).toBe(1)
+  })
+
+  it("越界编号被夹到合法范围，不整轮失败", async () => {
     const ctx = fakeCtx(
       memoryStorage(),
       () => Promise.resolve({ text: JSON.stringify({ candidate: 99, ...summary }) }),
       () => Promise.resolve(),
     )
-    await expect(
-      distillOnce({
-        ctx,
-        sessionID: "ses_test",
-        state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
-        pending: longBlock("b2", 1, 2),
-        budgetTokens: 5_000,
-        phase: "t2",
-      }),
-    ).rejects.toThrow("valid candidate")
+    const result = await distillOnce({
+      ctx,
+      sessionID: "ses_test",
+      state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
+      pending: longBlock("b2", 1, 2),
+      budgetTokens: 5_000,
+      recentT1Blocks: 0,
+    })
+    expect(result.merged).toBe(true)
+    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2"])
   })
 
   it("合并摘要校验失败时抛出原因", async () => {
@@ -2334,7 +2510,7 @@ describe("摘要单层合并", () => {
         state: { blocks: [longBlock("b1", 1, 1)], attempts: 0 },
         pending: longBlock("b2", 1, 2),
         budgetTokens: 5_000,
-        phase: "t2",
+        recentT1Blocks: 0,
       }),
     ).rejects.toThrow("empty field: goal")
   })
@@ -2351,11 +2527,11 @@ describe("摘要单层合并", () => {
     await saveState(storage, "ses_t2_chain", {
       blocks: [longBlock("b1", 2, 1), longBlock("b2", 2, 2)],
       attempts: 0,
-      phase: "t2",
+      phase: 2,
     })
     const ctx = fakeCtx(
       storage,
-      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 2, ...summary }) }),
       () => Promise.resolve(),
     )
     const event: CompactionEvent = {
@@ -2391,7 +2567,7 @@ describe("多次压缩长跑", () => {
   it("反复压缩 40 轮：同层合并、区间连续、预算内清 phase、原文可解压", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {
-      // 窗口小、摘要预算小，逼出多层合并；模型每次都选第一个候选。
+      // 窗口小、摘要预算小，逼出多层合并；模型总是要求合满整段。
       models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
       triggerPercent: 60,
       summaryBlockPercent: 5,
@@ -2400,7 +2576,7 @@ describe("多次压缩长跑", () => {
     })
     const ctx = fakeCtx(
       storage,
-      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 999, ...summary }) }),
       () => Promise.resolve(),
     )
     let nextMessageId = 0
@@ -2474,5 +2650,69 @@ describe("多次压缩长跑", () => {
     } else {
       throw new Error(`decompress failed: ${restored.message}`)
     }
+  })
+
+  it("反复压缩 20 轮：事件对账把 pending 逐轮转正，状态不堆积", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
+      triggerPercent: 60,
+      summaryBlockPercent: 5,
+      summaryTotalPercent: 10,
+      summaryFormat: "json",
+    })
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify({ candidate: 1, ...summary }) }),
+      () => Promise.resolve(),
+    )
+    // 事件对账用独立 ctx：session.context 返回当前整条摘要链，pending marker 一定在里面。
+    const eventCtx = (): Plugin.Context =>
+      ({
+        storage,
+        session: {
+          context: () =>
+            Promise.resolve([
+              {
+                type: "compaction",
+                status: "completed",
+                summary: markers.join("\n"),
+              },
+            ]),
+          compact: () => Promise.resolve(),
+        },
+      }) as unknown as Plugin.Context
+    const markers: string[] = []
+    let nextMessageId = 0
+    for (let round = 1; round <= 20; round += 1) {
+      const messages = roundMessages(round).map((item) => {
+        const id = item.id ?? "m"
+        return { ...item, id: `${id}_${(nextMessageId += 1).toString()}` }
+      })
+      const event: CompactionEvent = {
+        sessionID: "ses_commit",
+        model: { providerID: "fake", id: "model" },
+        messages,
+      }
+      await handleCompaction(ctx, event)
+
+      // 真实流程：压缩结束后宿主发 session.compaction.ended，插件对账转正。
+      // 对账只认「最新 checkpoint 包含 pending marker」，所以维护一份 marker 集合。
+      const mid = await loadState(storage, "ses_commit")
+      for (const item of mid.blocks) markers.push(blockMarker(item.id))
+      if (mid.pending !== undefined) markers.push(blockMarker(mid.pending.id))
+      await handleCompactionEvent(eventCtx(), "ended", "ses_commit")
+
+      const state = await loadState(storage, "ses_commit")
+      // 每轮结束都不许有残留 pending：事件对账必须吃掉它。
+      expect(state.pending).toBeUndefined()
+      // 转正后 attempts 归零，下一轮不会因为旧失败计数被挡。
+      expect(state.attempts).toBe(0)
+    }
+    // 终局：块全在 storage 里，数量随轮次单调增长，没有块被悄悄丢掉。
+    const final = await loadState(storage, "ses_commit")
+    expect(final.blocks.length).toBeGreaterThanOrEqual(20)
+    const ids = final.blocks.map((item) => item.id)
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })

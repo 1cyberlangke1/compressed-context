@@ -39,6 +39,7 @@ describe("layerLabel", () => {
       nudgeGrowthTokens: 50_000,
       summaryBlockPercent: 1,
       summaryTotalPercent: 10,
+      recentT1Blocks: 2,
     } as const
     expect(layerLabel(fieldLayers(undefined, all), copy)).toBe(copy.modelPanel.sourceName)
   })
@@ -82,7 +83,8 @@ describe("summarySegments", () => {
     expect(segments[1]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.window} 1.0M（${copy.settings.limitAuto}）` })
     expect(segments[2]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.block} 5%（50k）` })
     expect(segments[3]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.total} 7%（70k）` })
-    expect(segments[4]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.nudge} 50k` })
+    expect(segments[4]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.recent} ${copy.modelPanel.recent("2")}` })
+    expect(segments[5]).toEqual({ layer: "global", text: `${copy.modelPanel.icons.nudge} 50k` })
   })
 
   test("按模型覆盖的窗口被原生压低时走 limitCapped 文案", () => {
@@ -106,6 +108,6 @@ describe("summarySegments", () => {
       copy,
     })
     expect(segments[1]?.text).toBe(`${copy.modelPanel.icons.window} ${copy.modelPanel.windowUnknown}`)
-    expect(segments[4]?.text).toBe(`${copy.modelPanel.icons.nudge} ${copy.settings.off}`)
+    expect(segments[5]?.text).toBe(`${copy.modelPanel.icons.nudge} ${copy.settings.off}`)
   })
 })

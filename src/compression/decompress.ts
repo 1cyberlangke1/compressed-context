@@ -169,7 +169,16 @@ export async function resolveDecompress(
     return { status: "error", message: "block is required (e.g. b3)" }
   }
   const blockId = raw.trim()
+  // full 优先于 depth；depth 必须是正整数。
   const full = args["full"] === true
+  const rawDepth = args["depth"]
+  let depth: number | undefined
+  if (!full && rawDepth !== undefined) {
+    if (typeof rawDepth !== "number" || !Number.isInteger(rawDepth) || rawDepth < 1) {
+      return { status: "error", message: "depth must be a positive integer (e.g. depth: 2)" }
+    }
+    depth = rawDepth
+  }
   const tempFiles = limits.tempFiles ?? defaultTempFiles
 
   const state = await loadState(ctx.storage, sessionID)
@@ -208,8 +217,15 @@ export async function resolveDecompress(
     }
   }
 
+  // full 无限展开；depth:N 最多下探 N 层；缺省 0 层（返回直接子块的摘要）。
+  // limit 语义：walk 到 level >= limit 时渲染该层子块的摘要而非继续下探。
+  const MAX_DEPTH = 20
+  if (!full && depth !== undefined && depth > MAX_DEPTH) {
+    return { status: "error", message: `depth must be at most ${MAX_DEPTH.toString()}` }
+  }
+  const limit = full ? Number.POSITIVE_INFINITY : (depth ?? 0)
   const visited = new Set<string>()
-  const walk = async (block: Block, depth: number): Promise<void> => {
+  const walk = async (block: Block, level: number): Promise<void> => {
     if (visited.has(block.id)) return
     visited.add(block.id)
     const sources = block.sourceBlockIds ?? []
@@ -217,18 +233,18 @@ export async function resolveDecompress(
       await appendStoredTranscript(ctx.storage, sessionID, block, tempFiles, limits.tempCap, append)
       return
     }
-    if (!full && depth > 0) {
-      append(renderBlock(block))
+    if (level >= limit) {
+      // 到达深度上限：渲染直接子块的摘要，不再下探。
+      for (const sourceId of sources) {
+        const source = byId.get(sourceId)
+        if (source !== undefined) append(renderBlock(source))
+      }
       return
     }
     for (const sourceId of sources) {
       const source = byId.get(sourceId)
       if (source === undefined) continue
-      if (!full) {
-        append(renderBlock(source))
-        continue
-      }
-      await walk(source, depth + 1)
+      await walk(source, level + 1)
     }
   }
 
@@ -236,7 +252,8 @@ export async function resolveDecompress(
   if (chars === 0) append("(no restorable content for this block)")
 
   const tokenLabel = limits.showTokens ? ` · ≈${tokens.toString()} tok` : ""
-  const header = `[Block ${blockId} content${full ? ", full" : ""}${tokenLabel}]`
+  const depthLabel = full ? ", full" : depth === undefined ? "" : `, depth ${depth.toString()}`
+  const header = `[Block ${blockId} content${depthLabel}${tokenLabel}]`
 
   if (filePath !== undefined) {
     return {

@@ -9,6 +9,7 @@ import {
   DEFAULT_ENABLE_COMPRESS_TOOL,
   DEFAULT_ENABLE_DECOMPRESS_TOOL,
   DEFAULT_NUDGE_GROWTH_TOKENS,
+  DEFAULT_RECENT_T1_BLOCKS,
   DEFAULT_SHOW_BLOCK_TOKENS,
   DEFAULT_SHOW_TIMELINE,
   DEFAULT_SUMMARY_BLOCK_PERCENT,
@@ -18,12 +19,14 @@ import {
   MAX_DECOMPRESS_TEMP_CAP,
   MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MAX_NUDGE_GROWTH_TOKENS,
+  MAX_RECENT_T1_BLOCKS,
   MAX_SUMMARY_PERCENT,
   MAX_TRIGGER_PERCENT,
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
   MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   MIN_NUDGE_GROWTH_TOKENS,
+  MIN_RECENT_T1_BLOCKS,
   MIN_SUMMARY_PERCENT,
   MIN_TRIGGER_PERCENT,
   isSummaryLanguage,
@@ -132,6 +135,7 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   nudgeGrowthTokens: DEFAULT_NUDGE_GROWTH_TOKENS,
   summaryBlockPercent: DEFAULT_SUMMARY_BLOCK_PERCENT,
   summaryTotalPercent: DEFAULT_SUMMARY_TOTAL_PERCENT,
+  recentT1Blocks: DEFAULT_RECENT_T1_BLOCKS,
   summaryLanguage: "auto",
   summaryFormat: DEFAULT_SUMMARY_FORMAT,
   autoCompress: DEFAULT_AUTO_COMPRESS,
@@ -168,6 +172,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   const nudge = record["nudgeGrowthTokens"] ?? DEFAULT_NUDGE_GROWTH_TOKENS
   const blockPercent = record["summaryBlockPercent"] ?? DEFAULT_SUMMARY_BLOCK_PERCENT
   const totalPercent = record["summaryTotalPercent"] ?? DEFAULT_SUMMARY_TOTAL_PERCENT
+  const recentT1Blocks = record["recentT1Blocks"] ?? DEFAULT_RECENT_T1_BLOCKS
   const language = record["summaryLanguage"] ?? "auto"
   const summaryFormat = record["summaryFormat"] ?? DEFAULT_SUMMARY_FORMAT
   // 按模型覆盖必须一起带过来，否则服务端永远只看到全局值，TUI 面板上的按模型设置形同虚设。
@@ -176,6 +181,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   if (!inRange(nudge, MIN_NUDGE_GROWTH_TOKENS, MAX_NUDGE_GROWTH_TOKENS, true)) return undefined
   if (!inRange(blockPercent, MIN_SUMMARY_PERCENT, MAX_SUMMARY_PERCENT)) return undefined
   if (!inRange(totalPercent, MIN_SUMMARY_PERCENT, MAX_SUMMARY_PERCENT)) return undefined
+  if (!inRange(recentT1Blocks, MIN_RECENT_T1_BLOCKS, MAX_RECENT_T1_BLOCKS, true)) return undefined
   if (!isSummaryLanguage(language)) return undefined
   if (!isSummaryFormat(summaryFormat)) return undefined
   const autoCompress = readStrictBoolean(record["autoCompress"], DEFAULT_AUTO_COMPRESS)
@@ -223,6 +229,7 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     nudgeGrowthTokens: Math.round(nudge),
     summaryBlockPercent: Math.round(blockPercent * 10) / 10,
     summaryTotalPercent: Math.round(totalPercent * 10) / 10,
+    recentT1Blocks: Math.round(recentT1Blocks),
     summaryLanguage: language,
     summaryFormat,
     autoCompress,

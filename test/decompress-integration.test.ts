@@ -24,6 +24,7 @@ const summary = {
 const block = (id: string, tier: 1 | 2 | 3, order: number, sourceIds?: string[]): Block => ({
   id,
   tier,
+  depth: tier,
   summary: { ...summary, title: `title ${id}` },
   fromId: `${id}-from`,
   toId: `${id}-to`,
@@ -93,6 +94,50 @@ describe("resolveDecompress（集成）", () => {
     if (result.status === "ok") {
       expect(result.inline).toContain("unavailable")
     }
+  })
+
+  it("depth:2 从 T3 下探两层，碰到 T1 读转录（无转录时占位符）", async () => {
+    // b3(T3) → b5/b6(T2) → b1/b2/b7(T1)：depth 2 允许下探到 T2 的子块层。
+    const result = await resolveDecompress({ block: "b3", depth: 2 }, { storage }, "ses_x", {
+      inlineMax: 10_000,
+      tempCap: 50,
+      showTokens: false,
+    })
+    expect(result.status).toBe("ok")
+    if (result.status === "ok") {
+      // T1 已到达：内容来自转录（这里 storage 没有转录 → 占位符）。
+      expect(result.inline).toContain("original transcript")
+      expect(result.inline).toContain("depth 2")
+    }
+  })
+
+  it("depth 超过塔深时停在 T1，不报错", async () => {
+    const result = await resolveDecompress({ block: "b5", depth: 9 }, { storage }, "ses_x", {
+      inlineMax: 10_000,
+      tempCap: 50,
+      showTokens: false,
+    })
+    expect(result.status).toBe("ok")
+  })
+
+  it("depth:0 与非正整数报参数错", async () => {
+    for (const depth of [0, -1, 1.5]) {
+      const result = await resolveDecompress({ block: "b5", depth }, { storage }, "ses_x")
+      expect(result.status).toBe("error")
+      if (result.status === "error") expect(result.message).toContain("depth")
+    }
+  })
+
+  it("depth 超过硬上限报错", async () => {
+    const result = await resolveDecompress({ block: "b5", depth: 21 }, { storage }, "ses_x")
+    expect(result.status).toBe("error")
+    if (result.status === "error") expect(result.message).toContain("at most")
+  })
+
+  it("full 与 depth 同给时 full 优先", async () => {
+    const result = await resolveDecompress({ block: "b3", full: true, depth: 1 }, { storage }, "ses_x")
+    expect(result.status).toBe("ok")
+    if (result.status === "ok") expect(result.inline).toContain("full")
   })
 
   it("token 估算可开关", async () => {

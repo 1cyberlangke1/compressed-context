@@ -32,6 +32,7 @@ const ModelOverrideJson = {
     nudgeGrowthTokens: { type: "number" },
     summaryBlockPercent: { type: "number" },
     summaryTotalPercent: { type: "number" },
+    recentT1Blocks: { type: "number" },
   },
   additionalProperties: false,
 } as const
@@ -51,6 +52,7 @@ const SettingsProperties = {
   nudgeGrowthTokens: { type: "number" },
   summaryBlockPercent: { type: "number" },
   summaryTotalPercent: { type: "number" },
+  recentT1Blocks: { type: "number" },
   summaryLanguage: { type: "string", enum: ["auto", "zh", "en"] },
   summaryFormat: { type: "string", enum: ["json", "markdown", "babel"] },
   autoCompress: { type: "boolean" },
@@ -137,7 +139,8 @@ const BlockJson = {
   type: "object",
   properties: {
     id: { type: "string" },
-    tier: { type: "number", enum: [1, 2, 3] },
+    tier: { type: "number", minimum: 1 },
+    depth: { type: "number", minimum: 1 },
     format: { type: "string", enum: ["json", "markdown", "babel"] },
     title: { type: "string" },
     at: { type: "number" },
@@ -146,7 +149,7 @@ const BlockJson = {
     sourceBlockIds: { type: "array", items: { type: "string" } },
     body: { type: "string" },
   },
-  required: ["id", "tier", "format", "title", "at", "sourceTokens", "summaryTokens", "body"],
+  required: ["id", "tier", "depth", "format", "title", "at", "sourceTokens", "summaryTokens", "body"],
   additionalProperties: false,
 } as const
 

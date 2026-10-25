@@ -4,16 +4,24 @@ import { toBabelSummary } from "./babel.ts"
 import { isSessionDeleted } from "./deleted-sessions.ts"
 import { type Summary, type SummaryFields } from "./schema.ts"
 
-/** 压缩层级：1 = 原文摘要，2/3 = 摘要再蒸馏。 */
-export type Tier = 1 | 2 | 3
+/** 压缩层级：1 = 原文摘要，2+ = 摘要再蒸馏；同层合并产出层+1，最高 MAX_TIER。 */
+export type Tier = number
 
-/** 下一次 compaction 的目的；缺省表示 T1。 */
-export type CompactionPhase = "t2" | "t3"
+/** 层级上限：顶层再做合并时仍是这个层，形成「滚动累积块」。 */
+export const MAX_TIER = 3
+
+/** 下一次 compaction 的目标层级；旧数据 "t2"/"t3" 读取时映射成 2/3。 */
+export type CompactionPhase = number
 
 /** 一个已落盘或待落盘的压缩块。 */
 export interface Block {
   readonly id: string
   readonly tier: Tier
+  /**
+   * 折叠深度：T1 块 = 1；合并块 = 1 + 子块最大 depth。
+   * 与 tier 解耦（tier 封顶 3 后仍会继续增长），供 UI 渐变与统计使用；读取是字段访问，O(1)。
+   */
+  readonly depth: number
   readonly summary: Summary
   readonly fromId: string
   readonly toId: string
@@ -42,6 +50,11 @@ export interface State {
   readonly nudgeBaselineTokens?: number
   /** 已发出的主动压缩提醒次数。 */
   readonly nudgeCount?: number
+  /**
+   * 自上次 T1 以来连续合并了几刀。
+   * 预期：摘要怎么合都压不进预算时用它刹住连环压缩；新 T1 落盘时归零。
+   */
+  readonly distillRounds?: number
 }
 
 /** pending 超过这个时长还没被事件转正就视为丢失，强制转正（宁可重复展示摘要，不可卡死会话）。 */
@@ -58,6 +71,9 @@ export const STATE_PREFIX = "compression:state:"
 
 /** 连续压缩失败达到这个次数后暂停自动压缩；同一层内还会做摘要重试。 */
 export const MAX_COMPRESSION_ATTEMPTS = 3
+
+/** 同一次 T1 之后最多连合几刀：防止「怎么合都压不进预算」时无限连环压缩。 */
+export const MAX_DISTILL_ROUNDS = 8
 
 export const EMPTY_STATE: State = { blocks: [], attempts: 0 }
 
@@ -139,8 +155,14 @@ function parseBlock(value: unknown): Block | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const block = value as Record<string, unknown>
   if (typeof block["id"] !== "string") return undefined
-  const tier = block["tier"]
-  if (tier !== 1 && tier !== 2 && tier !== 3) return undefined
+  const rawTier = block["tier"]
+  // 旧数据可能存着封顶前的 T4/T5：读得进来，统一夹到当前上限。
+  if (typeof rawTier !== "number" || !Number.isInteger(rawTier) || rawTier < 1) return undefined
+  const tier = Math.min(MAX_TIER, rawTier)
+  // depth 是后加字段：旧块没有时退回到 tier（封顶前 tier 就等于深度）。
+  const rawDepth = block["depth"]
+  const depth =
+    typeof rawDepth === "number" && Number.isInteger(rawDepth) && rawDepth >= 1 ? rawDepth : tier
   if (typeof block["fromId"] !== "string" || typeof block["toId"] !== "string") return undefined
   // 旧版字段 tokensBefore/tokensAfter 继续可读；新字段优先。
   const sourceTokens =
@@ -164,6 +186,7 @@ function parseBlock(value: unknown): Block | undefined {
   return {
     id: block["id"],
     tier,
+    depth,
     summary,
     fromId: block["fromId"],
     toId: block["toId"],
@@ -247,8 +270,20 @@ export function parseState(value: unknown): State {
   const nudgeBaselineTokens =
     typeof record["nudgeBaselineTokens"] === "number" ? record["nudgeBaselineTokens"] : undefined
   const nudgeCount = typeof record["nudgeCount"] === "number" ? record["nudgeCount"] : undefined
+  const distillRounds =
+    typeof record["distillRounds"] === "number" && Number.isInteger(record["distillRounds"])
+      ? record["distillRounds"]
+      : undefined
   const rawPhase = record["phase"]
-  const phase: CompactionPhase | undefined = rawPhase === "t2" || rawPhase === "t3" ? rawPhase : undefined
+  // 旧数据 phase 是 "t2"/"t3" 字符串；新数据是数字目标层级。两者都接受，其余丢弃。
+  const phase: CompactionPhase | undefined =
+    rawPhase === "t2"
+      ? 2
+      : rawPhase === "t3"
+        ? 3
+        : typeof rawPhase === "number" && rawPhase >= 2
+          ? rawPhase
+          : undefined
   return {
     blocks,
     attempts,
@@ -256,6 +291,7 @@ export function parseState(value: unknown): State {
     ...(lastError === undefined ? {} : { lastError }),
     ...(nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens }),
     ...(nudgeCount === undefined ? {} : { nudgeCount }),
+    ...(distillRounds === undefined ? {} : { distillRounds }),
     ...(phase === undefined ? {} : { phase }),
   }
 }
@@ -282,6 +318,7 @@ export function commitPending(state: State): State {
     attempts: 0,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
+    ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
     ...(state.phase === undefined ? {} : { phase: state.phase }),
   }
 }
@@ -293,6 +330,7 @@ export function dropPending(state: State, error: string): State {
     lastError: error,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
+    ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
   }
 }
 
@@ -317,6 +355,7 @@ export function expireStalePending(state: State, now: number): State {
       ? {}
       : { nudgeBaselineTokens: committed.nudgeBaselineTokens }),
     ...(committed.nudgeCount === undefined ? {} : { nudgeCount: committed.nudgeCount }),
+    ...(committed.distillRounds === undefined ? {} : { distillRounds: committed.distillRounds }),
   }
   return next
 }
@@ -335,6 +374,7 @@ export function retryPending(state: State, error: string): State {
     lastError: error,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
+    ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
     ...(keepPhase ? { phase: state.phase } : {}),
   }
 }
@@ -351,6 +391,7 @@ export function clearPhase(state: State): State {
     ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
+    ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
   }
 }
 

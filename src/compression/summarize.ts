@@ -147,9 +147,10 @@ const TIER3_RULES = `Guidance for ultra-condensing existing checkpoints:
 - Target roughly 30-60 tokens per source block.`
 
 function rulesFor(tier: Tier, format?: SummaryFormat): string {
+  // T4+ 复用 T3 的 ultra-condensed 规则：合并动作与深度无关，只有候选密度不同。
   if (format === "babel") return tier === 1 ? BABEL_T1_RULES : tier === 2 ? BABEL_T2_RULES : BABEL_T3_RULES
   if (tier === 2) return TIER2_RULES
-  if (tier === 3) return TIER3_RULES
+  if (tier >= 3) return TIER3_RULES
   return TIER1_RULES
 }
 
@@ -167,29 +168,48 @@ export function buildT1Instruction(options?: SummaryPromptOptions): string {
   ].join("\n")
 }
 
-/** T2/T3 的会话内指令：checkpoint 已经在 session 前缀里，只追加候选和规则。 */
-export function buildMergeInstruction(
-  candidates: readonly SummaryChoiceCandidate[],
-  options?: SummaryPromptOptions,
-): string {
-  const lines = candidates.map((candidate) => `${candidate.index.toString()}. ${candidate.description}`)
+/** T2/T3 的会话内指令：checkpoint 已经在 session 前缀里，只追加块组和规则。 */
+export function buildMergeInstruction(input: {
+  /** 合并后的目标层，决定用哪套长度规则。 */
+  readonly targetTier: Tier
+  /** 待合并的块组（从老到新）；模型从这个组里取前缀。 */
+  readonly blocks: readonly MergeBlockSummary[]
+  readonly options?: SummaryPromptOptions
+}): string {
+  const lines = input.blocks.map((block, index) => {
+    const title = block.title === "" ? "" : ` "${block.title}"`
+    const goal = block.goal === "" ? "" : ` — ${block.goal}`
+    return `${(index + 1).toString()}. #${block.id} T${block.tier.toString()}${title}${goal}`
+  })
+  const rules =
+    input.options?.format === "babel"
+      ? BABEL_CHOICE_RULES
+      : input.options?.format === "markdown"
+        ? MARKDOWN_CHOICE_RULES
+        : CHOICE_RULES
   return [
     "The checkpoint at the top of the conversation contains summary blocks.",
-    "Merge ONLY the chosen pair from the candidate list below; ignore every message after the checkpoint.",
+    "Merge a PREFIX of the block group below into ONE checkpoint; every block outside the group is context only.",
     "The messages after the checkpoint describe the current task; use them only to judge what is least needed, never include them in the merged summary.",
+    `Decide how many blocks to merge: from 1 to ${input.blocks.length.toString()}. 1 means re-condense that single block one tier higher.`,
+    `The merged block becomes tier ${input.targetTier.toString()}.`,
     "",
-    ...shapeLines(options?.format, true),
+    ...shapeLines(input.options?.format, true),
     "",
-    options?.format === "babel"
-      ? BABEL_CHOICE_RULES
-      : options?.format === "markdown"
-        ? MARKDOWN_CHOICE_RULES
-        : CHOICE_RULES,
-    ...promptRules(options),
+    rules,
+    ...promptRules(input.options),
     "",
-    "Candidates (oldest first):",
+    "Block group (oldest first):",
     ...lines,
   ].join("\n")
+}
+
+/** 提示词里描述一个待合并块所需的最小信息。 */
+export interface MergeBlockSummary {
+  readonly id: string
+  readonly tier: Tier
+  readonly title: string
+  readonly goal: string
 }
 
 /** 多候选合并时，模型要额外返回的候选信息。 */
@@ -204,29 +224,32 @@ export interface SummaryChoiceCandidate {
 }
 
 const CHOICE_RULES = `Guidance for choosing and merging:
-- Exactly one adjacent pair may be merged. Pick one candidate from the list below and merge ONLY that pair; every other block is context for the decision, not part of the merge.
-- Add a top-level "candidate": N field to the JSON object, where N is the chosen candidate number. The rest of the object must follow the exact shape above.
+- Merge the FIRST N blocks of the group below into ONE checkpoint. Blocks after the Nth stay untouched; blocks outside the group are context only.
+- Add a top-level "candidate": N field to the JSON object, where N is how many blocks you merge (1..group size). The rest of the object must follow the exact shape above.
+- N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items and blocked work, and exact facts that still matter.
-- Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
-- If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
+- Merge duplicate facts across the merged blocks, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- If the output tier is 2, target roughly 50-150 tokens per source block. If the output tier is 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts. Write in the source conversation's primary language.`
 
 const MARKDOWN_CHOICE_RULES = `Guidance for choosing and merging:
-- Exactly one adjacent pair may be merged. Pick one candidate from the list below and merge ONLY that pair; every other block is context for the decision, not part of the merge.
-- First line must be \`candidate: N\`, where N is the chosen candidate number.
+- Merge the FIRST N blocks of the group below into ONE checkpoint. Blocks after the Nth stay untouched; blocks outside the group are context only.
+- First line must be \`candidate: N\`, where N is how many blocks you merge (1..group size).
+- N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - After that line, write a self-contained markdown checkpoint starting with a short \`# Title\`.
 - Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items and blocked work, and exact facts that still matter.
-- Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
-- If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
+- Merge duplicate facts across the merged blocks, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- If the output tier is 2, target roughly 50-150 tokens per source block. If the output tier is 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts. Write in the source conversation's primary language.`
 
 const BABEL_CHOICE_RULES = `Guidance for choosing and merging:
-- Exactly one adjacent pair may be merged. Pick one candidate from the list below and merge ONLY that pair; every other block is context for the decision, not part of the merge.
-- First line must be \`c=N\`, where N is the chosen candidate number. Second line must be \`T=<short title>|G=<one-line goal>\`; after that write adaptive Babel with anchors you invent and reuse.
+- Merge the FIRST N blocks of the group below into ONE checkpoint. Blocks after the Nth stay untouched; blocks outside the group are context only.
+- First line must be \`c=N\`, where N is how many blocks you merge (1..group size). Second line must be \`T=<short title>|G=<one-line goal>\`; after that write adaptive Babel with anchors you invent and reuse.
+- N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - Babel changes only notation, not content: same policy as a normal merge checkpoint. No Markdown headings, no JSON, no prose/sentences, no code fences.
 - Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items, blocked work, and exact facts that still matter.
-- Merge duplicate facts across the chosen pair, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
-- If the chosen candidate's output tier is 2, target roughly 50-150 tokens per source block. If it is tier 3, be ultra-condensed: one to three single-line facts per source block.
+- Merge duplicate facts across the merged blocks, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- If the output tier is 2, target roughly 50-150 tokens per source block. If the output tier is 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts.`
 
 function parseJson(text: string): unknown {
@@ -393,7 +416,9 @@ async function runChoicePrompt(
           ? splitMarkdownCandidate(text)
           : splitCandidate(parseJsonSafe(text))
     if (split !== undefined && typeof split.candidate === "number" && Number.isInteger(split.candidate)) {
-      const candidate = candidates[split.candidate - 1]
+      // 越界编号夹到 [1, N]：模型多数时候只是在表达"能合多少合多少"，不该整轮失败。
+      const index = Math.min(candidates.length, Math.max(1, split.candidate))
+      const candidate = index >= 1 ? candidates[index - 1] : undefined
       if (candidate !== undefined) {
         const decoded = toSummary(split.summary, format)
         if (decoded) {

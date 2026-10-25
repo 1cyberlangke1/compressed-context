@@ -406,6 +406,7 @@ export function SettingsCommand(props: {
       nudgeGrowthTokens: copy().settings.nudgeGrowth,
       summaryBlockPercent: copy().settings.summaryBlockPercent,
       summaryTotalPercent: copy().settings.summaryTotalPercent,
+      recentT1Blocks: copy().settings.recentT1Blocks,
     }
     const presets: readonly { readonly title: string; readonly value: number | "auto" }[] =
       field === "contextLimit"
@@ -420,7 +421,12 @@ export function SettingsCommand(props: {
                 { title: copy().settings.off, value: 0 },
                 ...[25_000, 50_000, 100_000].map((value) => ({ title: formatTokens(value), value })),
               ]
-            : [5, 10, 15, 20, 25, 30, 40, 50].map((value) => ({ title: `${value.toString()}%`, value }))
+            : field === "recentT1Blocks"
+              ? [0, 1, 2, 3, 4, 6, 8, 10].map((value) => ({
+                  title: value.toString(),
+                  value,
+                }))
+              : [5, 10, 15, 20, 25, 30, 40, 50].map((value) => ({ title: `${value.toString()}%`, value }))
     const picked = await props.context.ui.dialog.select<number | "auto" | "inherit" | "custom">({
       title: `${keyLabel(key)} · ${labels[field]}`,
       options: [

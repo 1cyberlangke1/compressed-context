@@ -101,8 +101,8 @@ describe("服务端插件入口", () => {
 
     await plugin.setup(ctx)
 
-    expect(hooks.map((hook) => hook.name)).toEqual(["context", "compaction"])
-    expect(tools).toEqual(["compress", "decompress"])
+    expect(hooks.map((hook) => hook.name)).toEqual(["context", "compaction", "generate"])
+    expect(tools).toEqual(["compress", "decompress", "checkpoint_tree"])
   })
 
   it("context 钩子把统计合并进 session metadata", async () => {
@@ -137,6 +137,16 @@ describe("服务端插件入口", () => {
 
     const tools: Record<string, unknown> = { compress: {}, decompress: {}, read: {} }
     await hooks[0]?.callback({ ...emptyContext, tools })
+
+    expect(Object.keys(tools)).toEqual(["read"])
+  })
+
+  it("generate 钩子对子代理隐藏压缩工具", async () => {
+    const { ctx, hooks } = createFakeContext({ parentID: "ses_parent" })
+    await plugin.setup(ctx)
+
+    const tools: Record<string, unknown> = { compress: {}, decompress: {}, checkpoint_tree: {}, read: {} }
+    await hooks[2]?.callback({ ...emptyContext, tools })
 
     expect(Object.keys(tools)).toEqual(["read"])
   })

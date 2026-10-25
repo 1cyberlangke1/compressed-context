@@ -68,6 +68,7 @@ function block(id: string, fromId: string, toId: string): Block {
   return {
     id,
     tier: 1,
+    depth: 1,
     summary: { ...summary, title: id },
     fromId,
     toId,

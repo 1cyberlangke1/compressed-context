@@ -15,6 +15,7 @@ const FIELDS: readonly ModelOverrideField[] = [
   "nudgeGrowthTokens",
   "summaryBlockPercent",
   "summaryTotalPercent",
+  "recentT1Blocks",
 ]
 
 /** 字段来源层：全局（含内置默认）、同名覆盖、精确覆盖。 */
@@ -107,6 +108,10 @@ export function summarySegments(input: {
     {
       layer: layers.summaryTotalPercent,
       text: `${copy.modelPanel.icons.total} ${scoped.summaryTotalPercent.toString()}%${copy.modelPanel.wrap(formatTokens(limits.totalChars))}`,
+    },
+    {
+      layer: layers.recentT1Blocks,
+      text: `${copy.modelPanel.icons.recent} ${copy.modelPanel.recent(scoped.recentT1Blocks.toString())}`,
     },
     {
       layer: layers.nudgeGrowthTokens,

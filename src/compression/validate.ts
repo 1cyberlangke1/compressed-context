@@ -6,9 +6,9 @@ export const MIN_MERGE_SUMMARY_CHARS = 80
 export const MIN_ULTRA_SUMMARY_CHARS = 40
 export const MAX_SUMMARY_CHARS = 20_000
 
-/** 输入：层级；输出：该层允许的最短摘要字符数。 */
-export function minSummaryChars(tier: 1 | 2 | 3): number {
-  if (tier === 3) return MIN_ULTRA_SUMMARY_CHARS
+/** 输入：层级；输出：该层允许的最短摘要字符数；tier≥3 都按 T3 的下限。 */
+export function minSummaryChars(tier: number): number {
+  if (tier >= 3) return MIN_ULTRA_SUMMARY_CHARS
   if (tier === 2) return MIN_MERGE_SUMMARY_CHARS
   return MIN_SUMMARY_CHARS
 }

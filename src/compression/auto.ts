@@ -10,6 +10,7 @@ import {
 } from "./inflight.ts"
 import { renderAll } from "./render.ts"
 import { eligibleMessages, messageText, type MessageLike } from "./select.ts"
+import { isSubagentSession } from "./session-role.ts"
 import {
   EFFECTIVE_WINDOW_KEY,
   RESOLVED_WINDOW_KEY,
@@ -18,7 +19,7 @@ import {
   resolvedWindowKey,
   windowKey,
 } from "./settings.ts"
-import { PENDING_TIMEOUT_MS, MAX_COMPRESSION_ATTEMPTS, clearPhase, expireStalePending, loadState, type State } from "./state.ts"
+import { MAX_COMPRESSION_ATTEMPTS, MAX_DISTILL_ROUNDS, PENDING_TIMEOUT_MS, clearPhase, expireStalePending, loadState, type State } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import type { ModelRefLike } from "./summarize.ts"
 import { buildTranscript } from "./transcript.ts"
@@ -119,6 +120,19 @@ function summaryOverBudget(
     showBlockTokens: settings.showBlockTokens,
   })
   return countText(summary) > limits.budgetTokens
+}
+
+/**
+ * 输入：插件上下文 + sessionID。
+ * 输出：无。
+ * 预期：摘要自己超预算时把 phase 置为 2，让下一轮 compaction 走「合并」而不是再做一次 T1；
+ *       已有 phase 时不重复写。
+ */
+async function armMergePhase(ctx: Plugin.Context, sessionID: string): Promise<void> {
+  await stateStore(ctx.storage).transact(sessionID, (current) => {
+    if (current.phase !== undefined) return { result: undefined }
+    return { next: { ...current, phase: 2 }, result: undefined }
+  })
 }
 
 /**
@@ -231,6 +245,9 @@ export async function maybeAutoCompressStep(input: {
     if (isCompactionInFlight(input.sessionID)) return
     const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return
+    // 子代理会话短命：已经压出第一块后不再追加。它的 recent 区本来就会被父会话
+    // 继续携带，再压只会把同一批近期消息折成重复的新块。
+    if (state.blocks.length > 0 && (await isSubagentSession(input.ctx, input.sessionID))) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
     if (!settings.autoCompress) return
@@ -247,6 +264,15 @@ export async function maybeAutoCompressStep(input: {
         return
       }
       await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
+    }
+    // 与 context 路径同一条规则：摘要超预算就排合并，连环上限用完则停。
+    if (
+      summaryOverBudget(state, settings, effective) &&
+      (state.distillRounds ?? 0) < MAX_DISTILL_ROUNDS
+    ) {
+      await armMergePhase(input.ctx, input.sessionID)
+      await requestCompaction(input.ctx, input.sessionID)
+      return
     }
 
     const threshold = triggerTokens(settings, effective)
@@ -426,6 +452,8 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
 
     const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return
+    // 与 step 路径同一条子代理规则：压出首块后不再追加。
+    if (state.blocks.length > 0 && (await isSubagentSession(input.ctx, input.sessionID))) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
     if (!settings.autoCompress) return
@@ -442,6 +470,16 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
         return
       }
       await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
+    }
+    // 摘要自己就超预算（比如刚把预算改小）：不依赖 phase 也要排一次合并，
+    // 但连环上限用完后不再自动续排，避免"怎么合都压不进预算"时空转。
+    if (
+      summaryOverBudget(state, settings, limit) &&
+      (state.distillRounds ?? 0) < MAX_DISTILL_ROUNDS
+    ) {
+      await armMergePhase(input.ctx, input.sessionID)
+      await requestCompaction(input.ctx, input.sessionID)
+      return
     }
 
     const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
@@ -490,6 +528,8 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
   try {
     if (isCompactionInFlight(input.sessionID)) return
     if (isCompressionInstruction(input.messages)) return
+    // 子代理会话短命：提醒它去考虑压缩纯属打扰，直接跳过。
+    if (await isSubagentSession(input.ctx, input.sessionID)) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
     if (settings.nudgeGrowthTokens <= 0) return
