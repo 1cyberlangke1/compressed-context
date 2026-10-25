@@ -126,6 +126,7 @@ describe("SettingsCommand", () => {
         "nudge",
         "blockPercent",
         "totalPercent",
+        "recentT1Blocks",
       ])
     } finally {
       app.renderer.destroy()

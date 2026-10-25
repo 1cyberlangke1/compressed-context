@@ -91,7 +91,7 @@ export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
   nudge: "defaults",
   blockPercent: "defaults",
   totalPercent: "defaults",
-  recentT1Blocks: "summary",
+  recentT1Blocks: "defaults",
   summaryLanguage: "summary",
   summaryFormat: "summary",
   showTimeline: "summary",
@@ -302,7 +302,7 @@ export function buildSettingsOptions(input: {
       title: copy.settings.recentT1Blocks,
       value: "recentT1Blocks",
       footer: settings.recentT1Blocks.toString(),
-      category: copy.settings.categories.summary,
+      category: copy.settings.categories.defaults,
     },
     {
       title: copy.settings.summaryLanguage,

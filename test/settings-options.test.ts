@@ -104,6 +104,7 @@ describe("三层菜单", () => {
       "nudge",
       "blockPercent",
       "totalPercent",
+      "recentT1Blocks",
     ])
     expect(itemsOfGroup(all, "switches").map((option) => option.value)).toEqual([
       "autoCompress",
