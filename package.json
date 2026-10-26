@@ -49,9 +49,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "sync:version": "bun scripts/sync-version.mjs",
+    "version": "bun run sync:version",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:tui && pnpm build:tui",
     "build:tui": "bun scripts/build-tui.mjs",
-    "prepack": "bun run build:tui",
+    "prepack": "bun run sync:version && bun run build:tui",
     "test": "vitest run",
     "test:tui": "cd tui-test && bun test",
     "test:e2e:nudge": "bun scripts/e2e-nudge.mjs",

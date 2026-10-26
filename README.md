@@ -131,6 +131,8 @@ bun scripts/e2e-tool-loop.mjs  # E2E 测试：工具循环内的自动压缩
 bun scripts/e2e-update.mjs     # E2E 测试：真实 TUI 更新入口（本地 registry + 假更新命令）
 ```
 
+发版在 GitHub Actions 手动运行 `publish` workflow，并选择 `patch`、`minor` 或 `major`；workflow 会同步版本文件、跑完整检查、提交、更新远端 `main`、打 tag 并发布 npm。`dev` 只保留在本地，不推送到远端。
+
 ## 效果参考
 
 在 Terminal-Bench 的 `schemelike-metacircular-eval` 任务上做过初步实测：在 100k 窗口限制下，插件成功将单步上下文峰值压在 93,560 tokens 并顺利通过验证。由于单次测试存在随机波动，数据仅供参考，详细记录见 [docs/benchmark.md](docs/benchmark.md)。
