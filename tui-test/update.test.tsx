@@ -1,24 +1,24 @@
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
-import type { Context, DialogSelectOptions } from "@opencode/plugin/tui/context"
+import type { Context, DialogAlertOptions, DialogSelectOptions } from "@opencode/plugin/tui/context"
 import { createSignal } from "solid-js"
 
 import { resolveMessages } from "../src/i18n/index.ts"
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
 import { PLUGIN_PACKAGE, PLUGIN_VERSION } from "../src/shared/version.ts"
 import {
-  startUpdate,
   updateCommandLine,
-  type SpawnLike,
-  type SpawnedProcess,
   type UpdateCheckResult,
+  type UpdateProgress,
 } from "../src/shared/update.ts"
 import { SettingsCommand } from "../src/tui/settings.tsx"
 import type { UpdateDeps } from "../src/tui/update-menu.ts"
 
 type ToastCall = {
+  readonly title?: string
   readonly message: string
   readonly variant?: string
+  readonly duration?: number
 }
 
 interface Captured {
@@ -28,6 +28,8 @@ interface Captured {
   readonly history: DialogSelectOptions<string>[]
   /** select 调用次数。 */
   selects: number
+  /** 更新完成或失败时等待用户确认的弹窗。 */
+  readonly alerts: DialogAlertOptions[]
   /** updateSettings 调用次数；用于确认更新流程不持久化设置。 */
   updateSettingsCalls: number
   readonly toasts: ToastCall[]
@@ -44,6 +46,10 @@ function fakeContext(captured: Captured): Context {
     },
     ui: {
       dialog: {
+        alert: (options: DialogAlertOptions) => {
+          captured.alerts.push(options)
+          return Promise.resolve()
+        },
         select: (options: DialogSelectOptions<string>) => {
           captured.selects += 1
           captured.history.push(options)
@@ -83,6 +89,7 @@ async function mount(options: {
 }) {
   const captured: Captured = {
     answers: options.answers,
+    alerts: [],
     history: [],
     selects: 0,
     updateSettingsCalls: 0,
@@ -117,34 +124,14 @@ async function mount(options: {
   return { app, captured }
 }
 
-/** 输入：spawn 事件类型；输出：记录命令并触发该事件的假 spawn。 */
-function fakeSpawn(event: "spawn" | "error"): {
-  readonly spawnFn: SpawnLike
-  readonly calls: { readonly command: string; readonly args: readonly string[] }[]
-} {
-  const calls: { readonly command: string; readonly args: readonly string[] }[] = []
-  const spawnFn = ((command: string, args: readonly string[]) => {
-    calls.push({ command, args: [...args] })
-    const child: SpawnedProcess = {
-      once(name, listener) {
-        if (name === event) queueMicrotask(listener)
-        return child
-      },
-      unref: () => undefined,
-    }
-    return child
-  }) as SpawnLike
-  return { spawnFn, calls }
-}
-
-/** 输入：检查结果与真实启动函数；输出：菜单依赖。 */
+/** 输入：检查结果与真实运行函数；输出：菜单依赖。 */
 function depsFor(
   check: UpdateCheckResult | (() => Promise<UpdateCheckResult>),
-  start: UpdateDeps["start"] = () => Promise.resolve({ ok: true, command: updateCommandLine() }),
+  run: UpdateDeps["run"] = () => Promise.resolve({ ok: true, command: updateCommandLine() }),
 ): UpdateDeps {
   return {
     check: typeof check === "function" ? check : () => Promise.resolve(check),
-    start,
+    run,
   }
 }
 
@@ -315,40 +302,78 @@ describe("更新结果菜单", () => {
     }
   })
 
-  test("立即更新调用固定命令并提示重启", async () => {
+  test("更新期间显示真实进度，完成后再提示重启", async () => {
     const copy = resolveMessages("zh")
-    const fake = fakeSpawn("spawn")
+    let report: UpdateProgress | undefined
+    let finish: ((result: Awaited<ReturnType<UpdateDeps["run"]>>) => void) | undefined
+    let started: (() => void) | undefined
+    const runStarted = new Promise<void>((resolve) => {
+      started = resolve
+    })
     const { app, captured } = await mount({
       answers: ["update", "update"],
       locale: "zh",
-      deps: depsFor(NEW_VERSION, () => startUpdate({ spawn: fake.spawnFn })),
+      deps: depsFor(
+        NEW_VERSION,
+        (onProgress) =>
+          new Promise((resolve) => {
+            report = onProgress
+            finish = resolve
+            started?.()
+          }),
+      ),
     })
     try {
       captured.run?.()
-      await app.waitFor(() => captured.toasts.length >= 1)
+      await runStarted
 
-      expect(fake.calls).toEqual([{ command: "opencode", args: ["plugin", "update", PLUGIN_PACKAGE] }])
-      expect(captured.toasts[0]).toEqual({ message: copy.update.started, variant: "info" })
+      expect(captured.toasts[0]).toMatchObject({
+        title: copy.update.title,
+        message: copy.update.running,
+        variant: "info",
+      })
+      expect(captured.toasts[0]?.duration).toBeGreaterThan(5_000)
+
+      report?.("Downloading compressed-context")
+      expect(captured.toasts[1]).toMatchObject({
+        title: copy.update.title,
+        message: "Downloading compressed-context",
+        variant: "info",
+      })
+      expect(captured.toasts[1]?.duration).toBeGreaterThan(5_000)
+
+      finish?.({ ok: true, command: updateCommandLine() })
+      await app.waitFor(() => captured.alerts.length >= 1)
+
+      expect(captured.alerts).toEqual([
+        {
+          title: copy.update.title,
+          message: copy.update.succeeded,
+        },
+      ])
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("更新启动失败时提示失败并给出可执行命令", async () => {
+  test("更新失败时提示失败并给出可执行命令", async () => {
     const copy = resolveMessages("en")
-    const fake = fakeSpawn("error")
     const { app, captured } = await mount({
       answers: ["update", "update"],
       locale: "en",
-      deps: depsFor(NEW_VERSION, () => startUpdate({ spawn: fake.spawnFn })),
+      deps: depsFor(NEW_VERSION, async (onProgress) => {
+        onProgress("npm exited with code 1")
+        return { ok: false, command: updateCommandLine() }
+      }),
     })
     try {
       captured.run?.()
-      await app.waitFor(() => captured.toasts.length >= 1)
+      await app.waitFor(() => captured.alerts.length >= 1)
 
-      expect(captured.toasts[0]?.variant).toBe("error")
-      expect(captured.toasts[0]?.message).toContain(copy.update.startFailed)
-      expect(captured.toasts[0]?.message).toContain(`opencode plugin update ${PLUGIN_PACKAGE}`)
+      expect(captured.toasts[1]?.message).toBe("npm exited with code 1")
+      expect(captured.alerts[0]?.title).toBe(copy.update.title)
+      expect(captured.alerts[0]?.message).toContain(copy.update.runFailed)
+      expect(captured.alerts[0]?.message).toContain(`opencode plugin update ${PLUGIN_PACKAGE}`)
     } finally {
       app.renderer.destroy()
     }

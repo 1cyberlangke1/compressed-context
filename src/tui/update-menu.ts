@@ -4,7 +4,9 @@ import type { Messages } from "../i18n/index.ts"
 import {
   checkLatestVersion,
   startUpdate,
+  updateCommandLine,
   type UpdateCheckResult,
+  type UpdateProgress,
   type UpdateStartResult,
 } from "../shared/update.ts"
 import { PLUGIN_VERSION } from "../shared/version.ts"
@@ -15,14 +17,17 @@ type UpdateChoice = "current" | "latest" | "status" | "update" | "again" | "clos
 /** 检查与启动的注入点；测试用它避开真实网络和真实子进程。 */
 export interface UpdateDeps {
   readonly check: () => Promise<UpdateCheckResult>
-  readonly start: () => Promise<UpdateStartResult>
+  readonly run: (onProgress: UpdateProgress) => Promise<UpdateStartResult>
 }
 
-/** 生产依赖：真实 registry 查询 + 固定命令启动。 */
+/** 生产依赖：真实 registry 查询 + 固定命令执行。 */
 export const DEFAULT_UPDATE_DEPS: UpdateDeps = {
   check: () => checkLatestVersion(),
-  start: () => startUpdate(),
+  run: (onProgress) => startUpdate({ onProgress }),
 }
+
+/** 更新 toast 在进程结束前保持可见，避免长安装被默认 5 秒超时吞掉。 */
+const UPDATE_TOAST_DURATION_MS = 24 * 60 * 60 * 1_000
 
 /** 输入：检查结果 + 文案；输出：结果菜单首行的状态文案。
  *  预期：三种结果各对应一条已翻译文案，失败时不暴露底层原因。 */
@@ -63,7 +68,7 @@ function buildChoices(result: UpdateCheckResult, copy: Messages): DialogSelectOp
  * 输入：TUI 上下文、文案访问器、可注入依赖。
  * 输出：打开更新菜单的异步函数。
  * 预期：每次检查只查一次 registry；当前/最新版本是纯展示项，状态与动作跟随检查结果；
- *       立即更新只启动固定命令，不修改设置，也不持久化「最新版」状态。
+ *       立即更新执行固定命令，运行中显示真实输出行，不修改设置或持久化「最新版」状态。
  */
 export function createUpdateMenu(
   context: Context,
@@ -86,13 +91,27 @@ export function createUpdateMenu(
         if (choice === "again") continue menu
         if (choice === "current" || choice === "latest" || choice === "status") continue
 
-        const started = await deps.start()
-        if (started.ok) {
-          context.ui.toast.show({ message: text.update.started, variant: "info" })
-        } else {
+        const showProgress = (message: string): void => {
           context.ui.toast.show({
-            message: `${text.update.startFailed} ${started.command}`,
-            variant: "error",
+            title: text.update.title,
+            message,
+            variant: "info",
+            duration: UPDATE_TOAST_DURATION_MS,
+          })
+        }
+        showProgress(text.update.running)
+        const finished = await deps.run(showProgress).catch(
+          (): UpdateStartResult => ({ ok: false, command: updateCommandLine() }),
+        )
+        if (finished.ok) {
+          await context.ui.dialog.alert({
+            title: text.update.title,
+            message: text.update.succeeded,
+          })
+        } else {
+          await context.ui.dialog.alert({
+            title: text.update.title,
+            message: `${text.update.runFailed} ${finished.command}`,
           })
         }
         return

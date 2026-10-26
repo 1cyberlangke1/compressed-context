@@ -93,6 +93,11 @@ async function waitFor(predicate, plain, timeoutMs = 20_000) {
 /** 输入：进程、终端文本访问器、临时目录、假命令目录；输出：无。预期：清理本次场景。 */
 async function cleanup(proc, root) {
   try {
+    await writeFile(join(root, "release-update"), "", "utf8")
+  } catch {
+    // 临时目录可能已不可写；继续清理进程。
+  }
+  try {
     if (process.platform === "win32") {
       Bun.spawnSync(["taskkill", "/PID", String(proc.pid), "/T", "/F"], {
         stdout: "ignore",
@@ -123,14 +128,31 @@ async function cleanup(proc, root) {
 /** 输入：临时目录；输出：命令目录与日志路径。预期：只记录固定命令参数。 */
 async function createFakeOpencode(root) {
   const logPath = join(root, "update-command.log")
+  const runnerPath = join(root, "fake-update.mjs")
   const path = join(root, process.platform === "win32" ? "opencode.cmd" : "opencode")
+  await writeFile(
+    runnerPath,
+    [
+      'import { appendFileSync, existsSync } from "node:fs"',
+      'const log = process.env["UPDATE_COMMAND_LOG"]',
+      'const release = process.env["UPDATE_RELEASE_FILE"]',
+      "if (!log || !release) process.exit(1)",
+      'await Bun.write(log, `plugin update compressed-context\\nrelease=${release}\\n`)',
+      'process.stdout.write("Downloading package...\\n")',
+      "while (!existsSync(release)) await Bun.sleep(50)",
+      'appendFileSync(log, "released\\n")',
+      'process.stdout.write("Updated package\\n")',
+      "",
+    ].join("\n"),
+    "utf8",
+  )
   const content =
     process.platform === "win32"
-      ? '@echo off\r\n> "%UPDATE_COMMAND_LOG%" echo %*\r\n'
-      : '#!/bin/sh\nprintf "%s\\n" "$*" > "$UPDATE_COMMAND_LOG"\n'
+      ? '@echo off\r\nbun "%FAKE_UPDATE_SCRIPT%" %*\r\n'
+      : '#!/bin/sh\nexec bun "$FAKE_UPDATE_SCRIPT" "$@"\n'
   await writeFile(path, content, "utf8")
   if (process.platform !== "win32") await chmod(path, 0o755)
-  return { commandDir: root, logPath }
+  return { commandDir: root, logPath, runnerPath }
 }
 
 /**
@@ -150,6 +172,7 @@ async function runScenario({ locale, version, status, updateAvailable }) {
   }
   await writeFile(join(configDir, "compressed-context.json"), `${JSON.stringify({ locale }, null, 2)}\n`, "utf8")
   const fake = await createFakeOpencode(root)
+  const releasePath = join(root, "release-update")
   const terminalScreen = new Terminal({ cols: 120, rows: 40, scrollback: 0, allowProposedApi: true })
 
   const config = {
@@ -180,6 +203,8 @@ async function runScenario({ locale, version, status, updateAvailable }) {
     OPENCODE_DISABLE_FILEWATCHER: "true",
     OPENCODE_DISABLE_MODELS_FETCH: "true",
     COMPRESSED_CONTEXT_REGISTRY_URL: `http://127.0.0.1:${registry.port}`,
+    FAKE_UPDATE_SCRIPT: fake.runnerPath,
+    UPDATE_RELEASE_FILE: releasePath,
     UPDATE_COMMAND_LOG: fake.logPath,
     PATH: `${fake.commandDir}${delimiter}${process.env.PATH ?? ""}`,
     TERM: "xterm-256color",
@@ -268,6 +293,19 @@ async function runScenario({ locale, version, status, updateAvailable }) {
         throw new Error("update action did not receive keyboard focus")
       }
       proc.terminal?.write("\r")
+      assert.ok(
+        await waitFor((text) => hasText(text, "Downloading package..."), plain, 8_000),
+        "update progress did not appear in TUI",
+      )
+      await writeFile(releasePath, "", "utf8")
+      const completed = await waitFor((text) => hasText(text, copy.update.succeeded), plain, 8_000)
+      if (!completed) {
+        console.log("=== update log ===")
+        console.log(await readFile(fake.logPath, "utf8"))
+        console.log("=== screen tail ===")
+        console.log(plain().slice(-3000))
+        throw new Error("update completion did not appear in TUI")
+      }
       const logged = await waitFor(
         async () => {
           try {

@@ -57,7 +57,7 @@
     "test:e2e:nudge": "bun scripts/e2e-nudge.mjs",
     "test:e2e:tool-loop": "bun scripts/e2e-tool-loop.mjs",
     "test:e2e:native-compaction": "bun scripts/e2e-native-compaction.mjs",
-    "test:e2e:update": "bun scripts/e2e-update.mjs",
+    "test:e2e:update": "bun scripts/build-tui.mjs && bun scripts/e2e-update.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {

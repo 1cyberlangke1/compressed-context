@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process"
+import type { Readable } from "node:stream"
+import { stripVTControlCharacters } from "node:util"
 
 import { PLUGIN_PACKAGE, PLUGIN_VERSION } from "./version.ts"
 
@@ -21,15 +23,20 @@ export type UpdateCheckResult =
   | { readonly kind: "update-available"; readonly currentVersion: string; readonly latestVersion: string }
   | { readonly kind: "failed"; readonly reason: "network" | "response" | "json" | "version" }
 
-/** 启动结果；失败时也带上可直接执行的命令。 */
+/** 更新执行结果；失败时也带上可直接执行的命令。 */
 export type UpdateStartResult =
   | { readonly ok: true; readonly command: string }
   | { readonly ok: false; readonly command: string }
 
-/** 最小 spawn 形状；测试可用它注入假子进程。 */
+/** 更新进度回调；只接收已经去掉 ANSI 控制符的非空文本行。 */
+export type UpdateProgress = (line: string) => void
+
+/** 最小子进程形状；测试可用它注入 stdout/stderr 与完成事件。 */
 export interface SpawnedProcess {
-  once(event: "spawn" | "error", listener: () => void): unknown
-  unref?(): void
+  readonly stdout: Readable | null
+  readonly stderr: Readable | null
+  onError(listener: (error: Error) => void): void
+  onClose(listener: (code: number | null) => void): void
 }
 
 /** 输入：命令、固定参数与 spawn 选项；输出：子进程句柄。 */
@@ -37,7 +44,7 @@ export type SpawnLike = (
   command: string,
   args: readonly string[],
   options: {
-    readonly stdio: "ignore"
+    readonly stdio: ["ignore", "pipe", "pipe"]
     readonly detached: boolean
     readonly shell: boolean
     readonly windowsHide: boolean
@@ -183,44 +190,100 @@ export function updateCommandLine(): string {
 }
 
 /**
- * 输入：可选的假 spawn。
- * 输出：是否成功启动（不等待更新完成）。
- * 预期：只运行 `opencode plugin update <固定包名>`；启动后立刻 unref，不阻塞 TUI；
- *       同步抛错或异步 error 事件都返回失败与可执行命令。
+ * 输入：可选的假 spawn 与进度回调。
+ * 输出：更新命令结束后的成功/失败结果。
+ * 预期：只运行 `opencode plugin update <固定包名>`；stdout/stderr 按行去 ANSI 后报告；
+ *       不读取 stdin、不创建可见控制台，同步抛错或异步 error 都返回失败与可执行命令。
  */
-export function startUpdate(options: { readonly spawn?: SpawnLike } = {}): Promise<UpdateStartResult> {
+export function startUpdate(
+  options: { readonly spawn?: SpawnLike; readonly onProgress?: UpdateProgress } = {},
+): Promise<UpdateStartResult> {
   const command = updateCommandLine()
-  const spawnProcess: SpawnLike = options.spawn ?? spawn
+  const spawnProcess: SpawnLike =
+    options.spawn ??
+    ((program, args, spawnOptions) => {
+      const child = spawn(program, args, spawnOptions)
+      return {
+        stdout: child.stdout,
+        stderr: child.stderr,
+        onError(listener) {
+          child.once("error", listener)
+        },
+        onClose(listener) {
+          child.once("close", (code) => {
+            listener(code)
+          })
+        },
+      }
+    })
 
   return new Promise((resolve) => {
     let settled = false
+    const flush: (() => void)[] = []
     const finish = (result: UpdateStartResult): void => {
       if (settled) return
       settled = true
       resolve(result)
     }
+    const emit = (line: string): void => {
+      const text = cleanProgressLine(line)
+      if (text === "") return
+      try {
+        options.onProgress?.(text)
+      } catch {
+        // UI 回调失败不能中断已经开始的更新。
+      }
+    }
+    const consume = (stream: Readable | null): void => {
+      if (stream === null) return
+      const decoder = new TextDecoder()
+      let pending = ""
+      const drain = (final: boolean): void => {
+        pending += final ? decoder.decode() : ""
+        const lines = pending.split(/\r\n|\r|\n/)
+        pending = final ? "" : (lines.pop() ?? "")
+        for (const line of lines) emit(line)
+      }
+      stream.on("data", (chunk: Buffer | string) => {
+        pending += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true })
+        drain(false)
+      })
+      stream.on("end", () => {
+        drain(true)
+      })
+      flush.push(() => {
+        drain(true)
+      })
+    }
 
     try {
       const child = spawnProcess(OPENCODE_COMMAND, UPDATE_ARGS, {
-        stdio: "ignore",
-        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        // Windows 的 detached 会创建独立控制台，可能闪出 cmd 窗口。
+        detached: process.platform !== "win32",
         // Windows 上 opencode 通常是 .cmd，必须交给 shell 才能解析。
         shell: process.platform === "win32",
         windowsHide: true,
       })
-      child.once("error", () => {
+      consume(child.stdout)
+      consume(child.stderr)
+      child.onError(() => {
         finish({ ok: false, command })
       })
-      child.once("spawn", () => {
-        finish({ ok: true, command })
-        try {
-          child.unref?.()
-        } catch {
-          // 进程已经启动；unref 失败只影响句柄回收，不影响更新结果。
-        }
+      child.onClose((code) => {
+        for (const done of flush) done()
+        finish({ ok: code === 0, command })
       })
     } catch {
       finish({ ok: false, command })
     }
   })
+}
+
+/** 输入：子进程输出行；输出：可安全展示的单行文本。预期：移除 ANSI 并限制长度。 */
+function cleanProgressLine(value: string): string {
+  const text = stripVTControlCharacters(value)
+    .replace(/\s+/g, " ")
+    .trim()
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text
 }

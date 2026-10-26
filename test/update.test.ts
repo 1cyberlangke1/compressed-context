@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 
 import { describe, expect, it } from "vitest"
@@ -55,37 +56,53 @@ interface SpawnCall {
   readonly command: string
   readonly args: readonly string[]
   readonly options: {
-    readonly stdio: "ignore"
+    readonly stdio: readonly ["ignore", "pipe", "pipe"]
     readonly detached: boolean
     readonly shell: boolean
     readonly windowsHide: boolean
   }
 }
 
-/** 输入：spawn 事件类型；输出：记录命令并触发该事件的假 spawn。
- * 预期：`spawn` / `error` 事件异步触发，模拟真实 child_process 的启动回调。 */
-function fakeSpawn(event: "spawn" | "error" | "throw"): {
+/** 输入：无；输出：带 stdout/stderr 与完成事件的假子进程。 */
+class FakeProcess implements SpawnedProcess {
+  readonly stdout = new PassThrough()
+  readonly stderr = new PassThrough()
+  private readonly errorListeners: ((error: Error) => void)[] = []
+  private readonly closeListeners: ((code: number | null) => void)[] = []
+
+  onError(listener: (error: Error) => void): void {
+    this.errorListeners.push(listener)
+  }
+
+  onClose(listener: (code: number | null) => void): void {
+    this.closeListeners.push(listener)
+  }
+
+  finish(code: number | null): void {
+    this.stdout.end()
+    this.stderr.end()
+    for (const listener of this.closeListeners) listener(code)
+  }
+
+  fail(error: Error): void {
+    for (const listener of this.errorListeners) listener(error)
+  }
+}
+
+/** 输入：无；输出：记录命令并返回假子进程的 spawn。
+ * 预期：测试显式写入输出并结束进程，模拟真实 child_process 的生命周期。 */
+function fakeSpawn(): {
   readonly spawnFn: SpawnLike
   readonly calls: SpawnCall[]
-  readonly unrefed: () => boolean
+  readonly process: FakeProcess
 } {
   const calls: SpawnCall[] = []
-  let unrefed = false
+  const process = new FakeProcess()
   const spawnFn = ((command: string, args: readonly string[], options: SpawnCall["options"]) => {
-    if (event === "throw") throw new Error("spawn failed")
     calls.push({ command, args: [...args], options })
-    const child: SpawnedProcess = {
-      once(name, listener) {
-        if (name === event) queueMicrotask(listener)
-        return child
-      },
-      unref() {
-        unrefed = true
-      },
-    }
-    return child
+    return process
   }) as SpawnLike
-  return { spawnFn, calls, unrefed: () => unrefed }
+  return { spawnFn, calls, process }
 }
 
 describe("包元数据与常量", () => {
@@ -187,43 +204,86 @@ describe("checkLatestVersion", () => {
 })
 
 describe("startUpdate", () => {
-  it("使用固定命令启动并立即 unref", async () => {
-    const fake = fakeSpawn("spawn")
+  it("等待完成并逐行报告 stdout/stderr", async () => {
+    const fake = fakeSpawn()
+    const lines: string[] = []
 
-    const result = await startUpdate({ spawn: fake.spawnFn })
+    const running = startUpdate({ spawn: fake.spawnFn, onProgress: (line) => lines.push(line) })
+    fake.process.stdout.write("\u001b[32mDownloading\u001b[0m\nsecond")
+    fake.process.stderr.write("\r\nDone package")
+    fake.process.finish(0)
+    const result = await running
 
     expect(result).toEqual({ ok: true, command: `opencode plugin update ${PLUGIN_PACKAGE}` })
+    expect(lines).toEqual(["Downloading", "second", "Done package"])
     expect(fake.calls).toEqual([
       {
         command: "opencode",
         args: ["plugin", "update", PLUGIN_PACKAGE],
         options: {
-          stdio: "ignore",
-          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: process.platform !== "win32",
           shell: process.platform === "win32",
           windowsHide: true,
         },
       },
     ])
-    expect(fake.unrefed()).toBe(true)
     expect(updateCommandLine()).toBe(`opencode plugin update ${PLUGIN_PACKAGE}`)
   })
 
-  it("spawn error 事件返回失败与可执行命令", async () => {
-    const fake = fakeSpawn("error")
+  it("Windows 使用隐藏后台进程，不创建独立控制台", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")
+    if (descriptor === undefined) throw new Error("process.platform descriptor missing")
+    Object.defineProperty(process, "platform", { ...descriptor, value: "win32" })
+    try {
+      const fake = fakeSpawn()
 
-    const result = await startUpdate({ spawn: fake.spawnFn })
+      const running = startUpdate({ spawn: fake.spawnFn })
+      fake.process.finish(0)
+      const result = await running
+
+      expect(result.ok).toBe(true)
+      expect(fake.calls[0]?.options).toEqual({
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+        shell: true,
+        windowsHide: true,
+      })
+    } finally {
+      Object.defineProperty(process, "platform", descriptor)
+    }
+  })
+
+  it("spawn error 事件返回失败与可执行命令", async () => {
+    const fake = fakeSpawn()
+
+    const running = startUpdate({ spawn: fake.spawnFn })
+    fake.process.fail(new Error("spawn failed"))
+    const result = await running
 
     expect(result.ok).toBe(false)
     expect(result.command).toBe(`opencode plugin update ${PLUGIN_PACKAGE}`)
-    expect(fake.unrefed()).toBe(false)
   })
 
   it("同步抛错也返回失败而非崩溃", async () => {
-    const fake = fakeSpawn("throw")
+    const spawnFn = (() => {
+      throw new Error("spawn failed")
+    }) as SpawnLike
 
-    const result = await startUpdate({ spawn: fake.spawnFn })
+    const result = await startUpdate({ spawn: spawnFn })
 
     expect(result).toEqual({ ok: false, command: `opencode plugin update ${PLUGIN_PACKAGE}` })
+  })
+
+  it("非零退出码返回失败", async () => {
+    const fake = fakeSpawn()
+
+    const running = startUpdate({ spawn: fake.spawnFn })
+    fake.process.finish(1)
+
+    await expect(running).resolves.toEqual({
+      ok: false,
+      command: `opencode plugin update ${PLUGIN_PACKAGE}`,
+    })
   })
 })

@@ -34,8 +34,9 @@ export interface Messages {
     readonly updateNow: string
     readonly checkAgain: string
     readonly close: string
-    readonly started: string
-    readonly startFailed: string
+    readonly running: string
+    readonly succeeded: string
+    readonly runFailed: string
   }
   readonly nativeCompaction: {
     readonly title: string

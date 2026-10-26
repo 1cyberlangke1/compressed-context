@@ -38,8 +38,9 @@ export const zh: Messages = {
     updateNow: "立即更新",
     checkAgain: "重新检查",
     close: "关闭",
-    started: "更新已启动，请重启 OpenCode",
-    startFailed: "更新启动失败，请手动运行：",
+    running: "正在更新，请稍候…",
+    succeeded: "更新完成，请重启 OpenCode",
+    runFailed: "更新失败，请手动运行：",
   },
   nativeCompaction: {
     title: "OpenCode 原生自动压缩仍开启",
