@@ -44,6 +44,42 @@ function hasText(text, expected) {
   return text.replace(/\s+/g, "").includes(expected.replace(/\s+/g, ""))
 }
 
+/**
+ * 输入：终端与目标文案。
+ * 输出：文案首个单元格的样式。
+ * 预期：按终端列扫描，兼容中英文宽字符；找不到时返回 undefined。
+ */
+function rowStyle(terminal, label) {
+  for (let row = 0; row < terminal.rows; row += 1) {
+    const line = terminal.buffer.active.getLine(row)
+    if (line === undefined) continue
+    for (let column = 0; column < line.length; column += 1) {
+      const suffix = line.translateToString(false, column)
+      if (!suffix.startsWith(label)) continue
+      const cell = line.getCell(column)
+      if (cell === undefined) continue
+      return {
+        background: cell.getBgColor(),
+        foreground: cell.getFgColor(),
+        bold: cell.isBold(),
+      }
+    }
+  }
+  return undefined
+}
+
+/** 输入：终端、目标文案与参照文案；输出：目标项是否处于选中样式。 */
+function isActiveRow(terminal, expected, reference) {
+  const selected = rowStyle(terminal, expected)
+  const inactive = rowStyle(terminal, reference)
+  if (selected === undefined || inactive === undefined) return false
+  return (
+    selected.background !== inactive.background ||
+    selected.foreground !== inactive.foreground ||
+    selected.bold !== inactive.bold
+  )
+}
+
 /** 输入：判定函数、当前文本访问器与超时；输出：是否在超时前满足。 */
 async function waitFor(predicate, plain, timeoutMs = 20_000) {
   const started = Date.now()
@@ -84,19 +120,17 @@ async function cleanup(proc, root) {
   }
 }
 
-/** 输入：临时目录；输出：假 opencode 可执行路径。预期：只记录固定命令参数。 */
+/** 输入：临时目录；输出：命令目录与日志路径。预期：只记录固定命令参数。 */
 async function createFakeOpencode(root) {
-  const binDir = join(root, "bin")
-  await mkdir(binDir, { recursive: true })
   const logPath = join(root, "update-command.log")
-  const path = join(binDir, process.platform === "win32" ? "opencode.cmd" : "opencode")
+  const path = join(root, process.platform === "win32" ? "opencode.cmd" : "opencode")
   const content =
     process.platform === "win32"
       ? '@echo off\r\n> "%UPDATE_COMMAND_LOG%" echo %*\r\n'
       : '#!/bin/sh\nprintf "%s\\n" "$*" > "$UPDATE_COMMAND_LOG"\n'
   await writeFile(path, content, "utf8")
   if (process.platform !== "win32") await chmod(path, 0o755)
-  return { binDir, logPath }
+  return { commandDir: root, logPath }
 }
 
 /**
@@ -147,7 +181,7 @@ async function runScenario({ locale, version, status, updateAvailable }) {
     OPENCODE_DISABLE_MODELS_FETCH: "true",
     COMPRESSED_CONTEXT_REGISTRY_URL: `http://127.0.0.1:${registry.port}`,
     UPDATE_COMMAND_LOG: fake.logPath,
-    PATH: `${fake.binDir}${delimiter}${process.env.PATH ?? ""}`,
+    PATH: `${fake.commandDir}${delimiter}${process.env.PATH ?? ""}`,
     TERM: "xterm-256color",
     XDG_CACHE_HOME: join(root, "cache"),
     XDG_CONFIG_HOME: join(root, "xdg-config"),
@@ -167,7 +201,8 @@ async function runScenario({ locale, version, status, updateAvailable }) {
       },
     },
     env,
-    cwd: repo,
+    // Windows 的 cmd 会先查当前目录；把 TUI 跑在沙箱根目录即可稳定命中假命令。
+    cwd: root,
   })
   const plain = () => {
     const buffer = terminalScreen.buffer.active
@@ -194,7 +229,14 @@ async function runScenario({ locale, version, status, updateAvailable }) {
       await waitFor((text) => hasText(text, copy.update.checkUpdates), plain, 25_000),
       "settings menu did not show update entry",
     )
-    proc.terminal?.write("\x1b[F\r")
+    // 菜单自带搜索框；输入唯一的入口文案后等它实际渲染，再单独提交。
+    // 这样不会把导航键和确认键塞进同一批输入，避免对话框按键竞态。
+    proc.terminal?.write(copy.update.checkUpdates)
+    assert.ok(
+      await waitFor((text) => text.split(copy.update.checkUpdates).length > 2, plain),
+      "update entry filter did not settle",
+    )
+    proc.terminal?.write("\r")
     const opened = await waitFor((text) => hasText(text, copy.update.current), plain, 12_000)
     if (!opened) {
       console.log("=== screen tail ===")
@@ -212,6 +254,19 @@ async function runScenario({ locale, version, status, updateAvailable }) {
     if (updateAvailable) {
       assert.ok(hasText(screen, copy.update.updateNow), "update action missing")
       assert.ok(screen.includes("v9.9.9"), "latest version footer missing")
+      const focused = await waitFor(
+        () => isActiveRow(terminalScreen, copy.update.updateNow, copy.update.current),
+        plain,
+      )
+      if (!focused) {
+        console.log("=== update menu styles ===")
+        console.log({
+          selected: rowStyle(terminalScreen, copy.update.updateNow),
+          reference: rowStyle(terminalScreen, copy.update.current),
+        })
+        console.log(screen)
+        throw new Error("update action did not receive keyboard focus")
+      }
       proc.terminal?.write("\r")
       const logged = await waitFor(
         async () => {
@@ -225,7 +280,9 @@ async function runScenario({ locale, version, status, updateAvailable }) {
         8_000,
       )
       if (!logged) {
-        console.log("=== screen tail ===")
+        console.log("=== update screen before submit ===")
+        console.log(screen)
+        console.log("=== screen tail after submit ===")
         console.log(plain().slice(-3000))
         throw new Error("fake opencode did not receive the update command")
       }
