@@ -6,4 +6,4 @@
  * 预期：发布前运行 `pnpm sync:version`；版本号只在 package.json 手动维护。
  */
 export const PLUGIN_PACKAGE = "compressed-context"
-export const PLUGIN_VERSION = "0.2.25"
+export const PLUGIN_VERSION = "0.2.26"
