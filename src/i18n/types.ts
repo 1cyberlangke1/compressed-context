@@ -23,6 +23,20 @@ export interface Messages {
     readonly description: string
     readonly group: string
   }
+  readonly update: {
+    readonly checkUpdates: string
+    readonly title: string
+    readonly current: string
+    readonly latest: string
+    readonly upToDate: string
+    readonly available: string
+    readonly failed: string
+    readonly updateNow: string
+    readonly checkAgain: string
+    readonly close: string
+    readonly started: string
+    readonly startFailed: string
+  }
   readonly nativeCompaction: {
     readonly title: string
     readonly disable: string

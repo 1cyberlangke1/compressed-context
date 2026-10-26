@@ -7,6 +7,11 @@ import { afterEach, describe, expect, it } from "vitest"
 import { deleteSessionTempFiles, resolveDecompress } from "../src/compression/decompress.ts"
 import { forgetSession } from "../src/compression/events.ts"
 import { clearDeletedSessions, markSessionDeleted } from "../src/compression/deleted-sessions.ts"
+import {
+  effectiveWindowKey,
+  effectiveWindowModelKey,
+  resolvedWindowKey,
+} from "../src/compression/settings.ts"
 import type { MessageLike } from "../src/compression/select.ts"
 import { saveState, type Block, type StorageLike } from "../src/compression/state.ts"
 import {
@@ -132,16 +137,36 @@ describe("transcript store", () => {
     expect([...storage.data.keys()].filter((key) => key.includes("compression:transcript:ses_a:"))).toEqual([])
   })
 
-  it("forgetSession 删除 state/cache/transcript", async () => {
+  it("forgetSession 删除 state/cache/transcript/窗口缓存，且不影响同目录另一会话", async () => {
     const storage = createStorage()
     await saveState(storage, "ses_a", { blocks: [block("b1", "m1", "m2")], attempts: 0 })
     await storage.set("cache:history:ses_a", { v: 1, samples: [] })
+    await storage.set(resolvedWindowKey("ses_a"), 200_000)
+    await storage.set(effectiveWindowKey("ses_a"), 100_000)
+    await storage.set(effectiveWindowModelKey("ses_a"), "p/m")
     await saveTranscript(storage, "ses_a", block("b1", "m1", "m2"), [user("m1", "a"), user("m2", "b")])
+
+    // 同目录的另一个会话必须原样保留。
+    await saveState(storage, "ses_b", { blocks: [], attempts: 0 })
+    await storage.set("cache:history:ses_b", { v: 1, samples: [] })
+    await storage.set(resolvedWindowKey("ses_b"), 300_000)
+    await storage.set(effectiveWindowKey("ses_b"), 150_000)
+    await storage.set(effectiveWindowModelKey("ses_b"), "p/n")
+
     const ctx = { storage } as unknown as Plugin.Context
     await forgetSession(ctx, "ses_a")
     expect(storage.data.has("compression:state:ses_a")).toBe(false)
     expect(storage.data.has("cache:history:ses_a")).toBe(false)
     expect([...storage.data.keys()].filter((key) => key.includes("compression:transcript:ses_a:"))).toEqual([])
+    expect(storage.data.has(resolvedWindowKey("ses_a"))).toBe(false)
+    expect(storage.data.has(effectiveWindowKey("ses_a"))).toBe(false)
+    expect(storage.data.has(effectiveWindowModelKey("ses_a"))).toBe(false)
+
+    expect(storage.data.has("compression:state:ses_b")).toBe(true)
+    expect(storage.data.has("cache:history:ses_b")).toBe(true)
+    expect(storage.data.has(resolvedWindowKey("ses_b"))).toBe(true)
+    expect(storage.data.has(effectiveWindowKey("ses_b"))).toBe(true)
+    expect(storage.data.has(effectiveWindowModelKey("ses_b"))).toBe(true)
   })
 
   it("墓碑阻止删除后的迟到写入", async () => {

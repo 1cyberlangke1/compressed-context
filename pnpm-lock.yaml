@@ -36,6 +36,9 @@ importers:
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
+      '@xterm/headless':
+        specifier: ^6.0.0
+        version: 6.0.0
       eslint:
         specifier: ^10.13.0
         version: 10.13.0
@@ -1010,6 +1013,9 @@ packages:
 
   '@vitest/spy@5.0.5':
     resolution: {integrity: sha512-lwJRExuH417257Q5wv9QYugN9IMJkoxcrKrYxGPQkBzl7wlNpTUxD/5yNX4ESKVUIShKPgkGchYPFMWOOk0wzw==}
+
+  '@xterm/headless@6.0.0':
+    resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -3605,6 +3611,8 @@ snapshots:
       vite: 8.3.4(@types/node@26.6.5)
 
   '@vitest/spy@5.0.5': {}
+
+  '@xterm/headless@6.0.0': {}
 
   abbrev@4.0.0: {}
 

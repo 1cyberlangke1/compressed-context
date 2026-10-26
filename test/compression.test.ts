@@ -880,6 +880,154 @@ describe("自动压缩", () => {
     })
     expect(compacts).toBe(0)
   })
+
+  it("同目录同 workspaceID 的会话（context 路径）仍会入队", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 } })
+    const directory = configDirectories.get(storage) ?? tmpdir()
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      45_000,
+    )
+    ;(ctx as unknown as { location: { directory: string; workspaceID: string } }).location = {
+      directory,
+      workspaceID: "ws_a",
+    }
+    ctx.session.get = () =>
+      Promise.resolve({ location: { directory, workspaceID: "ws_a" } }) as unknown as ReturnType<
+        typeof ctx.session.get
+      >
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
+  })
+
+  it("同目录不同 workspaceID 的会话（context 路径）不自动入队", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 } })
+    const directory = configDirectories.get(storage) ?? tmpdir()
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      45_000,
+    )
+    ;(ctx as unknown as { location: { directory: string; workspaceID: string } }).location = {
+      directory,
+      workspaceID: "ws_a",
+    }
+    // 同一目录、不同 workspace 属于另一个插件实例，不能替它入队压缩。
+    ctx.session.get = () =>
+      Promise.resolve({ location: { directory, workspaceID: "ws_b" } }) as unknown as ReturnType<
+        typeof ctx.session.get
+      >
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("其他目录的会话（context 路径）不自动入队", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      45_000,
+    )
+    ctx.session.get = () =>
+      Promise.resolve({ location: { directory: "/other" } }) as unknown as ReturnType<typeof ctx.session.get>
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("同目录不同 workspaceID 的会话（step 路径）不自动入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: { models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } }, triggerPercent: 80 },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+    })
+    const directory = configDirectories.get(storage) ?? tmpdir()
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+    )
+    ;(ctx as unknown as { location: { directory: string; workspaceID: string } }).location = {
+      directory,
+      workspaceID: "ws_a",
+    }
+    ctx.session.get = () =>
+      Promise.resolve({ location: { directory, workspaceID: "ws_b" } }) as unknown as ReturnType<
+        typeof ctx.session.get
+      >
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 90_000, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
+  it("同一 location 的两个会话可以各自并发压缩", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } }, triggerPercent: 60 } })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      async () => {
+        compacts += 1
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      },
+      45_000,
+    )
+    const input = {
+      ctx,
+      messages: autoMessages(),
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    }
+    await Promise.all([
+      maybeAutoCompress({ ...input, sessionID: "ses_parallel_a" }),
+      maybeAutoCompress({ ...input, sessionID: "ses_parallel_b" }),
+    ])
+    expect(compacts).toBe(2)
+  })
+
   it("压缩成功后没有新 user 消息时 step.ended 不再入队", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: { models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } }, triggerPercent: 80 },

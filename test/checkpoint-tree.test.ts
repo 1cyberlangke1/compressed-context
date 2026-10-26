@@ -1,7 +1,13 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import type { Plugin } from "@opencode/plugin"
+import { Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
-import { renderCheckpointTree } from "../src/compression/checkpoint-tree-tool.ts"
-import type { Block, State } from "../src/compression/state.ts"
+import { registerCheckpointTreeTool, renderCheckpointTree } from "../src/compression/checkpoint-tree-tool.ts"
+import { saveState, type Block, type State, type StorageLike } from "../src/compression/state.ts"
+import { CONFIG_FILE } from "../src/shared/config-paths.ts"
 
 const summary = {
   title: "t",
@@ -130,5 +136,80 @@ describe("renderCheckpointTree", () => {
     expect(tree).toContain("2 blocks")
     expect(tree).toContain("1 b1:T1")
     expect(tree).toContain("2 b2:T1")
+  })
+})
+
+type TreeExecute = (
+  input: Record<string, never>,
+  toolCtx: { sessionID: string },
+) => Promise<{ output: { inline: string }; content: string }>
+
+/** 输入：无；输出：内存 storage。预期：state 直接存进 Map，设置走项目配置文件。 */
+function createStorage(): StorageLike {
+  const data = new Map<string, Schema.Json>()
+  return {
+    get: (key) => Promise.resolve(data.get(key)),
+    set: (key, value) => {
+      data.set(key, value)
+      return Promise.resolve()
+    },
+    remove: (key) => {
+      data.delete(key)
+      return Promise.resolve()
+    },
+  }
+}
+
+/**
+ * 输入：两个工具开关。
+ * 输出：checkpoint_tree 的 execute。
+ * 预期：配置写进独立临时项目目录，state 里放一个块，调用返回结构化树。
+ */
+async function setupTree(settings: {
+  readonly enableCheckpointTreeTool: boolean
+  readonly enableDecompressTool: boolean
+}): Promise<TreeExecute> {
+  const directory = mkdtempSync(join(tmpdir(), "cc-checkpoint-tree-"))
+  mkdirSync(join(directory, ".opencode"), { recursive: true })
+  writeFileSync(join(directory, ".opencode", CONFIG_FILE), JSON.stringify(settings), "utf8")
+  const storage = createStorage()
+  await saveState(storage, "ses_a", { blocks: [block("b1", 1, 1)], attempts: 0 })
+
+  let execute: TreeExecute | undefined
+  const ctx = {
+    storage,
+    location: { directory },
+    session: {
+      get: () => Promise.resolve({ location: { directory } }),
+    },
+    tool: {
+      transform: (callback: (tools: { add: (tool: { execute: TreeExecute }) => void }) => void) => {
+        callback({
+          add: (tool) => {
+            execute = tool.execute
+          },
+        })
+        return Promise.resolve({ dispose: () => Promise.resolve() })
+      },
+    },
+  } as unknown as Plugin.Context
+
+  await registerCheckpointTreeTool(ctx)
+  if (execute === undefined) throw new Error("checkpoint_tree tool was not registered")
+  return execute
+}
+
+describe("checkpoint_tree 独立开关", () => {
+  it("开启 checkpoint_tree、关闭 decompress 时仍然返回树", async () => {
+    const execute = await setupTree({ enableCheckpointTreeTool: true, enableDecompressTool: false })
+    const result = await execute({}, { sessionID: "ses_a" })
+    expect(result.content).toContain("1 blocks")
+    expect(result.content).not.toContain("disabled")
+  })
+
+  it("关闭 checkpoint_tree、开启 decompress 时返回禁用提示", async () => {
+    const execute = await setupTree({ enableCheckpointTreeTool: false, enableDecompressTool: true })
+    const result = await execute({}, { sessionID: "ses_a" })
+    expect(result.content).toContain("disabled")
   })
 })

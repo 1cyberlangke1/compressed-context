@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { formatTokens } from "../shared/format.ts"
+import { sameLocation } from "../shared/location.ts"
 import { resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
 import { countText, estimateCategories, totalCategories, type ToolDefinitionLike } from "../shared/tokens.ts"
 import { endCompactionRequest, isCompactionInFlight, tryBeginCompactionRequest } from "./inflight.ts"
@@ -420,7 +421,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
   try {
     // 插件按 location 各加载一份：只让会话所属 location 处理，否则会用错项目的设置压别人的会话。
     const session = await input.ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
-    if (session?.location.directory !== input.ctx.location.directory) return
+    if (session === undefined || !sameLocation(session.location, input.ctx.location)) return
     if (isCompactionInFlight(input.sessionID)) return
 
     const state = await expireStalePendingStorage(input.ctx, input.sessionID)
@@ -493,7 +494,7 @@ export async function maybeAutoCompressStep(input: {
   try {
     // 插件按 location 各加载一份；只让 session 所属 location 处理。
     const session = await input.ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
-    if (session?.location.directory !== input.ctx.location.directory) return
+    if (session === undefined || !sameLocation(session.location, input.ctx.location)) return
     if (isCompactionInFlight(input.sessionID)) return
     const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return

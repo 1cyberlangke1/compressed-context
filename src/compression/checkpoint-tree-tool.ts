@@ -132,7 +132,7 @@ export async function registerCheckpointTreeTool(ctx: Plugin.Context): Promise<D
           }
         }
         const settings = await loadServerSettings(ctx)
-        if (!settings.enableDecompressTool) {
+        if (!settings.enableCheckpointTreeTool) {
           const message = "checkpoint_tree tool is disabled in settings"
           return { output: { inline: message }, content: message }
         }

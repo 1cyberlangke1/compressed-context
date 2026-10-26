@@ -58,6 +58,7 @@ import {
   type SettingsSection,
   type ToggleSetting,
 } from "./settings/options.ts"
+import { createUpdateMenu, DEFAULT_UPDATE_DEPS, type UpdateDeps } from "./update-menu.ts"
 import type { UpdateSettings } from "./types.ts"
 
 /** 设置导航的返回结果：`back` 回上一层，`done` 结束（弹窗已经在屏幕上）。 */
@@ -78,7 +79,7 @@ const PRESET_LIMITS = [
 ] as const
 
 /**
- * 输入：TUI 插件上下文 + 设置。
+ * 输入：TUI 插件上下文 + 设置；`updateDeps` 仅供测试注入。
  * 输出：注册 /compressed-context 命令（斜杠 + 命令面板）。
  * 预期：打开设置菜单；所有文案来自语言文件，切换语言后命令会重新注册。
  */
@@ -86,9 +87,12 @@ export function SettingsCommand(props: {
   readonly context: Context
   readonly settings: Settings
   readonly updateSettings: UpdateSettings
+  readonly updateDeps?: UpdateDeps
 }) {
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
   const [resolvedWindow, setResolvedWindow] = createSignal<number | undefined>(undefined)
+  /** 输入：无；输出：打开更新菜单的函数。预期：测试可注入假 registry 与假 spawn。 */
+  const openUpdate = createUpdateMenu(props.context, copy, props.updateDeps ?? DEFAULT_UPDATE_DEPS)
 
   /** 输入：无；输出：当前生效的窗口；预期：只剩模型原生窗口——全局不再有上限设置。 */
   const currentWindow = (): number | undefined => resolvedWindow()
@@ -768,7 +772,8 @@ export function SettingsCommand(props: {
   /**
    * 输入：无。
    * 输出：无。
-   * 预期：第一层是 默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面；esc 逐层返回，最外层才关闭。
+   * 预期：第一层是 默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面 / 检查更新；
+   *       esc 逐层返回，最外层才关闭；更新菜单关闭后回到第一层。
    */
   async function openSettings(): Promise<void> {
     for (;;) {
@@ -784,6 +789,10 @@ export function SettingsCommand(props: {
         }),
       })
       if (section === undefined) return
+      if (section === "update") {
+        await openUpdate()
+        continue
+      }
       const result = section === "models" ? await openModelSection() : await openGroup(section)
       if (result === "done") return
     }

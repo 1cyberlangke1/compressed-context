@@ -1,12 +1,18 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { cacheHistoryKey } from "../shared/cache.ts"
+import { sameLocation, type LocationLike } from "../shared/location.ts"
 import { forEachScannedEntry } from "../shared/scan.ts"
 import { clearActiveSummary } from "./active-summary-cache.ts"
 import { recordCacheHistory } from "./cache-history.ts"
 import { deleteSessionTempFiles } from "./decompress.ts"
 import { markSessionDeleted } from "./deleted-sessions.ts"
 import { blockMarker } from "./render.ts"
+import {
+  effectiveWindowKey,
+  effectiveWindowModelKey,
+  resolvedWindowKey,
+} from "./settings.ts"
 import { deleteTranscriptsForSession } from "./transcript-store.ts"
 import { measuredPromptTokens } from "./auto.ts"
 import { isCompactionInFlight } from "./inflight.ts"
@@ -123,7 +129,8 @@ export interface SessionEventOptions {
 /**
  * 输入：插件上下文 + sessionID。
  * 输出：无。
- * 预期：先打墓碑阻止迟到写入，再删 state、cache history、transcript 与临时文件。
+ * 预期：先打墓碑阻止迟到写入，再删 state、cache history、transcript、
+ *       该会话的窗口解析缓存（原生 / 生效 / 生效模型）与临时文件。
  */
 export async function forgetSession(ctx: Plugin.Context, sessionID: string): Promise<void> {
   markSessionDeleted(sessionID)
@@ -133,11 +140,25 @@ export async function forgetSession(ctx: Plugin.Context, sessionID: string): Pro
     await Promise.all([
       ctx.storage.remove(stateKey(sessionID)),
       ctx.storage.remove(cacheHistoryKey(sessionID)),
+      ctx.storage.remove(resolvedWindowKey(sessionID)),
+      ctx.storage.remove(effectiveWindowKey(sessionID)),
+      ctx.storage.remove(effectiveWindowModelKey(sessionID)),
       deleteTranscriptsForSession(ctx.storage, sessionID),
     ])
   } catch {
     // best effort：删不掉也不影响当前进程
   }
+}
+
+/** 输入：事件里未校验的 location 字段；输出：可比较的 location，形状不对时 undefined。 */
+function readLocation(value: unknown): LocationLike | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const directory = record["directory"]
+  if (typeof directory !== "string") return undefined
+  const workspaceID = record["workspaceID"]
+  if (workspaceID !== undefined && typeof workspaceID !== "string") return undefined
+  return { directory, workspaceID }
 }
 
 /** 输入：事件里未校验的 tokens 字段；输出：规范化后的 usage，形状不对时 undefined。 */
@@ -178,6 +199,8 @@ export function startSessionEvents(
   // 本实例确认过归属的会话。session.deleted 之后已经查不到会话，
   // 只能靠这份集合判断“这条删除事件是不是我负责清理的”。
   const owned = new Set<string>()
+  // 已通过 session.moved 明确迁走的会话；宿主查询可能晚于事件更新，不能再从 get 结果重新认领。
+  const disowned = new Set<string>()
 
   /**
    * 输入：sessionID。
@@ -186,14 +209,19 @@ export function startSessionEvents(
    */
   const owns = async (sessionID: string): Promise<boolean> => {
     if (owned.has(sessionID)) return true
+    if (disowned.has(sessionID)) return false
     const session = await ctx.session.get({ sessionID }).catch(() => undefined)
-    if (session?.location.directory !== ctx.location.directory) return false
+    if (!sameLocation(session?.location, ctx.location)) return false
     owned.add(sessionID)
     return true
   }
 
   /** 输入：单条事件；输出：无；预期：处理一条事件，异常由外层兜住，不影响后续事件。 */
-  const handleEvent = async (event: { readonly type: string; readonly data: unknown }): Promise<void> => {
+  const handleEvent = async (event: {
+    readonly type: string
+    readonly data: unknown
+    readonly location?: unknown
+  }): Promise<void> => {
     switch (event.type) {
       case "session.step.ended": {
         const data = event.data as {
@@ -240,11 +268,29 @@ export function startSessionEvents(
         options.onSessionIdle?.(data.sessionID)
         return
       }
+      case "session.moved": {
+        const data = event.data as { sessionID: string; location?: unknown }
+        // 移动事件同时投给旧 location 与新 location 的实例：先让旧归属立即失效。
+        owned.delete(data.sessionID)
+        // payload 的 data.location 是真实目的地；信封 location 是源 location，不能拿来兜底。
+        // 读不到目的地说明载荷缺失/损坏，按已迁走处理，宁可漏记也不能把旧会话重新认领。
+        const destination = readLocation(data.location)
+        if (sameLocation(destination, ctx.location)) {
+          disowned.delete(data.sessionID)
+          owned.add(data.sessionID)
+        } else {
+          disowned.add(data.sessionID)
+        }
+        return
+      }
       case "session.deleted": {
         const data = event.data as { sessionID: string }
-        // 删除事件不带 location，会话本身也已经不存在；只清理本实例确认过的会话。
-        if (!owned.has(data.sessionID)) return
+        // 删除是全局事实：事件通常带 location，但不能据此只清一个实例；
+        // 本实例可能通过钩子/工具写过 state 却没进 owned。
+        // 因此不按 owned 过滤：统一打墓碑并清理（存储 key 全局共享，重复删除无害），
+        // 否则在途压缩收尾会把刚删掉的会话写回来。
         owned.delete(data.sessionID)
+        disowned.delete(data.sessionID)
         await forgetSession(ctx, data.sessionID)
         options.onSessionDeleted?.(data.sessionID)
         return
@@ -342,13 +388,21 @@ async function cleanupOrphanStates(ctx: Plugin.Context): Promise<void> {
   })
 }
 
-/** 输入：服务端上下文；输出：无；预期：启动时对账所有 pending 状态并清理孤儿。 */
+/**
+ * 输入：服务端上下文。
+ * 输出：无。
+ * 预期：启动时清理孤儿，并只对账「属于本实例 location」的 pending；
+ *       storage 按插件全局共享，查询不到或查询失败一律跳过，宁可少记不可重复。
+ */
 export async function reconcileAll(ctx: Plugin.Context): Promise<void> {
   try {
     await cleanupOrphanStates(ctx)
     await forEachStateEntry(ctx, async (sessionID) => {
       // 压缩钩子自己会写 state；启动对账跳过它，避免把正在生成的 pending 丢掉。
       if (isCompactionInFlight(sessionID)) return
+      // 对账会改写 pending；必须确认会话属于本实例，否则会替别的 location 丢掉 pending。
+      const session = await ctx.session.get({ sessionID }).catch(() => undefined)
+      if (!sameLocation(session?.location, ctx.location)) return
       await stateStore(ctx.storage).transact(sessionID, async (state) => {
         // 拿到锁后再确认一次：压缩钩子可能刚好在这两步之间启动。
         if (isCompactionInFlight(sessionID)) return { result: undefined }

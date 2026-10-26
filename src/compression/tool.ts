@@ -3,7 +3,7 @@ import { Schema } from "effect"
 
 import { resolveSummaryLimits, type SummaryFormat } from "../shared/settings.ts"
 import { createT1Block } from "./block.ts"
-import { isCompactionInFlight } from "./inflight.ts"
+import { endCompactionRequest, tryBeginCompactionRequest } from "./inflight.ts"
 import { toSummary } from "./normalize.ts"
 import { summaryInputFor } from "./schema.ts"
 import { loadServerSettings, readStoredWindow } from "./settings.ts"
@@ -109,82 +109,89 @@ export async function registerCompressTool(
         if (await isSubagentSession(ctx, sessionID)) {
           return failure("compress is unavailable in subagent sessions")
         }
-        if (isCompactionInFlight(sessionID)) return failure("compression already in progress")
-        const state = await loadState(ctx.storage, sessionID)
-        if (state.pending || state.phase !== undefined) return failure("compression already in progress")
-
-        let eligible: readonly MessageLike[] | undefined
+        // 与自动压缩共用同一个进程级发起锁：手动和自动只能有一个真正调用 session.compact。
+        // 抢不到时直接失败，不能等锁；否则同一会话会并发入队两次压缩。
+        if (!tryBeginCompactionRequest(sessionID)) return failure("compression already in progress")
         try {
-          const raw = await ctx.session.context({ sessionID })
-          eligible = eligibleMessages(sessionMessagesToMessageLikes(raw))
-        } catch {
-          // 兼容旧测试替身；生产路径不传 legacyCache。
-          eligible = legacyCache === undefined ? undefined : (legacyCache.get(sessionID) ?? [])
-        }
-        if (eligible === undefined) return failure("failed to read session context")
-        const transcript = buildTranscript(eligible)
-        const sourceChars = transcript.length
-        if (eligible.length === 0) return failure("nothing to compress")
-        if (sourceChars < MIN_SOURCE_CHARS) {
-          return failure(
-            `not enough content to compress (${sourceChars.toString()} chars, min ${MIN_SOURCE_CHARS.toString()})`,
-          )
-        }
+          const state = await loadState(ctx.storage, sessionID)
+          if (state.pending || state.phase !== undefined) return failure("compression already in progress")
 
-        const settings = await loadServerSettings(ctx)
-        if (!settings.enableCompressTool) return failure("compress tool is disabled in settings")
-        // 优先用当前会话模型自己的窗口；取不到再回退最近一次解析值。
-        const windowTokens = await readStoredWindow(ctx, sessionID)
-        const limits = resolveSummaryLimits(settings, windowTokens)
-        const summary = toSummary(input, settings.summaryFormat)
-        if (summary === undefined) return failure("invalid summary shape")
-        const validation = validateSummary(summary, sourceChars, undefined, limits.blockChars)
-        if (!validation.ok) return failure(validation.message)
-
-        const range = messageRange(eligible)
-        if (range === undefined) {
-          return failure("messages are missing ids")
-        }
-
-        // 长耗时的摘要校验在锁外完成；落 pending 时重新检查状态并用最新 blocks 生成 id。
-        type SaveOutcome = { readonly error: string } | { readonly block: Block }
-        const saved = await stateStore(ctx.storage).transact<SaveOutcome>(sessionID, (fresh) => {
-          if (fresh.pending !== undefined || fresh.phase !== undefined) {
-            return { result: { error: "compression already in progress" } }
+          let eligible: readonly MessageLike[] | undefined
+          try {
+            const raw = await ctx.session.context({ sessionID })
+            eligible = eligibleMessages(sessionMessagesToMessageLikes(raw))
+          } catch {
+            // 兼容旧测试替身；生产路径不传 legacyCache。
+            eligible = legacyCache === undefined ? undefined : (legacyCache.get(sessionID) ?? [])
           }
-          const block = createT1Block({
-            blocks: fresh.blocks,
-            summary,
-            fromId: range.fromId,
-            toId: range.toId,
-            sourceChars,
+          if (eligible === undefined) return failure("failed to read session context")
+          const transcript = buildTranscript(eligible)
+          const sourceChars = transcript.length
+          if (eligible.length === 0) return failure("nothing to compress")
+          if (sourceChars < MIN_SOURCE_CHARS) {
+            return failure(
+              `not enough content to compress (${sourceChars.toString()} chars, min ${MIN_SOURCE_CHARS.toString()})`,
+            )
+          }
+
+          const settings = await loadServerSettings(ctx)
+          if (!settings.enableCompressTool) return failure("compress tool is disabled in settings")
+          // 优先用当前会话模型自己的窗口；取不到再回退最近一次解析值。
+          const windowTokens = await readStoredWindow(ctx, sessionID)
+          const limits = resolveSummaryLimits(settings, windowTokens)
+          const summary = toSummary(input, settings.summaryFormat)
+          if (summary === undefined) return failure("invalid summary shape")
+          const validation = validateSummary(summary, sourceChars, undefined, limits.blockChars)
+          if (!validation.ok) return failure(validation.message)
+
+          const range = messageRange(eligible)
+          if (range === undefined) {
+            return failure("messages are missing ids")
+          }
+
+          // 长耗时的摘要校验在锁外完成；落 pending 时重新检查状态并用最新 blocks 生成 id。
+          type SaveOutcome = { readonly error: string } | { readonly block: Block }
+          const saved = await stateStore(ctx.storage).transact<SaveOutcome>(sessionID, (fresh) => {
+            if (fresh.pending !== undefined || fresh.phase !== undefined) {
+              return { result: { error: "compression already in progress" } }
+            }
+            const block = createT1Block({
+              blocks: fresh.blocks,
+              summary,
+              fromId: range.fromId,
+              toId: range.toId,
+              sourceChars,
+            })
+            return { next: withPending(fresh, block), result: { block } }
           })
-          return { next: withPending(fresh, block), result: { block } }
-        })
-        if ("error" in saved) return failure(saved.error)
-        const block = saved.block
+          if ("error" in saved) return failure(saved.error)
+          const block = saved.block
 
-        // transcript 落盘失败不应阻断摘要；解压时会降级为占位符。
-        // 先落 pending 再写 transcript：summary 生成前 transcript 一定已经写完。
-        try {
-          await saveTranscript(ctx.storage, sessionID, block, eligible)
-        } catch {
-          // best effort
-        }
+          // transcript 落盘失败不应阻断摘要；解压时会降级为占位符。
+          // 先落 pending 再写 transcript：summary 生成前 transcript 一定已经写完。
+          try {
+            await saveTranscript(ctx.storage, sessionID, block, eligible)
+          } catch {
+            // best effort
+          }
 
-        try {
-          await ctx.session.compact({ sessionID })
-        } catch (error) {
-          await stateStore(ctx.storage).transact(sessionID, (fresh) => ({
-            next: { ...fresh, lastError: String(error) },
-            result: undefined,
-          }))
-          return failure(`failed to start compaction: ${String(error)}`)
-        }
+          try {
+            await ctx.session.compact({ sessionID })
+          } catch (error) {
+            await stateStore(ctx.storage).transact(sessionID, (fresh) => ({
+              next: { ...fresh, lastError: String(error) },
+              result: undefined,
+            }))
+            return failure(`failed to start compaction: ${String(error)}`)
+          }
 
-        return {
-          output: { block: block.id, status: "queued" },
-          content: `queued compression ${block.id}`,
+          return {
+            output: { block: block.id, status: "queued" },
+            content: `queued compression ${block.id}`,
+          }
+        } finally {
+          // 成功、校验失败、读上下文失败、compact 抛错都必须释放，否则同一会话后续压缩永久被拒。
+          endCompactionRequest(sessionID)
         }
       },
     })

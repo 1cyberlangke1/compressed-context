@@ -1,9 +1,10 @@
 import type { Plugin } from "@opencode/plugin"
 import type { Schema } from "effect"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
-import { type CacheMessage, type CacheSample } from "../src/shared/cache.ts"
+import { cacheHistoryKey, type CacheMessage, type CacheSample } from "../src/shared/cache.ts"
 import { loadCacheHistory, recordCacheHistory, saveCacheHistory } from "../src/compression/cache-history.ts"
+import { clearDeletedSessions, markSessionDeleted } from "../src/compression/deleted-sessions.ts"
 import type { StorageLike } from "../src/compression/state.ts"
 
 /** 输入：无；输出：内存 storage 替身。 */
@@ -52,6 +53,10 @@ function createContext(
     },
   } as unknown as Plugin.Context
 }
+
+afterEach(() => {
+  clearDeletedSessions()
+})
 
 describe("loadCacheHistory / saveCacheHistory", () => {
   it("写入后能读回，缺失会话是空历史", async () => {
@@ -125,5 +130,34 @@ describe("recordCacheHistory", () => {
     expect((await loadCacheHistory(storage, "ses_b")).samples.map((item) => item.messageID)).toEqual([
       "b1",
     ])
+  })
+
+  it("删除后迟到的 recordCacheHistory 不复活缓存 key", async () => {
+    const storage = createStorage()
+    const ctx = createContext(new Map([["ses_a", [message("m1", 10)]]]), storage)
+    markSessionDeleted("ses_a")
+
+    await recordCacheHistory(ctx, "ses_a")
+
+    expect(await storage.get(cacheHistoryKey("ses_a"))).toBeUndefined()
+  })
+
+  it("同目录另一会话的缓存历史不受墓碑影响", async () => {
+    const storage = createStorage()
+    const ctx = createContext(
+      new Map([
+        ["ses_a", [message("a1", 10)]],
+        ["ses_b", [message("b1", 20)]],
+      ]),
+      storage,
+    )
+    markSessionDeleted("ses_a")
+
+    await recordCacheHistory(ctx, "ses_b")
+
+    expect((await loadCacheHistory(storage, "ses_b")).samples.map((item) => item.messageID)).toEqual([
+      "b1",
+    ])
+    expect(await storage.get(cacheHistoryKey("ses_a"))).toBeUndefined()
   })
 })

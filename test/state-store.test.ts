@@ -130,8 +130,9 @@ describe("reconcileAll 与 compaction 事件", () => {
     }
     const ctx = {
       storage: staleStorage,
+      location: { directory: "/work" },
       session: {
-        get: () => Promise.resolve({ metadata: {} }),
+        get: () => Promise.resolve({ metadata: {}, location: { directory: "/work" } }),
         context: () => Promise.reject(new Error("stale pending must not be reconciled")),
       },
     } as unknown as Plugin.Context
@@ -161,8 +162,9 @@ describe("reconcileAll 与 compaction 事件", () => {
 
     const ctx = {
       storage,
+      location: { directory: "/work" },
       session: {
-        get: () => Promise.resolve({ metadata: {} }),
+        get: () => Promise.resolve({ metadata: {}, location: { directory: "/work" } }),
         context: async () => {
           calls += 1
           active += 1
@@ -188,6 +190,95 @@ describe("reconcileAll 与 compaction 事件", () => {
 
     expect(maxActive).toBe(1)
     expect((await loadState(storage, "ses_race")).blocks.map((item) => item.id)).toEqual(["b1"])
+  })
+
+  it("reconcileAll 只对账本实例 directory 的 pending，不碰别的目录", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_mine")]: { blocks: [], pending: block("b_mine"), attempts: 0 },
+      [stateKey("ses_other")]: { blocks: [], pending: block("b_other"), attempts: 0 },
+    })
+    const calls: string[] = []
+    const ctx = {
+      storage,
+      location: { directory: "/a" },
+      session: {
+        get: ({ sessionID }: { sessionID: string }) =>
+          Promise.resolve({
+            location: { directory: sessionID === "ses_mine" ? "/a" : "/b" },
+          }),
+        context: ({ sessionID }: { sessionID: string }) => {
+          calls.push(sessionID)
+          return Promise.resolve(
+            sessionID === "ses_mine"
+              ? [{ type: "compaction", status: "completed", summary: "[Compressed conversation section #b_mine]" }]
+              : [],
+          )
+        },
+      },
+    } as unknown as Plugin.Context
+
+    await reconcileAll(ctx)
+
+    expect(calls).toEqual(["ses_mine"])
+    expect((await loadState(storage, "ses_mine")).blocks.map((item) => item.id)).toEqual(["b_mine"])
+    expect((await loadState(storage, "ses_other")).pending?.id).toBe("b_other")
+  })
+
+  it("reconcileAll 同目录不同 workspaceID 的 pending 也跳过", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_mine")]: { blocks: [], pending: block("b_mine"), attempts: 0 },
+      [stateKey("ses_other")]: { blocks: [], pending: block("b_other"), attempts: 0 },
+    })
+    const calls: string[] = []
+    const ctx = {
+      storage,
+      location: { directory: "/work", workspaceID: "ws_a" },
+      session: {
+        get: ({ sessionID }: { sessionID: string }) =>
+          Promise.resolve({
+            location: { directory: "/work", workspaceID: sessionID === "ses_mine" ? "ws_a" : "ws_b" },
+          }),
+        context: ({ sessionID }: { sessionID: string }) => {
+          calls.push(sessionID)
+          return Promise.resolve(
+            sessionID === "ses_mine"
+              ? [{ type: "compaction", status: "completed", summary: "[Compressed conversation section #b_mine]" }]
+              : [],
+          )
+        },
+      },
+    } as unknown as Plugin.Context
+
+    await reconcileAll(ctx)
+
+    expect(calls).toEqual(["ses_mine"])
+    expect((await loadState(storage, "ses_mine")).blocks.map((item) => item.id)).toEqual(["b_mine"])
+    expect((await loadState(storage, "ses_other")).pending?.id).toBe("b_other")
+  })
+
+  it("reconcileAll 瞬时查询失败时跳过，不丢 pending", async () => {
+    // 缺失会话由文件末尾的结构化 Session.NotFoundError 用例覆盖；
+    // 这里只验证瞬时错误不删数据、也不替它做对账。
+    const storage = memoryStorage({
+      [stateKey("ses_error")]: { blocks: [], pending: block("b2"), attempts: 0 },
+    })
+    let contextCalls = 0
+    const ctx = {
+      storage,
+      location: { directory: "/work" },
+      session: {
+        get: () => Promise.reject(new Error("transient")),
+        context: () => {
+          contextCalls += 1
+          return Promise.resolve([])
+        },
+      },
+    } as unknown as Plugin.Context
+
+    await reconcileAll(ctx)
+
+    expect(contextCalls).toBe(0)
+    expect((await loadState(storage, "ses_error")).pending?.id).toBe("b2")
   })
 
   it("错误文案含 not found 但结构不明确时不删会话状态", async () => {

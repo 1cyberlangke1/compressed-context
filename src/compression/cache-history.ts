@@ -10,6 +10,7 @@ import {
   type CacheHistory,
   type CacheSample,
 } from "../shared/cache.ts"
+import { isSessionDeleted } from "./deleted-sessions.ts"
 import type { StorageLike } from "./state.ts"
 
 /** 输入：storage + sessionID；输出：该会话的历史；缺失或损坏时为空历史。 */
@@ -17,12 +18,18 @@ export async function loadCacheHistory(storage: StorageLike, sessionID: string):
   return parseCacheHistory(await storage.get(cacheHistoryKey(sessionID)))
 }
 
-/** 输入：storage + sessionID + 样本；输出：无；预期：写入 JSON，最多 10 条。 */
+/**
+ * 输入：storage + sessionID + 样本。
+ * 输出：无。
+ * 预期：写入 JSON，最多 10 条；会话已删除（墓碑命中）时直接跳过，
+ *       避免删除后迟到的 step/usage 再写下缓存 key。
+ */
 export async function saveCacheHistory(
   storage: StorageLike,
   sessionID: string,
   samples: readonly CacheSample[],
 ): Promise<void> {
+  if (isSessionDeleted(sessionID)) return
   await storage.set(cacheHistoryKey(sessionID), { v: 1, samples } as unknown as Schema.Json)
 }
 

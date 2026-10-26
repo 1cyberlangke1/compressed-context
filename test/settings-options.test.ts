@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { resolveMessages } from "../src/i18n/index.ts"
 import { DEFAULT_SETTINGS } from "../src/shared/settings.ts"
+import { PLUGIN_VERSION } from "../src/shared/version.ts"
 import {
   SETTINGS_ACTIONS,
   buildModelSectionOptions,
@@ -79,7 +80,7 @@ describe("percentLabel", () => {
 })
 
 describe("三层菜单", () => {
-  it("第一层是默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面", () => {
+  it("第一层是默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面 / 检查更新", () => {
     const sections = buildSectionOptions({
       settings: DEFAULT_SETTINGS,
       copy,
@@ -92,9 +93,12 @@ describe("三层菜单", () => {
       "switches",
       "decompress",
       "interface",
+      "update",
     ])
     expect(sections[0]?.title).toBe("默认设置")
     expect(sections[1]?.footer).toBe("[google]gemini-3-pro")
+    expect(sections.at(-1)?.title).toBe(copy.update.checkUpdates)
+    expect(sections.at(-1)?.footer).toBe(`v${PLUGIN_VERSION}`)
   })
 
   it("默认设置只放数值项，不含开关与显示", () => {

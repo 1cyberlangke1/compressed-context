@@ -94,7 +94,7 @@ async function mount(answers: (string | undefined)[]) {
 }
 
 describe("SettingsCommand", () => {
-  test("第一层是六项：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面", async () => {
+  test("第一层是七项：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面 / 检查更新", async () => {
     const { app, captured } = await mount([])
     try {
       captured.run?.()
@@ -107,6 +107,7 @@ describe("SettingsCommand", () => {
         "switches",
         "decompress",
         "interface",
+        "update",
       ])
       expect(options[0]?.title).toBe("默认设置")
       expect(options[1]?.title).toBe("按模型")
@@ -146,6 +147,7 @@ describe("SettingsCommand", () => {
         "switches",
         "decompress",
         "interface",
+        "update",
       ])
     } finally {
       app.renderer.destroy()

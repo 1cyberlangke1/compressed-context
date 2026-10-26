@@ -2,6 +2,7 @@ import type { DialogSelectOption } from "@opencode/plugin/tui/context"
 
 import { formatTokens } from "../../shared/format.ts"
 import type { Messages } from "../../i18n/index.ts"
+import { PLUGIN_VERSION } from "../../shared/version.ts"
 import {
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
@@ -82,8 +83,8 @@ export const SETTINGS_GROUPS = ["defaults", "summary", "switches", "decompress",
 
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number]
 
-/** 设置第一层的入口：五个分组 + 按模型。 */
-export type SettingsSection = SettingsGroup | "models"
+/** 设置第一层的入口：五个分组 + 按模型 + 检查更新。 */
+export type SettingsSection = SettingsGroup | "models" | "update"
 
 /** 每个动作属于哪个分组；用于分层菜单里过滤。 */
 export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
@@ -131,8 +132,9 @@ function statesFooter(entries: readonly (readonly [string, boolean])[], copy: Me
 
 /**
  * 输入：设置 + 文案 + 当前模型。
- * 输出：设置第一层：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面。
- * 预期：只有「默认设置」是与模型相关的数值项；开关与界面显示各自独立入口。
+ * 输出：设置第一层：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面 / 检查更新。
+ * 预期：只有「默认设置」是与模型相关的数值项；开关与界面显示各自独立入口；
+ *       检查更新固定放最后，footer 显示当前插件版本。
  */
 export function buildSectionOptions(input: {
   readonly settings: Settings
@@ -186,6 +188,11 @@ export function buildSectionOptions(input: {
         ],
         copy,
       )} · ${localeLabel(settings, copy)}`,
+    },
+    {
+      title: copy.update.checkUpdates,
+      value: "update",
+      footer: `v${PLUGIN_VERSION}`,
     },
   ]
 }
