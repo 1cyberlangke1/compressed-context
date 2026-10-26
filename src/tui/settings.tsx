@@ -30,6 +30,7 @@ import {
   type SummaryFormat,
   type SummaryLanguage,
 } from "../shared/settings.ts"
+import type { UpdateCheckResult } from "../shared/update.ts"
 import { CountDialog, PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
 import { effectiveWindow } from "../shared/model-summary.ts"
 import {
@@ -58,7 +59,8 @@ import {
   type SettingsSection,
   type ToggleSetting,
 } from "./settings/options.ts"
-import { createUpdateMenu, DEFAULT_UPDATE_DEPS, type UpdateDeps } from "./update-menu.ts"
+import { createUpdateMenu, DEFAULT_UPDATE_DEPS, type UpdateDeps } from "./update-menu.tsx"
+import { updateEntryState } from "./update-entry.ts"
 import type { UpdateSettings } from "./types.ts"
 
 /** 设置导航的返回结果：`back` 回上一层，`done` 结束（弹窗已经在屏幕上）。 */
@@ -91,8 +93,12 @@ export function SettingsCommand(props: {
 }) {
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
   const [resolvedWindow, setResolvedWindow] = createSignal<number | undefined>(undefined)
+  const [updateResult, setUpdateResult] = createSignal<UpdateCheckResult | undefined>(undefined)
   /** 输入：无；输出：打开更新菜单的函数。预期：测试可注入假 registry 与假 spawn。 */
-  const openUpdate = createUpdateMenu(props.context, copy, props.updateDeps ?? DEFAULT_UPDATE_DEPS)
+  const openUpdate = createUpdateMenu(props.context, copy, {
+    deps: props.updateDeps ?? DEFAULT_UPDATE_DEPS,
+    onResult: setUpdateResult,
+  })
 
   /** 输入：无；输出：当前生效的窗口；预期：只剩模型原生窗口——全局不再有上限设置。 */
   const currentWindow = (): number | undefined => resolvedWindow()
@@ -785,12 +791,17 @@ export function SettingsCommand(props: {
         options: buildSectionOptions({
           settings: props.settings,
           copy: copy(),
+          updateEntry: updateEntryState(copy(), updateResult(), {
+            warning: props.context.theme.text.feedback.warning.base,
+            error: props.context.theme.text.feedback.error.base,
+          }),
           ...(currentKey === undefined ? {} : { currentModel: keyLabel(currentKey) }),
         }),
       })
       if (section === undefined) return
       if (section === "update") {
-        await openUpdate()
+        // 更新结束后退出设置，让结果 toast 显示在正常会话上。
+        if (await openUpdate()) return
         continue
       }
       const result = section === "models" ? await openModelSection() : await openGroup(section)

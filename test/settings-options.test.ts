@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { RGBA } from "@opentui/core"
 
 import { resolveMessages } from "../src/i18n/index.ts"
 import { DEFAULT_SETTINGS } from "../src/shared/settings.ts"
@@ -11,8 +12,13 @@ import {
   itemsOfGroup,
   percentLabel,
 } from "../src/tui/settings/options.ts"
+import { updateEntryState } from "../src/tui/update-entry.ts"
 
 const copy = resolveMessages("zh")
+const COLORS = {
+  warning: RGBA.fromInts(255, 193, 7, 255),
+  error: RGBA.fromInts(255, 0, 0, 255),
+}
 
 describe("buildSettingsOptions", () => {
   it("按压缩/摘要/面板/解压/界面分组", () => {
@@ -84,6 +90,7 @@ describe("三层菜单", () => {
     const sections = buildSectionOptions({
       settings: DEFAULT_SETTINGS,
       copy,
+      updateEntry: updateEntryState(copy, undefined, COLORS),
       currentModel: "[google]gemini-3-pro",
     })
     expect(sections.map((section) => section.value)).toEqual([
@@ -97,8 +104,8 @@ describe("三层菜单", () => {
     ])
     expect(sections[0]?.title).toBe("默认设置")
     expect(sections[1]?.footer).toBe("[google]gemini-3-pro")
-    expect(sections.at(-1)?.title).toBe(copy.update.checkUpdates)
-    expect(sections.at(-1)?.footer).toBe(`v${PLUGIN_VERSION}`)
+    expect(sections.at(-1)?.title).toBe(`${copy.update.checkUpdates} v${PLUGIN_VERSION}`)
+    expect(sections.at(-1)?.footer).toBeUndefined()
   })
 
   it("默认设置只放数值项，不含开关与显示", () => {

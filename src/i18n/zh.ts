@@ -30,14 +30,13 @@ export const zh: Messages = {
   update: {
     checkUpdates: "检查更新",
     title: "插件更新",
-    current: "当前版本",
-    latest: "最新版本",
+    latestFooter: (version) => `最新 v${version}`,
     upToDate: "已是最新版本",
-    available: "发现新版本",
     failed: "无法检查更新",
     updateNow: "立即更新",
-    checkAgain: "重新检查",
-    close: "关闭",
+    cancel: "取消",
+    confirm: (currentVersion, latestVersion) =>
+      `当前 v${currentVersion}，最新 v${latestVersion}，是否更新？`,
     running: "正在更新，请稍候…",
     succeeded: "更新完成，请重启 OpenCode",
     runFailed: "更新失败，请手动运行：",

@@ -2,7 +2,6 @@ import type { DialogSelectOption } from "@opencode/plugin/tui/context"
 
 import { formatTokens } from "../../shared/format.ts"
 import type { Messages } from "../../i18n/index.ts"
-import { PLUGIN_VERSION } from "../../shared/version.ts"
 import {
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
@@ -13,6 +12,7 @@ import {
   percentToChars,
   type Settings,
 } from "../../shared/settings.ts"
+import type { UpdateEntryState } from "../update-entry.ts"
 
 /** 输入：设置；输出：当前语言标签；预期：用于设置菜单右侧的当前值。 */
 export function localeLabel(settings: Settings, copy: Messages): string {
@@ -134,11 +134,12 @@ function statesFooter(entries: readonly (readonly [string, boolean])[], copy: Me
  * 输入：设置 + 文案 + 当前模型。
  * 输出：设置第一层：默认设置 / 按模型 / 摘要 / 开关 / 解压 / 界面 / 检查更新。
  * 预期：只有「默认设置」是与模型相关的数值项；开关与界面显示各自独立入口；
- *       检查更新固定放最后，footer 显示当前插件版本。
+ *       检查更新固定放最后，标题与结果状态由最近一次检查决定。
  */
 export function buildSectionOptions(input: {
   readonly settings: Settings
   readonly copy: Messages
+  readonly updateEntry: UpdateEntryState
   readonly currentModel?: string
 }): readonly DialogSelectOption<SettingsSection>[] {
   const { settings, copy } = input
@@ -189,11 +190,7 @@ export function buildSectionOptions(input: {
         copy,
       )} · ${localeLabel(settings, copy)}`,
     },
-    {
-      title: copy.update.checkUpdates,
-      value: "update",
-      footer: `v${PLUGIN_VERSION}`,
-    },
+    { value: "update", ...input.updateEntry },
   ]
 }
 

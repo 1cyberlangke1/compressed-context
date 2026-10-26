@@ -1,18 +1,25 @@
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
-import type { Context, DialogAlertOptions, DialogSelectOptions } from "@opencode/plugin/tui/context"
+import type {
+  Context,
+  DialogAlertOptions,
+  DialogConfirmOptions,
+  DialogSelectOptions,
+} from "@opencode/plugin/tui/context"
+import { RGBA } from "@opentui/core"
 import { createSignal } from "solid-js"
 
 import { resolveMessages } from "../src/i18n/index.ts"
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
-import { PLUGIN_PACKAGE, PLUGIN_VERSION } from "../src/shared/version.ts"
+import { PLUGIN_VERSION } from "../src/shared/version.ts"
 import {
   updateCommandLine,
   type UpdateCheckResult,
   type UpdateProgress,
+  type UpdateStartResult,
 } from "../src/shared/update.ts"
 import { SettingsCommand } from "../src/tui/settings.tsx"
-import type { UpdateDeps } from "../src/tui/update-menu.ts"
+import type { UpdateDeps } from "../src/tui/update-menu.tsx"
 
 type ToastCall = {
   readonly title?: string
@@ -21,21 +28,24 @@ type ToastCall = {
   readonly duration?: number
 }
 
-interface Captured {
+type Captured = {
   run?: () => void
   readonly answers: (string | undefined)[]
-  /** 每次 select 的选项快照，按调用顺序；用于断言设置菜单与更新菜单。 */
+  readonly confirmAnswers: (boolean | undefined)[]
+  readonly confirms: DialogConfirmOptions[]
   readonly history: DialogSelectOptions<string>[]
-  /** select 调用次数。 */
-  selects: number
-  /** 更新完成或失败时等待用户确认的弹窗。 */
   readonly alerts: DialogAlertOptions[]
-  /** updateSettings 调用次数；用于确认更新流程不持久化设置。 */
-  updateSettingsCalls: number
   readonly toasts: ToastCall[]
+  shows: number
+  clears: number
 }
 
-/** 输入：捕获对象；输出：SettingsCommand 需要的最小上下文。 */
+const COLORS = {
+  warning: RGBA.fromInts(255, 193, 7, 255),
+  error: RGBA.fromInts(255, 0, 0, 255),
+}
+
+/** 输入：捕获对象；输出：SettingsCommand 需要的最小真实形状上下文。 */
 function fakeContext(captured: Captured): Context {
   return {
     keymap: {
@@ -44,19 +54,38 @@ function fakeContext(captured: Captured): Context {
         return () => {}
       },
     },
+    theme: {
+      text: {
+        base: COLORS.warning,
+        muted: COLORS.error,
+        feedback: {
+          warning: { base: COLORS.warning },
+          error: { base: COLORS.error },
+          success: { base: COLORS.warning },
+          info: { base: COLORS.error },
+        },
+      },
+    },
     ui: {
       dialog: {
         alert: (options: DialogAlertOptions) => {
           captured.alerts.push(options)
           return Promise.resolve()
         },
+        confirm: (options: DialogConfirmOptions) => {
+          captured.confirms.push(options)
+          return Promise.resolve(captured.confirmAnswers.shift())
+        },
         select: (options: DialogSelectOptions<string>) => {
-          captured.selects += 1
           captured.history.push(options)
           return Promise.resolve(captured.answers.shift())
         },
-        show: () => {},
-        clear: () => {},
+        show: () => {
+          captured.shows += 1
+        },
+        clear: () => {
+          captured.clears += 1
+        },
       },
       toast: {
         show: (call: ToastCall) => {
@@ -66,7 +95,6 @@ function fakeContext(captured: Captured): Context {
       router: { current: () => ({ type: "session", sessionID: "ses_a" }) },
       model: { current: () => ({ providerID: "google", modelID: "gemini-3-pro" }) },
     },
-    // 模型列表在真实 TUI 里来自 location 数据；测试给一个空列表即可。
     data: {
       location: {
         model: { list: () => [] },
@@ -81,19 +109,22 @@ function fakeContext(captured: Captured): Context {
   } as unknown as Context
 }
 
-/** 输入：每次 select 的返回值、语言与更新依赖；输出：渲染好的 app + 捕获对象。 */
+/** 输入：菜单返回序列、确认序列、语言与更新依赖；输出：渲染结果与捕获对象。 */
 async function mount(options: {
   readonly answers: (string | undefined)[]
+  readonly confirmAnswers?: (boolean | undefined)[]
   readonly locale: "zh" | "en"
-  readonly deps?: UpdateDeps
+  readonly deps: UpdateDeps
 }) {
   const captured: Captured = {
     answers: options.answers,
-    alerts: [],
+    confirmAnswers: [...(options.confirmAnswers ?? [])],
+    confirms: [],
     history: [],
-    selects: 0,
-    updateSettingsCalls: 0,
+    alerts: [],
     toasts: [],
+    shows: 0,
+    clears: 0,
   }
   const context = fakeContext(captured)
   const [settings, setSettings] = createSignal<Settings>({
@@ -101,7 +132,6 @@ async function mount(options: {
     locale: options.locale,
   })
   const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
-    captured.updateSettingsCalls += 1
     setSettings((previous) => {
       const draft = { ...previous }
       mutation(draft)
@@ -114,17 +144,17 @@ async function mount(options: {
         context={context}
         settings={settings()}
         updateSettings={updateSettings}
-        {...(options.deps === undefined ? {} : { updateDeps: options.deps })}
+        updateDeps={options.deps}
       />
     ),
-    { width: 60, height: 24 },
+    { width: 80, height: 30 },
   )
   app.renderer.start()
   await app.waitFor(() => captured.run !== undefined)
   return { app, captured }
 }
 
-/** 输入：检查结果与真实运行函数；输出：菜单依赖。 */
+/** 输入：检查结果与运行函数；输出：更新依赖。 */
 function depsFor(
   check: UpdateCheckResult | (() => Promise<UpdateCheckResult>),
   run: UpdateDeps["run"] = () => Promise.resolve({ ok: true, command: updateCommandLine() }),
@@ -151,167 +181,74 @@ const MAIN_MENU_VALUES = [
   "update",
 ] as const
 
-describe("检查更新入口", () => {
-  test("中文主菜单最后一项是检查更新，footer 显示当前版本", async () => {
+describe("更新入口", () => {
+  test("主菜单标题直接显示当前版本", async () => {
     const copy = resolveMessages("zh")
-    const { app, captured } = await mount({ answers: [undefined], locale: "zh" })
+    const { app, captured } = await mount({
+      answers: [undefined],
+      locale: "zh",
+      deps: depsFor(NEW_VERSION),
+    })
     try {
       captured.run?.()
       await app.waitFor(() => captured.history.length >= 1)
 
       const options = captured.history[0]?.options ?? []
       expect(options.map((option) => option.value)).toEqual([...MAIN_MENU_VALUES])
-      const last = options.at(-1)
-      expect(last?.title).toBe(copy.update.checkUpdates)
-      expect(last?.value).toBe("update")
-      expect(last?.footer).toBe(`v${PLUGIN_VERSION}`)
+      expect(options.at(-1)).toMatchObject({
+        title: `${copy.update.checkUpdates} v${PLUGIN_VERSION}`,
+        value: "update",
+      })
+      expect(options.at(-1)?.footer).toBeUndefined()
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("英文主菜单最后一项是 Check for updates", async () => {
+  test("发现新版后确认框显示版本，取消后主菜单保留星标与 warning 色", async () => {
     const copy = resolveMessages("en")
-    const { app, captured } = await mount({ answers: [undefined], locale: "en" })
-    try {
-      captured.run?.()
-      await app.waitFor(() => captured.history.length >= 1)
-
-      const last = captured.history[0]?.options.at(-1)
-      expect(last?.title).toBe(copy.update.checkUpdates)
-      expect(last?.footer).toBe(`v${PLUGIN_VERSION}`)
-    } finally {
-      app.renderer.destroy()
-    }
-  })
-})
-
-describe("更新结果菜单", () => {
-  test("发现新版本时展示当前/最新版本、状态与立即更新", async () => {
-    const copy = resolveMessages("zh")
+    let starts = 0
     const { app, captured } = await mount({
-      answers: ["update", "close"],
-      locale: "zh",
-      deps: depsFor(NEW_VERSION),
-    })
-    try {
-      captured.run?.()
-      await app.waitFor(() => captured.history.length >= 2)
-
-      const call = captured.history[1]
-      expect(call?.title).toBe(copy.update.title)
-      expect(call?.options.map((option) => option.value)).toEqual([
-        "current",
-        "latest",
-        "status",
-        "update",
-        "again",
-        "close",
-      ])
-      expect(call?.options.find((option) => option.value === "current")).toMatchObject({
-        title: copy.update.current,
-        footer: `v${PLUGIN_VERSION}`,
-      })
-      expect(call?.options.find((option) => option.value === "latest")).toMatchObject({
-        title: copy.update.latest,
-        footer: "v9.9.9",
-      })
-      expect(call?.options.find((option) => option.value === "status")).toMatchObject({
-        title: copy.update.available,
-      })
-      expect(call?.options.filter((option) => ["current", "latest", "status"].includes(String(option.value))).every(
-        (option) => option.disabled !== true,
-      )).toBe(true)
-      expect(call?.options.find((option) => option.value === "update")?.title).toBe(copy.update.updateNow)
-      expect(call?.options.find((option) => option.value === "again")?.title).toBe(copy.update.checkAgain)
-      expect(call?.options.find((option) => option.value === "close")?.title).toBe(copy.update.close)
-    } finally {
-      app.renderer.destroy()
-    }
-  })
-
-  test("已是最新版本时不提供立即更新", async () => {
-    const copy = resolveMessages("en")
-    const { app, captured } = await mount({
-      answers: ["update", "close"],
+      answers: ["update", undefined],
+      confirmAnswers: [false],
       locale: "en",
-      deps: depsFor({
-        kind: "up-to-date",
-        currentVersion: PLUGIN_VERSION,
-        latestVersion: PLUGIN_VERSION,
+      deps: depsFor(NEW_VERSION, () => {
+        starts += 1
+        return Promise.resolve({ ok: true, command: updateCommandLine() })
       }),
     })
     try {
       captured.run?.()
-      await app.waitFor(() => captured.history.length >= 2)
+      await app.waitFor(() => captured.history.length >= 2 && captured.confirms.length >= 1)
 
-      const call = captured.history[1]
-      expect(call?.options.find((option) => option.value === "status")?.title).toBe(copy.update.upToDate)
-      expect(call?.options.map((option) => option.value)).not.toContain("update")
-      expect(call?.options.map((option) => option.value)).toContain("again")
-      expect(call?.options.map((option) => option.value)).toContain("close")
+      expect(captured.confirms[0]).toMatchObject({
+        title: copy.update.title,
+        message: copy.update.confirm(PLUGIN_VERSION, "9.9.9"),
+        label: { confirm: copy.update.updateNow, cancel: copy.update.cancel },
+      })
+      expect(starts).toBe(0)
+      expect(captured.history[1]?.options.at(-1)).toMatchObject({
+        title: `${copy.update.checkUpdates} v${PLUGIN_VERSION} *`,
+        value: "update",
+        footer: copy.update.latestFooter("9.9.9"),
+        footerColor: COLORS.warning,
+      })
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("无法检查更新时展示失败态且不提供立即更新", async () => {
-    const copy = resolveMessages("zh")
-    const { app, captured } = await mount({
-      answers: ["update", "close"],
-      locale: "zh",
-      deps: depsFor({ kind: "failed", reason: "network" }),
-    })
-    try {
-      captured.run?.()
-      await app.waitFor(() => captured.history.length >= 2)
-
-      const call = captured.history[1]
-      expect(call?.title).toBe(copy.update.title)
-      expect(call?.options.find((option) => option.value === "status")?.title).toBe(copy.update.failed)
-      expect(call?.options.map((option) => option.value)).not.toContain("update")
-      expect(call?.options.find((option) => option.value === "again")?.title).toBe(copy.update.checkAgain)
-      expect(call?.options.find((option) => option.value === "close")?.title).toBe(copy.update.close)
-    } finally {
-      app.renderer.destroy()
-    }
-  })
-
-  test("重新检查会再次请求 registry", async () => {
-    const copy = resolveMessages("zh")
-    let checks = 0
-    const { app, captured } = await mount({
-      answers: ["update", "again", "close"],
-      locale: "zh",
-      deps: depsFor(async () => {
-        checks += 1
-        return NEW_VERSION
-      }),
-    })
-    try {
-      captured.run?.()
-      await app.waitFor(() => checks === 2 && captured.history.length >= 3)
-
-      expect(captured.history[1]?.title).toBe(copy.update.title)
-      expect(captured.history[2]?.title).toBe(copy.update.title)
-      expect(captured.history[2]?.options.map((option) => option.value)).toEqual(
-        captured.history[1]?.options.map((option) => option.value),
-      )
-    } finally {
-      app.renderer.destroy()
-    }
-  })
-
-  test("更新期间显示真实进度，完成后再提示重启", async () => {
+  test("确认后原地显示进度，成功时关闭进度框并发成功 toast", async () => {
     const copy = resolveMessages("zh")
     let report: UpdateProgress | undefined
-    let finish: ((result: Awaited<ReturnType<UpdateDeps["run"]>>) => void) | undefined
+    let finish: ((result: UpdateStartResult) => void) | undefined
     let started: (() => void) | undefined
     const runStarted = new Promise<void>((resolve) => {
       started = resolve
     })
     const { app, captured } = await mount({
-      answers: ["update", "update"],
+      answers: ["update", undefined],
+      confirmAnswers: [true],
       locale: "zh",
       deps: depsFor(
         NEW_VERSION,
@@ -327,39 +264,28 @@ describe("更新结果菜单", () => {
       captured.run?.()
       await runStarted
 
+      expect(captured.shows).toBe(1)
+      report?.("Downloading compressed-context")
+      finish?.({ ok: true, command: updateCommandLine() })
+      await app.waitFor(() => captured.toasts.length >= 1 && captured.clears >= 1)
+
       expect(captured.toasts[0]).toMatchObject({
         title: copy.update.title,
-        message: copy.update.running,
-        variant: "info",
+        message: copy.update.succeeded,
+        variant: "success",
       })
       expect(captured.toasts[0]?.duration).toBeGreaterThan(5_000)
-
-      report?.("Downloading compressed-context")
-      expect(captured.toasts[1]).toMatchObject({
-        title: copy.update.title,
-        message: "Downloading compressed-context",
-        variant: "info",
-      })
-      expect(captured.toasts[1]?.duration).toBeGreaterThan(5_000)
-
-      finish?.({ ok: true, command: updateCommandLine() })
-      await app.waitFor(() => captured.alerts.length >= 1)
-
-      expect(captured.alerts).toEqual([
-        {
-          title: copy.update.title,
-          message: copy.update.succeeded,
-        },
-      ])
+      expect(captured.alerts).toHaveLength(0)
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("更新失败时提示失败并给出可执行命令", async () => {
+  test("更新失败时关闭进度框并以 error toast 给出可执行命令", async () => {
     const copy = resolveMessages("en")
     const { app, captured } = await mount({
-      answers: ["update", "update"],
+      answers: ["update", undefined],
+      confirmAnswers: [true],
       locale: "en",
       deps: depsFor(NEW_VERSION, async (onProgress) => {
         onProgress("npm exited with code 1")
@@ -368,12 +294,76 @@ describe("更新结果菜单", () => {
     })
     try {
       captured.run?.()
-      await app.waitFor(() => captured.alerts.length >= 1)
+      await app.waitFor(() => captured.toasts.length >= 1 && captured.clears >= 1)
 
-      expect(captured.toasts[1]?.message).toBe("npm exited with code 1")
-      expect(captured.alerts[0]?.title).toBe(copy.update.title)
-      expect(captured.alerts[0]?.message).toContain(copy.update.runFailed)
-      expect(captured.alerts[0]?.message).toContain(`opencode plugin update ${PLUGIN_PACKAGE}`)
+      expect(captured.toasts[0]).toMatchObject({
+        title: copy.update.title,
+        message: `${copy.update.runFailed} ${updateCommandLine()}`,
+        variant: "error",
+      })
+      expect(captured.alerts).toHaveLength(0)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("已是最新版本时直接 alert，不弹确认也不运行更新", async () => {
+    const copy = resolveMessages("en")
+    let starts = 0
+    const { app, captured } = await mount({
+      answers: ["update", undefined],
+      locale: "en",
+      deps: depsFor(
+        {
+          kind: "up-to-date",
+          currentVersion: PLUGIN_VERSION,
+          latestVersion: PLUGIN_VERSION,
+        },
+        () => {
+          starts += 1
+          return Promise.resolve({ ok: true, command: updateCommandLine() })
+        },
+      ),
+    })
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.history.length >= 2 && captured.alerts.length >= 1)
+
+      expect(captured.alerts[0]).toEqual({
+        title: copy.update.title,
+        message: copy.update.upToDate,
+      })
+      expect(captured.confirms).toHaveLength(0)
+      expect(starts).toBe(0)
+      expect(captured.history[1]?.options.at(-1)).toMatchObject({
+        title: `${copy.update.checkUpdates} v${PLUGIN_VERSION}`,
+        footer: copy.update.upToDate,
+      })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("检查失败时兜底为 alert 且不产生未处理拒绝", async () => {
+    const copy = resolveMessages("zh")
+    const { app, captured } = await mount({
+      answers: ["update", undefined],
+      locale: "zh",
+      deps: depsFor(() => Promise.reject(new Error("network down"))),
+    })
+    try {
+      captured.run?.()
+      await app.waitFor(() => captured.history.length >= 2 && captured.alerts.length >= 1)
+
+      expect(captured.alerts[0]).toEqual({
+        title: copy.update.title,
+        message: copy.update.failed,
+      })
+      expect(captured.history[1]?.options.at(-1)).toMatchObject({
+        title: `${copy.update.checkUpdates} v${PLUGIN_VERSION}`,
+        footer: copy.update.failed,
+        footerColor: COLORS.error,
+      })
     } finally {
       app.renderer.destroy()
     }

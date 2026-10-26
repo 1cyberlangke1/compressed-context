@@ -26,14 +26,12 @@ export interface Messages {
   readonly update: {
     readonly checkUpdates: string
     readonly title: string
-    readonly current: string
-    readonly latest: string
+    readonly latestFooter: (version: string) => string
     readonly upToDate: string
-    readonly available: string
     readonly failed: string
     readonly updateNow: string
-    readonly checkAgain: string
-    readonly close: string
+    readonly cancel: string
+    readonly confirm: (currentVersion: string, latestVersion: string) => string
     readonly running: string
     readonly succeeded: string
     readonly runFailed: string

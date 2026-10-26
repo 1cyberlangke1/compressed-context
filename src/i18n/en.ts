@@ -30,14 +30,13 @@ export const en: Messages = {
   update: {
     checkUpdates: "Check for updates",
     title: "Plugin update",
-    current: "Current version",
-    latest: "Latest version",
+    latestFooter: (version) => `latest v${version}`,
     upToDate: "Already up to date",
-    available: "New version available",
     failed: "Unable to check for updates",
     updateNow: "Update now",
-    checkAgain: "Check again",
-    close: "Close",
+    cancel: "Cancel",
+    confirm: (currentVersion, latestVersion) =>
+      `Current v${currentVersion}, latest v${latestVersion}. Update now?`,
     running: "Updating, please wait...",
     succeeded: "Update complete. Restart OpenCode.",
     runFailed: "Update failed. Run manually:",

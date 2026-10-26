@@ -28,7 +28,10 @@ function fakeContext(captured: Captured): Context {
         base: "#ffffff",
         muted: "#888888",
         formfield: { base: "#ffffff" },
-        feedback: { error: { base: "#ff0000" } },
+        feedback: {
+          warning: { base: "#ffcc00" },
+          error: { base: "#ff0000" },
+        },
       },
     },
     keymap: {
