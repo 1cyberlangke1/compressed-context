@@ -96,6 +96,18 @@ export async function handleCompactionEvent(
         result: undefined,
       }
     }
+    // 用户打断（session.interrupt）是假失败：宿主把 compact fiber 标记 interrupted，
+    // 但钩子里的摘要请求可能仍在跑并随后 save(pending)。此时清 pending 会和钩子的
+    // save 竞态，最终留下「pending 在场 + lastError 丢失」的悬空状态，把 auto 卡死在
+    // blockedByState 上（复现见 scripts/e2e-repro-interrupt.mjs）。
+    // 钩子已收尾（非 in-flight）且 pending 在场：摘要确实产出落盘了（钩子 save 在
+    // endCompaction 之前），直接转正——宁可摘要重复展示，也不让会话卡死。
+    if (/interrupted|aborted|cancelled/i.test(detail)) {
+      if (state.pending !== undefined && !isCompactionInFlight(sessionID)) {
+        return { next: commitPending(state), result: undefined }
+      }
+      return { result: undefined }
+    }
     // 钩子从未运行的失败（state 里没有任何本层错误记录）且已排下一层 phase：
     // 典型是历史里只剩 checkpoint，OpenCode 在钩子前就判定无可压缩内容。
     // 这不是本层失败，保留 phase 等下一次带真实消息的压缩，不计 attempts。

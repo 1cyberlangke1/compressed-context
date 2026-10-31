@@ -22,6 +22,7 @@ import {
   MAX_DISTILL_ROUNDS,
   PENDING_TIMEOUT_MS,
   clearPhase,
+  commitPending,
   expireStalePending,
   loadState,
   type State,
@@ -35,6 +36,13 @@ import { MIN_SOURCE_CHARS } from "./validate.ts"
 const LIMIT_TTL = 60_000
 
 const limitCache = new Map<string, { at: number; limit: number }>()
+
+/**
+ * 悬空 pending 的宽限期：interrupted 竞态后钩子的 save 可能比失败事件晚一点点到达，
+ * 这里给落盘留一小段窗口，超过才把 pending 转正。远小于 PENDING_TIMEOUT_MS，
+ * 让「打断后继续对话」几乎立刻恢复压缩能力。
+ */
+const ORPHAN_PENDING_GRACE_MS = 15_000
 
 /** 入队后等待压缩完成的最大时长；OpenCode 原生压缩在 step 循环里同步等，这里对齐该语义。 */
 export const COMPACTION_WAIT_MS = 5 * 60_000
@@ -238,20 +246,43 @@ function messageTextOf(message: unknown): string {
 
 /**
  * 输入：插件上下文 + sessionID。
- * 输出：过期兜底后的最新状态。
- * 预期：pending 挂起超过 PENDING_TIMEOUT_MS 时强制转正写回；其余原样读。
+ * 输出：过期/悬空兜底后的最新状态。
+ * 预期：两类 pending 兜底转正——
+ *   1. 超过 PENDING_TIMEOUT_MS（事件丢失，10 分钟上限）；
+ *   2. 悬空 pending：压缩不在进行中且无失败记录。这是「用户打断压缩」的竞态残留——
+ *      interrupted 失败事件先到、钩子的 save(pending) 后到，之后没有事件再来对账。
+ *      摘要内容是真实产出（钩子 save 在 endCompaction 之前），转正它避免 auto 被
+ *      blockedByState 卡死；宁可在下一刀里重复覆盖这块摘要，也不让上下文无限膨胀。
  */
 async function expireStalePendingStorage(ctx: Plugin.Context, sessionID: string): Promise<State> {
   const state = await loadState(ctx.storage, sessionID)
-  const expired = expireStalePending(state, Date.now())
-  if (expired !== state) {
-    await stateStore(ctx.storage).transact(sessionID, (current) => ({
-      next: expireStalePending(current, Date.now()),
-      result: undefined,
-    }))
-    return expireStalePending(await loadState(ctx.storage, sessionID), Date.now())
-  }
-  return state
+  const now = Date.now()
+  const expired = expireStalePending(state, now)
+  // 悬空 pending：压缩不在进行中且无失败记录。这是「用户打断压缩」的竞态残留——
+  // interrupted 失败事件先到、钩子的 save(pending) 后到，之后没有事件再来对账。
+  // 摘要内容是真实产出（钩子 save 在 endCompaction 之前），宽限过后直接转正，
+  // 避免 auto 被 blockedByState 卡死；宁可在下一刀里重复覆盖这块摘要，也不让上下文膨胀。
+  const orphan =
+    expired.pending !== undefined &&
+    expired.pendingAt !== undefined &&
+    !isCompactionInFlight(sessionID) &&
+    expired.lastError === undefined &&
+    now - expired.pendingAt >= ORPHAN_PENDING_GRACE_MS
+  if (!orphan && expired === state) return state
+  await stateStore(ctx.storage).transact(sessionID, (current) => {
+    const next = expireStalePending(current, now)
+    if (
+      next.pending !== undefined &&
+      next.pendingAt !== undefined &&
+      !isCompactionInFlight(sessionID) &&
+      next.lastError === undefined &&
+      now - next.pendingAt >= ORPHAN_PENDING_GRACE_MS
+    ) {
+      return { next: commitPending(next), result: undefined }
+    }
+    return { next, result: undefined }
+  })
+  return loadState(ctx.storage, sessionID)
 }
 
 /**

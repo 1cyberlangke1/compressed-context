@@ -11,7 +11,7 @@ import { CONFIG_FILE } from "../src/shared/config-paths.ts"
 const SETTINGS_KEY = "settings"
 
 import { maybeAutoCompress, maybeAutoCompressStep } from "../src/compression/auto.ts"
-import { markCompactionInFlight } from "../src/compression/inflight.ts"
+import { endCompaction, markCompactionInFlight } from "../src/compression/inflight.ts"
 import { distillOnce, groupCandidates, pickMergeGroup, planT1Phase } from "../src/compression/distill.ts"
 import { handleCompactionEvent } from "../src/compression/events.ts"
 import { handleCompaction, type CompactionEvent } from "../src/compression/compaction.ts"
@@ -1885,6 +1885,46 @@ describe("compaction 事件", () => {
     expect(state.phase).toBe(2)
     expect(state.attempts).toBe(0)
     expect(state.blocks).toHaveLength(1)
+  })
+
+  it("用户打断的压缩失败不计失败：非 in-flight 时 pending 直接转正（摘要已真实产出）", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: withPending({ blocks: [], attempts: 0 }, block),
+    })
+    // 宿主被打断时的错误文案（runner/llm.ts 的 aborted + compaction.ts 的 interrupted）。
+    await handleCompactionEvent(
+      eventCtx(storage, ""),
+      "failed",
+      "ses_event",
+      "aborted: Compaction was interrupted",
+    )
+    const state = await loadState(storage, "ses_event")
+    // 钩子已收尾（isCompactionInFlight=false）时 pending 一定已落盘，立即转正，
+    // 避免 auto 被 blockedByState 卡死；不计失败、不留 lastError。
+    expect(state.pending).toBeUndefined()
+    expect(state.blocks.map((item) => item.id)).toEqual(["b1"])
+    expect(state.attempts).toBe(0)
+    expect(state.lastError).toBeUndefined()
+  })
+
+  it("打断时钩子仍在跑（in-flight）：保留 pending 等钩子收尾", async () => {
+    const storage = memoryStorage({
+      [stateKey("ses_event")]: withPending({ blocks: [], attempts: 1 }, block),
+    })
+    markCompactionInFlight("ses_event", true)
+    try {
+      await handleCompactionEvent(
+        eventCtx(storage, ""),
+        "failed",
+        "ses_event",
+        "Compaction was interrupted",
+      )
+      const state = await loadState(storage, "ses_event")
+      expect(state.pending?.id).toBe("b1")
+      expect(state.attempts).toBe(1)
+    } finally {
+      endCompaction("ses_event")
+    }
   })
 
   it("读取最新 checkpoint 失败时保留 pending", async () => {

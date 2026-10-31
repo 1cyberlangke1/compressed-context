@@ -281,10 +281,14 @@ export function parseState(value: unknown): State {
         : typeof rawPhase === "number" && rawPhase >= 2
           ? rawPhase
           : undefined
+  // pendingAt 必须在重载后保留：否则 expireStalePendingStorage 每次读都拿不到原始标记，
+  // 会把 pendingAt 重盖成当前时间，超时/悬空兜底永远不触发（手动打断后 pending 死锁的根因）。
+  const pendingAt = typeof record["pendingAt"] === "number" ? record["pendingAt"] : undefined
   return {
     blocks,
     attempts,
     ...(pending === undefined ? {} : { pending }),
+    ...(pendingAt === undefined || pending === undefined ? {} : { pendingAt }),
     ...(lastError === undefined ? {} : { lastError }),
     ...(nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens }),
     ...(nudgeCount === undefined ? {} : { nudgeCount }),

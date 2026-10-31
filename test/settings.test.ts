@@ -47,7 +47,7 @@ describe("initialSettings / normalizeSettings", () => {
       cacheExpanded: true,
       showCacheChart: true,
       cacheChartExpanded: true,
-      showCacheLog: true,
+      showCacheLog: false,
       cacheLogExpanded: false,
       showSummaries: true,
       summariesExpanded: true,

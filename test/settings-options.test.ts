@@ -74,7 +74,8 @@ describe("buildSettingsOptions", () => {
     })
     expect(options.find((option) => option.value === "showCacheChart")?.footer).toBe("关")
     expect(options.find((option) => option.value === "showSummaries")?.footer).toBe("关")
-    expect(options.find((option) => option.value === "showCacheLog")?.footer).toBe("开")
+    // 缓存日志默认关闭（DEFAULT_SHOW_CACHE_LOG=false）。
+    expect(options.find((option) => option.value === "showCacheLog")?.footer).toBe("关")
   })
 })
 

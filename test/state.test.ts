@@ -254,4 +254,16 @@ describe("expireStalePending", () => {
     // pendingAt 丢了会让 pending 的过期窗口从头开始，等于把「已经在路上」的那刀又拖 10 分钟。
     expect(next.pendingAt).toBe(1_000)
   })
+
+  it("parseState 保留 pendingAt；丢失会让超时兜底永远重置计时（打断后 pending 死锁的根因）", () => {
+    const parsed = parseState({ blocks: [], attempts: 0, pending: block("b1", 1), pendingAt: 1_000 })
+    expect(parsed.pending?.id).toBe("b1")
+    expect(parsed.pendingAt).toBe(1_000)
+    // 非 pending 或形状不对时不带 pendingAt。
+    expect(parseState({ blocks: [], attempts: 0, pendingAt: 1_000 }).pendingAt).toBeUndefined()
+    expect(parseState({ blocks: [], attempts: 0, pending: block("b1", 1), pendingAt: "x" }).pendingAt).toBeUndefined()
+    // 超时判定基于重载后的真实时间戳：1 秒存盘、重启后仍按 1_000 起算。
+    const reloaded = parseState(JSON.parse(JSON.stringify({ blocks: [], attempts: 0, pending: block("b1", 1), pendingAt: 1_000 })))
+    expect(expireStalePending(reloaded, 1_000 + PENDING_TIMEOUT_MS + 1).pending).toBeUndefined()
+  })
 })

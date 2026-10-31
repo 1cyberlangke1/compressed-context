@@ -154,6 +154,8 @@ function Fixture(props: { readonly initial?: Partial<Settings>; readonly used?: 
     locale: "zh",
     showTimeline: true,
     showBlockTokens: true,
+    // 多数用例断言日志行内容；默认关闭的行为由「缓存日志默认关闭」用例单独验证。
+    showCacheLog: true,
     ...props.initial,
   })
   const updateSettings = async (mutation: (draft: Settings) => void): Promise<void> => {
@@ -291,16 +293,29 @@ describe("Panel", () => {
     }
   })
 
-  test("缓存日志默认折叠，点击日志后展开", async () => {
-    const app = await testRender(() => <Fixture />, { width: 42, height: 80 })
+  test("缓存日志默认关闭，打开开关后出现", async () => {
+    // Fixture 默认开了 showCacheLog 供其它用例断言日志内容；这里显式关掉验证默认行为。
+    const app = await testRender(() => <Fixture initial={{ showCacheLog: false }} />, { width: 42, height: 80 })
     app.renderer.start()
     try {
-      const frame = await app.waitForFrame((value) => value.includes("日志"))
-      expect(frame).not.toContain("输入")
-      await app.mockMouse.click(2, rowOf(app, "日志"))
-      await app.waitForFrame((value) => value.includes("输入"))
+      // 默认 DEFAULT_SHOW_CACHE_LOG=false：整个日志分区不渲染。
+      const frame = await app.waitForFrame((value) => value.includes("折线图"))
+      expect(frame).not.toContain("日志")
+      await app.mockMouse.click(2, rowOf(app, "缓存记录"))
+      await app.waitForFrame((value) => !value.includes("折线图"))
     } finally {
       app.renderer.destroy()
+    }
+    const open = await testRender(() => <Fixture initial={{ showCacheLog: true }} />, {
+      width: 42,
+      height: 80,
+    })
+    open.renderer.start()
+    try {
+      const frame = await open.waitForFrame((value) => value.includes("日志"))
+      expect(frame).toContain("日志")
+    } finally {
+      open.renderer.destroy()
     }
   })
 
