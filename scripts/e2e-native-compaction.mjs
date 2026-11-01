@@ -13,6 +13,13 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { resolveMessages } from "../src/i18n/index.ts"
+
+// 界面语言随宿主 locale 变：断言只从语言文件取文案。
+const copies = [resolveMessages("zh"), resolveMessages("en")]
+/** 输入：屏幕 + 取文案的函数；输出：任一语言下该文案是否出现在屏幕上。 */
+const shows = (text, pick) => copies.some((copy) => text.includes(pick(copy)))
+
 const repo = process.cwd()
 const root = await mkdtemp(join(tmpdir(), "opencode-e2e-native-compaction-"))
 for (const dir of ["config", "data", "state", "cache", "xdg-config"]) {
@@ -145,9 +152,8 @@ try {
 
   const prompted = await waitFor(
     (text) =>
-      text.includes("原生自动压缩") ||
-      text.includes("native auto-compaction") ||
-      text.includes("Turn off native"),
+      shows(text, (copy) => copy.nativeCompaction.title) ||
+      shows(text, (copy) => copy.nativeCompaction.disable),
     15_000,
   )
   if (!prompted) {

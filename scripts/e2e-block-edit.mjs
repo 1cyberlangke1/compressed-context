@@ -15,6 +15,13 @@ import { join } from "node:path"
 import { Database } from "bun:sqlite"
 import { Terminal } from "@xterm/headless"
 
+import { resolveMessages } from "../src/i18n/index.ts"
+
+// 界面语言随宿主 locale 变（CI 英文、本机可能中文）：断言只从语言文件取文案。
+const copies = [resolveMessages("zh"), resolveMessages("en")]
+/** 输入：屏幕 + 取文案的函数；输出：任一语言下该文案是否出现在屏幕上。 */
+const shows = (text, pick) => copies.some((copy) => text.includes(pick(copy)))
+
 const repo = process.cwd()
 const root = await mkdtemp(join(tmpdir(), "opencode-e2e-block-edit-"))
 for (const dir of ["config", "data", "state", "cache", "xdg-config"]) {
@@ -380,7 +387,7 @@ try {
   for (const dx of [0, -1, 1, -2]) {
     await click(editX + dx, escRow)
     editing = await waitFor(
-      (text) => text.includes("ctrl+s 保存") || text.includes("ctrl+s save"),
+      (text) => shows(text, (copy) => copy.blockEditor.hint),
       4_000,
     )
     if (editing) break
@@ -418,14 +425,18 @@ try {
     if (saved) console.log("saved via alt+s")
   }
   if (!saved) {
-    const saveRow = rowOf(editorScreen, "保存") >= 0 ? rowOf(editorScreen, "保存") : rowOf(editorScreen, "Save")
-    const saveLine = editorScreen.split("\n")[saveRow] ?? ""
-    const saveColumn = saveLine.includes("保存") ? saveLine.indexOf("保存") : saveLine.indexOf("Save")
-    if (saveRow >= 0 && saveColumn >= 0) {
-      await click(displayColumn(saveLine, saveColumn), saveRow)
-      saved = await waitSaved(5_000)
-      if (saved) console.log("saved via save button")
+    // 保存按钮的文案也取自语言文件，避免改文案就假红。
+    for (const copy of copies) {
+      const row = rowOf(editorScreen, copy.blockEditor.save)
+      if (row < 0) continue
+      const line = editorScreen.split("\n")[row] ?? ""
+      const column = line.indexOf(copy.blockEditor.save)
+      if (column < 0) continue
+      await click(displayColumn(line, column), row)
+      break
     }
+    saved = await waitSaved(5_000)
+    if (saved) console.log("saved via save button")
   }
   if (!saved) {
     console.log("=== screen ===")
@@ -436,7 +447,7 @@ try {
   }
 
   // 保存成功必须有可见反馈（toast）。
-  const feedback = await waitFor((text) => text.includes("已保存") || text.includes("Saved"), 8_000)
+  const feedback = await waitFor((text) => shows(text, (copy) => copy.blockEditor.saved), 8_000)
   if (!feedback) {
     console.log("=== screen ===")
     console.log(plain())
@@ -448,5 +459,6 @@ try {
 } finally {
   await cleanup()
 }
+
 
 
