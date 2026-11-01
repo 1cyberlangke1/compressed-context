@@ -32,4 +32,16 @@ describe("语言文件", () => {
       expect(stringValues(messages).every((value) => value.trim().length > 0)).toBe(true)
     }
   })
+
+  it("设置项标题用与侧栏相同的 emoji 前缀", () => {
+    for (const messages of [zh, en]) {
+      const icons = messages.modelPanel.icons
+      expect(messages.settings.threshold.startsWith(icons.threshold)).toBe(true)
+      expect(messages.settings.nudgeGrowth.startsWith(icons.nudge)).toBe(true)
+      expect(messages.settings.summaryBlockPercent.startsWith(icons.block)).toBe(true)
+      expect(messages.settings.summaryTotalPercent.startsWith(icons.total)).toBe(true)
+      expect(messages.settings.limit.startsWith(icons.window)).toBe(true)
+      expect(messages.settings.recentT1Blocks.startsWith(icons.recent)).toBe(true)
+    }
+  })
 })

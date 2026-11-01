@@ -81,10 +81,12 @@ const settings = (nudgeGrowthTokens: number, autoCompress = true) => ({
 })
 
 describe("主动压缩提醒", () => {
-  it("文案使用实际增长量，并说明范围是整段当前对话流", () => {
+  it("增长量写的是「自上次提醒」，压缩范围才是「自上次压缩块」", () => {
     const text = buildNudgeText(52_300, true, true)
-    expect(text).toContain("about 52k tokens since the last compressed block")
+    expect(text).toContain("about 52k tokens since the last reminder")
     expect(text).toContain("entire current conversation flow since the last compressed block")
+    // 不能再把增长量说成自上次压缩块：基线是每次提醒前推的。
+    expect(text).not.toContain("about 52k tokens since the last compressed block")
     // 明确先劝住：忙或还需要精确细节时不要压缩。
     expect(text).toContain("Do not compress yet if you are busy or if you still need these exact details")
     expect(text).toContain("keep working and ignore this reminder")
