@@ -32,8 +32,12 @@ export function renderBlock(block: Block, options: RenderOptions = {}): string {
   const extras: string[] = []
   const sources = sourceIdsOf(block)
   if (sources.length > 0) {
-    // 给模型看的头部也只用数量：完整子块链在 checkpoint_tree 里查得到。
-    extras.push(`merged ${sources.length.toString()} blocks`)
+    // 连续来源显示端点（#b1…#b2），带空洞的显示完整清单，看得出合并了哪些块。
+    const label =
+      block.sourceRange === undefined
+        ? sources.map((id) => `#${id}`).join(" + ")
+        : `#${block.sourceRange.first}…#${block.sourceRange.last}`
+    extras.push(`merged ${label}`)
   }
   if (options.showBlockTokens === true) {
     extras.push(`≈${countText(body).toString()} tok`)

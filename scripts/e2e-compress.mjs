@@ -833,7 +833,7 @@ const stateFor = (sessionID) => {
   assert.ok(raw.includes("[Compressed conversation section #b3]"), "T2 checkpoint missing")
   assert.ok(!String(latest?.summary ?? "").includes("[Compressed conversation section #b1]"), "latest checkpoint still shows T1")
   assert.ok(
-    String(latest?.summary ?? "").includes("[T2] {h2} · merged 2 blocks"),
+    String(latest?.summary ?? "").includes("[T2] {h2} · merged #b1…#b2"),
     "T2 header must show merged source count",
   )
   assert.ok(raw.includes("[T1]"), "block header must show tier")
@@ -1680,3 +1680,4 @@ const stateFor = (sessionID) => {
     )
   }
 }
+

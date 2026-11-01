@@ -122,13 +122,13 @@ describe("blocksGet", () => {
     await saveState(storage, "ses_a", { blocks: [b1, b2, merged], attempts: 0 })
     const handlers = await createHandlers(storage, new Map())
     const result = (await handlers["blocksGet"]?.({ sessionID: "ses_a" })) as {
-      blocks: readonly { id: string; tier: number; format: string; sourceCount?: number; body: string }[]
+      blocks: readonly { id: string; tier: number; format: string; sourceBlockIds?: readonly string[]; body: string }[]
     }
     expect(result.blocks).toHaveLength(1)
     expect(result.blocks[0]?.id).toBe("b3")
     expect(result.blocks[0]?.tier).toBe(2)
     expect(result.blocks[0]?.format).toBe("json")
-    expect(result.blocks[0]?.sourceCount).toBe(2)
+    expect(result.blocks[0]?.sourceBlockIds).toEqual(["b1", "b2"])
     expect(result.blocks[0]?.body).toContain("## Goal")
     expect(result.blocks[0]?.body).toContain("title-b3")
   })
@@ -194,4 +194,5 @@ describe("settingsSet", () => {
     expect(saved).toEqual([])
   })
 })
+
 

@@ -14,8 +14,11 @@ export interface SummaryBlock {
   readonly at: number
   readonly sourceTokens: number
   readonly summaryTokens: number
-  /** 合并块的子块数量；原始 T1 块没有这个字段。 */
-  readonly sourceCount?: number
+  /** 子块 id 清单；连续来源会改用 sourceRange 存。 */
+  readonly sourceBlockIds?: readonly string[]
+  /** 连续子块的端点；与 sourceBlockIds 二选一。 */
+  readonly sourceRange?: { readonly first: string; readonly last: string }
   readonly body: string
 }
+
 

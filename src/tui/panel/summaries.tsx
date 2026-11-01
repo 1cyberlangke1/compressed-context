@@ -266,9 +266,13 @@ export function SummarySection(props: {
                   const meta = (): string => {
                     const parts: string[] = []
                     if (props.settings.showTimeline) parts.push(formatTimestamp(block.at))
-                    if (block.sourceCount !== undefined && block.sourceCount > 0) {
-                      // 只显示来源块数量；完整 id 链在 checkpoint_tree / 解压详情里看。
-                      parts.push(props.copy.mergedBlocks(block.sourceCount.toString()))
+                    if (block.sourceRange !== undefined) {
+                      // 连续来源显示端点；带空洞的来源显示完整清单，看得出合并了哪些块。
+                      parts.push(props.copy.mergedRange(`#${block.sourceRange.first}`, `#${block.sourceRange.last}`))
+                    } else if (block.sourceBlockIds !== undefined && block.sourceBlockIds.length > 0) {
+                      parts.push(
+                        props.copy.mergedJoined(block.sourceBlockIds.map((id) => `#${id}`).join(" + ")),
+                      )
                     }
                     return parts.join("  ")
                   }

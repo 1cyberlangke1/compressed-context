@@ -272,22 +272,23 @@ describe("渲染", () => {
     expect(titled).toContain(blockMarker("b1"))
   })
 
-  it("块头显示层级与合并来源数量", () => {
+  it("块头显示层级与合并来源", () => {
     const merged = renderBlock({ ...block, id: "b3", tier: 2, height: 2, sourceBlockIds: ["b1", "b2"] })
-    expect(merged.startsWith(`${blockMarker("b3")} [T2] {h2} · merged 2 blocks`)).toBe(true)
+    expect(merged.startsWith(`${blockMarker("b3")} [T2] {h2} · merged #b1 + #b2`)).toBe(true)
   })
 
-  it("紧凑 sourceRange 与旧 sourceBlockIds 渲染结果一致", () => {
-    const legacy = renderBlock({ ...block, id: "b3", tier: 2, height: 2, sourceBlockIds: ["b1", "b2"] })
+  it("连续来源显示端点，带空洞的来源显示完整清单", () => {
     const compact = renderBlock({
       ...block,
       id: "b3",
       tier: 2,
       height: 2,
-      sourceRange: { first: "b1", last: "b2" },
+      sourceRange: { first: "b1", last: "b8" },
     })
-    expect(compact.startsWith(`${blockMarker("b3")} [T2] {h2} · merged 2 blocks`)).toBe(true)
-    expect(compact).toBe(legacy)
+    expect(compact.startsWith(`${blockMarker("b3")} [T2] {h2} · merged #b1…#b8`)).toBe(true)
+    // b3 与 b6 之间有空洞：必须把两块都写出来，不能压成端点。
+    const holes = renderBlock({ ...block, id: "b7", tier: 3, height: 3, sourceBlockIds: ["b3", "b6"] })
+    expect(holes.startsWith(`${blockMarker("b7")} [T3] {h3} · merged #b3 + #b6`)).toBe(true)
   })
 
   it("token 估算与时间线只在开关打开时出现", () => {
@@ -2997,4 +2998,5 @@ describe("多次压缩长跑", () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 })
+
 

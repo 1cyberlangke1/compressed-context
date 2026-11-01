@@ -76,7 +76,7 @@ function fakeBlocks(): SummaryBlock[] {
       at: 2,
       sourceTokens: 20,
       summaryTokens: 5,
-      sourceCount: 1,
+      sourceBlockIds: ["b1"],
       body: "## Goal\n\nMERGED_MARKER",
     },
   ]
@@ -222,7 +222,7 @@ describe("Panel", () => {
       expect(frame).toContain("[T1] {h1} b1 : first")
       expect(frame).toContain("[T2] {h2} b2 : merged")
       expect(frame).toContain("≈10")
-      expect(frame).toContain("合并 1 块")
+      expect(frame).toContain("合并 #b1")
     } finally {
       app.renderer.destroy()
     }
@@ -376,6 +376,7 @@ describe("Panel", () => {
     }
   })
 })
+
 
 
 

@@ -17,8 +17,10 @@ export interface Messages {
   readonly cacheCached: string
   readonly cacheHit: string
   readonly summariesTitle: string
-  /** 合并块的来源块数量标签；具体 id 详情在 checkpoint_tree 里看。 */
-  readonly mergedBlocks: (count: string) => string
+  /** 连续来源：显示首尾端点。 */
+  readonly mergedRange: (from: string, to: string) => string
+  /** 带空洞的来源：显示完整清单。 */
+  readonly mergedJoined: (ids: string) => string
   readonly noData: string
   readonly command: {
     readonly title: string
@@ -181,3 +183,4 @@ export interface Messages {
     readonly en: string
   }
 }
+

@@ -21,7 +21,8 @@ export const zh: Messages = {
   cacheCached: "缓存",
   cacheHit: "命中",
   summariesTitle: "摘要块",
-  mergedBlocks: (count) => `合并 ${count} 块`,
+  mergedRange: (from, to) => `合并 ${from}…${to}`,
+  mergedJoined: (ids) => `合并 ${ids}`,
   noData: "—",
   command: {
     title: "压缩上下文设置",
@@ -185,4 +186,6 @@ export const zh: Messages = {
     en: "English",
   },
 }
+
+
 
