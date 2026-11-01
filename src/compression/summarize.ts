@@ -32,10 +32,18 @@ function promptRules(options: SummaryPromptOptions | undefined): string[] {
   const lines =
     options?.format === "babel"
       ? [
-          "- Audience=peer LLM. Notation only, not content: drop grammar/connectives, mix languages/emoji/math（forall、exists、in、=>）.",
-          "- Only `T=<short title>|G=<one-line goal>` fixed; invent anchors and reuse them; no headings/paragraphs/sentences/JSON/fences.",
-          "- Anchors: `S[module]` `D[decision]:why` `F[path:line]` `C[step>step]` `Config[target]:k=v` `?cond=>action` `!edge:detail` `Eval[A/B]:result`; flatten parallel items `[A,B,C]`.",
-          "- Files `F:[...]` complete, never \"various files\"; commands `C:[...]` verbatim, never paraphrase.",
+          "- Target audience: peer LLM. Notation only, not content: completely drop grammar, connectives, full sentences, and narrative prose.",
+          "- Omnilingual: freely mix languages (Chinese concepts, English identifiers, German compounds, Japanese kanji, Latin roots), choosing the single highest-density token for each meaning.",
+          "- Strict Structural Mapping (BT-P8): all body statements MUST use high-density anchors; natural language sentences and markdown headings are strictly forbidden:",
+          "  * Modules: `S[module]`, define abbrev once via `@[short=full]`.",
+          "  * Decisions: `D[decision]:why`.",
+          "  * Files `F:[...]` complete, never \"various files\"; copy full paths with line numbers (F[path:line]).",
+          "  * commands `C:[...]` verbatim, never paraphrase.",
+          "  * Parameters: `Config[target]:k=v(unit)`, exact values, no rounding, never estimate.",
+          "  * Logic: pipelines `A>B>C`, causality `A=>B`, conditions `?cond=>action`.",
+          "  * Exceptions: `!object:detail` for errors, pitfalls, edge conditions.",
+          "  * Evaluations: `Eval[A/B]:result`.",
+          "  * Parallel items flattened: `[A, B, C]`.",
           "- Lossless: entity graph, exact numbers (no rounding), versions, config keys, thresholds, formulas, conditions, causality, exceptions, comparisons, placeholders, paths, signatures, error text; unknown=?/NULL, never invent.",
         ]
       : options?.format === "markdown"
@@ -99,27 +107,29 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
 }
 
 const BABEL_T1_RULES = `Guidance:
-- This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own. Describe what already happened as history, not as instructions to act now.
-- Keep the objective and hard constraints, decisions with their reasons, outcomes, open items, work the user still expects, and failure lessons.
-- Coverage: every topic, file path, test count, command, and version in the source must appear; never omit one because another seems more important.
+- This checkpoint replaces older messages; next reader sees it instead of them. Self-contained history, not current instructions. Pure Babel notation only, zero prose.
+- Lossless coverage: all original content requirements are mandatory. Keep the objective and hard constraints, decisions with their reasons (D[decision]:why), shipped outcomes, open items, work the user still expects, and failure lessons (!object:pitfall).
+- Exact technical facts: copy exact identifiers instead of describing them: full paths with line numbers (F[path:line]), the line of code that carries the logic, signatures, error text, versions, config keys, thresholds, measured values (Config[target]:k=v).
 - Abbrev: define once @[short=long], reuse the short form; never write the same long name twice.
-- Copy exact identifiers instead of describing them: full paths with line numbers, the line of code that carries the logic, signatures, error text, versions, config keys, thresholds, measured values.
-- Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why they failed), repeated status checks, and settled discussion.
+- Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (one concise line on why they failed), repeated status checks, and settled discussion.
 - If space is tight, keep in this order: objective and constraints; decisions and reasons; exact technical facts; conclusions; lessons from failures.`
 
 const BABEL_T2_RULES = `Guidance for merging existing checkpoints:
-- The sources are already compressed; merge them into one checkpoint covering all of them, without re-telling the process.
-- Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items, blocked work, and the user's still-open expectations.
-- Merge duplicate facts and keep the latest status; mark superseded content with one short marker and drop its details.
-- Drop process, logs, full diffs, code listings, and non-load-bearing line numbers. A failed attempt may stay as one line on why it failed.
-- Target roughly 50-150 tokens per source block.`
+- The sources are already compressed Babel blocks; merge them into one compact Babel block without re-telling. Pure Babel notation only.
+- Deduplicate & consolidate: merge identical S[module] across blocks into one latest module. Flatten parallel items: S[mod]:[feat1, feat2], F:[path1, path2].
+- State evolution: merge Config[target] into latest final parameters; update D[decision]:why to current consensus.
+- Prune superseded items: mark obsolete decisions/approaches with single inline marker [SUPERSEDED by X] and purge their historical details.
+- Preserve open trajectory: keep the latest objective, unresolved !object:detail issues, uncompleted work, and user expectations.
+- Drop process, full diffs, non-load-bearing line numbers, and settled exploration.
+- Target roughly 50-150 tokens per source block. Pure symbolic density.`
 
 const BABEL_T3_RULES = `Guidance for ultra-condensing existing checkpoints:
-- Reduce the sources to a lookup index: one to three single-line facts per source block, subject plus outcome.
-- Keep only shipped outcomes, open work, architectural decisions, and critical constraints.
-- Drop explanations, rationale details, process, logs, and anything already obsolete or superseded.
+- Reduce the sources to an ultra-minimal telegraphic lookup index. Pure symbols and dense keywords only.
+- Index rows: 1-2 dense anchor lines per source component: S[module]:final_outcome | Config[key]=value.
+- Invariants only: keep only shipped architectural invariants, active constraints, and uncompleted user goals.
+- Purge: drop all intermediate D[decision] rationale, resolved !errors, and obsolete history.
 - Open user-requested objectives survive until a later source marks them completed or superseded.
-- Target roughly 30-60 tokens per source block.`
+- Target roughly 30-60 tokens per source block. Absolute token floor.`
 
 const TIER1_RULES = `Guidance:
 - This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own.
@@ -244,7 +254,7 @@ const MARKDOWN_CHOICE_RULES = `Guidance for choosing and merging:
 
 const BABEL_CHOICE_RULES = `Guidance for choosing and merging:
 - Merge the FIRST N blocks of the group below into ONE checkpoint. Blocks after the Nth stay untouched; blocks outside the group are context only.
-- First line must be \`c=N\`, where N is how many blocks you merge (1..group size). Second line must be \`T=<short title>|G=<one-line goal>\`; after that write adaptive Babel with anchors you invent and reuse.
+- First line must be \`c=N\`, where N is how many blocks you merge (1..group size). Second line must be \`T=<short title>|G=<one-line goal>\`; after that output strictly in dense Babel notation using single-character anchors (S[], D[], Config[], F[], ?=>, !:, Eval[]). Zero prose, zero sentences, zero markdown headings.
 - N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - Babel changes only notation, not content: same policy as a normal merge checkpoint. No Markdown headings, no JSON, no prose/sentences, no code fences.
 - Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items, blocked work, and exact facts that still matter.
