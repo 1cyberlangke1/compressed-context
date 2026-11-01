@@ -642,7 +642,17 @@ try {
   }
 
   /** 输入：sessionID；输出：插件 state。 */
-  const stateFor = (sessionID) => {
+  /** 输入：块；输出：子块 id 列表。预期：兼容旧 sourceBlockIds 与新的紧凑 sourceRange。 */
+const sourceIdsOf = (block) => {
+  if (Array.isArray(block?.sourceBlockIds)) return block.sourceBlockIds
+  const range = block?.sourceRange
+  if (range === undefined) return []
+  const from = Number(String(range.first).slice(1))
+  const to = Number(String(range.last).slice(1))
+  if (!Number.isInteger(from) || !Number.isInteger(to) || to < from) return []
+  return Array.from({ length: to - from + 1 }, (_, index) => `b${String(from + index)}`)
+}
+const stateFor = (sessionID) => {
     const conn = new Database(join(root, "opencode.db"))
     const key = `plugin:${pluginHex}:compression:state:${sessionID}`
     const row = conn.query("select value from kv where key = ?").get(key)
@@ -793,7 +803,7 @@ try {
     const parsed = JSON.parse(stateValue)
     console.log(
       "state blocks:",
-      parsed.blocks?.map((block) => `${block.id}:T${block.tier}:${block.sourceBlockIds?.join("+") ?? ""}`),
+      parsed.blocks?.map((block) => `${block.id}:T${block.tier}:${sourceIdsOf(block).join("+")}`),
       "pending:",
       parsed.pending?.id,
       "phase:",
@@ -823,8 +833,8 @@ try {
   assert.ok(raw.includes("[Compressed conversation section #b3]"), "T2 checkpoint missing")
   assert.ok(!String(latest?.summary ?? "").includes("[Compressed conversation section #b1]"), "latest checkpoint still shows T1")
   assert.ok(
-    String(latest?.summary ?? "").includes("[T2] {h2} · merged #b1 + #b2"),
-    "T2 header must show merged sources",
+    String(latest?.summary ?? "").includes("[T2] {h2} · merged 2 blocks"),
+    "T2 header must show merged source count",
   )
   assert.ok(raw.includes("[T1]"), "block header must show tier")
   assert.ok(raw.includes("{h1}"), "block header must show tree height")
@@ -1241,7 +1251,7 @@ try {
   const stateAAfterChild = stateFor(sessionA)
   assert.equal(stateChild.blocks.length, 1, "child should have its own block")
   assert.equal(stateAAfterChild?.blocks?.length, 1, "parent must not gain child blocks")
-  assert.equal(stateChild.blocks[0]?.sourceBlockIds, undefined)
+  assert.equal(sourceIdsOf(stateChild.blocks[0]).length, 0)
   usagePromptTokens = undefined
 
   // 子代理上下文里不出现 compress / decompress / checkpoint_tree：
@@ -1284,7 +1294,7 @@ try {
    * 预期：被任何块 sourceBlockIds 引用过的块不算 active。
    */
   const activeBlocksOf = (state) => {
-    const consumed = new Set((state?.blocks ?? []).flatMap((block) => block.sourceBlockIds ?? []))
+    const consumed = new Set((state?.blocks ?? []).flatMap((block) => sourceIdsOf(block)))
     return (state?.blocks ?? [])
       .filter((block) => !consumed.has(block.id))
       .sort((left, right) => left.order - right.order)
@@ -1344,7 +1354,7 @@ try {
     "first merge produces a T2 block with height 2",
   )
   const firstT2 = chainState.blocks.find((block) => block.tier === 2)
-  assert.ok((firstT2?.sourceBlockIds?.length ?? 0) >= 2, "model merged a two-block prefix")
+  assert.ok(sourceIdsOf(firstT2).length >= 2, "model merged a two-block prefix")
   assert.ok(
     (chainState.blocks ?? []).every((block) => block.tier <= 3),
     "no block may exceed the tier cap",
@@ -1412,8 +1422,8 @@ try {
     "merge after editing retention",
   )
   const editT2 = editState.blocks.find((block) => block.tier === 2)
-  assert.ok((editT2?.sourceBlockIds?.length ?? 0) >= 2, "only the oldest eligible T1 blocks may merge")
-  const editConsumed = new Set(editState.blocks.flatMap((block) => block.sourceBlockIds ?? []))
+  assert.ok(sourceIdsOf(editT2).length >= 2, "only the oldest eligible T1 blocks may merge")
+  const editConsumed = new Set(editState.blocks.flatMap((block) => sourceIdsOf(block)))
   const editActive = editState.blocks.filter((block) => !editConsumed.has(block.id))
   assert.equal(
     editActive.filter((block) => block.tier === 1).length,
@@ -1483,7 +1493,7 @@ try {
   )
   const babelT2 = (babelState?.blocks ?? []).find((block) => block.tier === 2)
   assert.equal(babelT2?.summary?.format, "babel", "Babel T2 must keep format=babel")
-  assert.ok((babelT2?.sourceBlockIds?.length ?? 0) >= 2, "Babel T2 merges a two-block prefix")
+  assert.ok(sourceIdsOf(babelT2).length >= 2, "Babel T2 merges a two-block prefix")
 
   for (let round = 0; round < 10; round += 1) {
     if (stateFor(babelSession)?.phase === undefined) break
@@ -1531,14 +1541,14 @@ try {
   }
   const longState = stateFor(longSession)
   const longBlocks = longState?.blocks ?? []
-  const longMerged = longBlocks.filter((block) => (block.sourceBlockIds ?? []).length > 0)
-  const longConsumed = new Set(longBlocks.flatMap((block) => block.sourceBlockIds ?? []))
+  const longMerged = longBlocks.filter((block) => sourceIdsOf(block).length > 0)
+  const longConsumed = new Set(longBlocks.flatMap((block) => sourceIdsOf(block)))
   const longActive = longBlocks
     .filter((block) => !longConsumed.has(block.id))
     .sort((left, right) => left.order - right.order)
   console.log(
     "long session blocks:",
-    longBlocks.map((block) => `${block.id}:T${block.tier}:${(block.sourceBlockIds ?? []).join("+")}`).join(" "),
+    longBlocks.map((block) => `${block.id}:T${block.tier}:${sourceIdsOf(block).join("+")}`).join(" "),
     "active:",
     longActive.map((block) => `${block.id}:T${block.tier}`).join(" "),
     "phase:",
