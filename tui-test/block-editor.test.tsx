@@ -30,6 +30,7 @@ function fakeContext(height = 40): Context {
     theme: fakeTheme(),
     renderer: { height },
     location: { directory: "/work" },
+    keymap: { layer: () => {} },
     ui: {
       dialog: { show: () => {}, set: () => {}, clear: () => {} },
       toast: { show: () => {} },
@@ -160,5 +161,57 @@ describe("摘要块弹窗", () => {
       app.renderer.destroy()
     }
   })
+
+  test("编辑器里取消悬停变红、保存悬停变绿", async () => {
+    const app = await testRender(
+      () => (
+        <BlockEditorDialog
+          context={fakeContext(24)}
+          copy={copy}
+          sessionID="ses_a"
+          block={fakeBlock()}
+          onSaved={() => {}}
+        />
+      ),
+      { width: 60, height: 24 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.cancel))
+      const line = frame.split("\n").find((value) => value.includes(copy.cancel)) ?? ""
+      const row = frame.split("\n").findIndex((value) => value.includes(copy.cancel))
+      /** 输入：行内字符下标；输出：终端显示列（CJK 占两列）。 */
+      const column = (index: number): number => {
+        let width = 0
+        for (const char of Array.from(line).slice(0, index)) {
+          width += (char.codePointAt(0) ?? 0) > 0x1100 ? 2 : 1
+        }
+        return width
+      }
+      /** 输入：子串；输出：0-255 的前景色。 */
+      const foreground = (needle: string): readonly number[] => {
+        const captured = app.captureSpans()
+        for (const capturedLine of captured.lines) {
+          for (const span of capturedLine.spans) {
+            if (span.text.includes(needle)) {
+              return [span.fg.r, span.fg.g, span.fg.b].map((value) => Math.round(value * 255))
+            }
+          }
+        }
+        return []
+      }
+
+      await app.mockMouse.moveTo(column(line.indexOf(copy.cancel)), row)
+      await Bun.sleep(50)
+      expect(foreground(copy.cancel)).toEqual([255, 0, 0])
+
+      await app.mockMouse.moveTo(column(line.indexOf(copy.save)), row)
+      await Bun.sleep(50)
+      expect(foreground(copy.save)).toEqual([0, 255, 0])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 })
+
 

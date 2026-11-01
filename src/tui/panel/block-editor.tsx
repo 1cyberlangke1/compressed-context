@@ -102,6 +102,28 @@ export function BlockEditorDialog(props: {
     }
   }
 
+  // 宿主对话框会先截走带修饰键的组合；这里挂 keymap 命令，让 ctrl+s / alt+s 真正能保存。
+  props.context.keymap.layer(() => ({
+    mode: "global",
+    target: () => textarea ?? null,
+    commands: [
+      {
+        id: "compressed-context.block.save",
+        bind: "ctrl+s",
+        run() {
+          void save()
+        },
+      },
+      {
+        id: "compressed-context.block.save-alt",
+        bind: "alt+s",
+        run() {
+          void save()
+        },
+      },
+    ],
+  }))
+
   return (
     <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -154,7 +176,12 @@ export function BlockEditorDialog(props: {
           // esc 只取消，绝不保存。
           if (event.name === "escape") props.context.ui.dialog.clear()
         }}
-        keyBindings={[{ name: "s", ctrl: true, action: "submit" }]}
+        keyBindings={[
+          { name: "s", ctrl: true, action: "submit" },
+          // 有些终端把 ctrl+s 当成流控吞掉；alt+s / F2 是同一动作的备用键。
+          { name: "s", meta: true, action: "submit" },
+          { name: "f2", action: "submit" },
+        ]}
         onSubmit={() => {
           void save()
         }}

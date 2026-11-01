@@ -22,6 +22,10 @@ export interface Messages {
     readonly title: string
     readonly description: string
     readonly group: string
+    readonly editTitle: string
+    readonly editDescription: string
+    readonly noSession: string
+    readonly noBlocks: string
   }
   readonly update: {
     readonly checkUpdates: string

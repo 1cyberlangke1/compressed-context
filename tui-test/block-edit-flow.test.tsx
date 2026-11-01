@@ -51,6 +51,8 @@ const settings = (): Settings => ({
 
 /** 记录 RPC 调用；返回固定成功。 */
 const calls: { method: string; input: unknown }[] = []
+/** 记录 toast，用来确认保存后一定给了可视化反馈。 */
+const toasts: { title?: string; message: string; variant?: string }[] = []
 
 /**
  * 输入：渲染根。
@@ -63,13 +65,18 @@ function Flow() {
     theme: fakeTheme(),
     renderer: { height: 40 },
     location: { directory: "/work" },
+    keymap: { layer: () => {} },
     ui: {
       dialog: {
         show: (render: () => JSX.Element) => setDialog(() => render),
         set: () => {},
         clear: () => setDialog(undefined),
       },
-      toast: { show: () => {} },
+      toast: {
+        show: (options: { title?: string; message: string; variant?: string }) => {
+          toasts.push(options)
+        },
+      },
     },
     client: {
       rpc: () => ({
@@ -118,6 +125,7 @@ function displayColumn(line: string, index: number): number {
 describe("摘要块编辑链路", () => {
   test("点块行 → 点 ✎ → 原文预填 → ctrl+s 提交", async () => {
     calls.length = 0
+    toasts.length = 0
     const app = await testRender(() => <Flow />, { width: 70, height: 30 })
     app.renderer.start()
     try {
@@ -164,8 +172,47 @@ describe("摘要块编辑链路", () => {
       expect(input.blockID).toBe("b1")
       expect(input.expectedAt).toBe(1234)
       expect(input.text).toBe(`X${BODY}`)
+
+      // 4. 保存成功后必须给一条 toast 反馈。
+      expect(toasts).toHaveLength(1)
+      expect(toasts[0]?.variant).toBe("success")
+      expect(toasts[0]?.title).toBe(resolveMessages("zh").blockEditor.saved)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("alt+s 也能保存（终端吞掉 ctrl+s 时的备用键）", async () => {
+    calls.length = 0
+    toasts.length = 0
+    const app = await testRender(() => <Flow />, { width: 70, height: 30 })
+    app.renderer.start()
+    try {
+      const list = await app.waitForFrame((value) => value.includes("块标题"))
+      await app.mockMouse.click(6, rowOf(list, "块标题"))
+      const reader = await app.waitForFrame((value) => value.includes("esc"))
+      const readerLine = reader.split("\n").find((line) => line.includes("esc")) ?? ""
+      const escColumn = displayColumn(readerLine, readerLine.indexOf("esc"))
+      const headerRow = rowOf(reader, "esc")
+      for (const x of [escColumn - 2, escColumn - 3, escColumn - 4]) {
+        await app.mockMouse.click(x, headerRow)
+        const opened = await app
+          .waitForFrame((value) => value.includes(resolveMessages("zh").blockEditor.title), {
+            maxPasses: 20,
+          })
+          .then(() => true)
+          .catch(() => false)
+        if (opened) break
+      }
+      await app.mockInput.typeText("Y")
+      app.mockInput.pressKey("s", { meta: true })
+      await Bun.sleep(50)
+      expect(calls).toHaveLength(1)
+      expect((calls[0]?.input as { text: string }).text).toBe(`Y${BODY}`)
     } finally {
       app.renderer.destroy()
     }
   })
 })
+
+

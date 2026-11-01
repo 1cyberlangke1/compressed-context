@@ -26,6 +26,10 @@ export const zh: Messages = {
     title: "压缩上下文设置",
     description: "打开插件设置",
     group: "插件",
+    editTitle: "编辑摘要块",
+    editDescription: "选一个摘要块，直接在正文上改",
+    noSession: "请先打开一个会话",
+    noBlocks: "这个会话还没有摘要块",
   },
   update: {
     checkUpdates: "检查更新",

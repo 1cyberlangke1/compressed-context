@@ -109,5 +109,13 @@ jobs:
       - run: bun scripts/e2e-tool-loop.mjs
       - run: bun scripts/e2e-compress.mjs
       - run: bun scripts/e2e-nudge.mjs
+      # 打断压缩后的恢复链路：假 provider 挂住摘要请求，验证 interrupted 不会留死锁。
+      - run: bun scripts/e2e-repro-interrupt.mjs
+      # 真实 TUI（PTY）需要发布口径的 dist/tui.js。
+      - run: bun scripts/build-tui.mjs
       # 真实 TUI（PTY）里的插件弹窗：验证 TUI 入口在 Linux 上也能加载并交互。
       - run: bun scripts/e2e-native-compaction.mjs
+      # 真实 TUI 里完整走一遍「触发压缩 → 点开块 → 编辑 → ctrl+s 保存」。
+      - run: bun scripts/e2e-block-edit.mjs
+      # 更新菜单：本地假 registry + 假 opencode，验证确认/进度/失败三条界面路径。
+      - run: bun scripts/build-tui.mjs && bun scripts/e2e-update.mjs
