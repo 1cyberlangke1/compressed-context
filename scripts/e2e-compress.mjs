@@ -1087,12 +1087,21 @@ try {
   const sessionA = await newSession("e2e-iso-a")
   const sessionB = await newSession("e2e-iso-b")
   for (const id of [sessionA, sessionB]) {
-    await promptSession(id, "parent-tools-marker")
-    await promptSession(id, longText)
-    await promptSession(id, "continue")
+    // 只发一条长消息：多一条用户消息就会合法地再触发一次自动压缩，块数就不再固定为 1。
+    // 标记词留在同一条消息里，供后面的「请求里带没带 compress 工具」用例识别父会话。
+    await promptSession(id, `parent-tools-marker ${longText}`)
   }
-  const stateA = assertBlockCount(sessionA, 1, "session A should have one block")
-  const stateB = assertBlockCount(sessionB, 1, "session B should have one block")
+  /** 输入：会话 + 期望块数；输出：块数稳定后的 state。预期：等自动压缩落盘，别用时序断言。 */
+  const waitForBlockCount = async (sessionID, expected, timeoutMs = 15_000) => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if ((stateFor(sessionID)?.blocks?.length ?? 0) >= expected) break
+      await Bun.sleep(200)
+    }
+    return assertBlockCount(sessionID, expected, `session ${sessionID} should have ${expected.toString()} block(s)`)
+  }
+  const stateA = await waitForBlockCount(sessionA, 1)
+  const stateB = await waitForBlockCount(sessionB, 1)
   assert.equal(stateA?.blocks?.[0]?.tier, 1)
   assert.equal(stateB?.blocks?.[0]?.tier, 1)
   assert.notEqual(stateA?.blocks?.[0]?.fromId, stateB?.blocks?.[0]?.fromId)
