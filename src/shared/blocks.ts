@@ -14,6 +14,8 @@ export interface SummaryBlock {
   readonly at: number
   readonly sourceTokens: number
   readonly summaryTokens: number
-  readonly sourceBlockIds?: readonly string[]
+  /** 合并块的子块数量；原始 T1 块没有这个字段。 */
+  readonly sourceCount?: number
   readonly body: string
 }
+

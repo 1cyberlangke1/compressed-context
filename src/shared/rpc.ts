@@ -147,7 +147,7 @@ const BlockJson = {
     at: { type: "number" },
     sourceTokens: { type: "number" },
     summaryTokens: { type: "number" },
-    sourceBlockIds: { type: "array", items: { type: "string" } },
+    sourceCount: { type: "number" },
     body: { type: "string" },
   },
   required: ["id", "tier", "height", "format", "title", "at", "sourceTokens", "summaryTokens", "body"],
@@ -314,3 +314,4 @@ export function rpcLocation(context: {
 } | undefined {
   return context.location === undefined ? undefined : { location: { directory: context.location.directory } }
 }
+

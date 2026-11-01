@@ -266,8 +266,9 @@ export function SummarySection(props: {
                   const meta = (): string => {
                     const parts: string[] = []
                     if (props.settings.showTimeline) parts.push(formatTimestamp(block.at))
-                    if (block.sourceBlockIds !== undefined && block.sourceBlockIds.length > 0) {
-                      parts.push(`merged ${block.sourceBlockIds.map((id) => `#${id}`).join(" + ")}`)
+                    if (block.sourceCount !== undefined && block.sourceCount > 0) {
+                      // 只显示来源块数量；完整 id 链在 checkpoint_tree / 解压详情里看。
+                      parts.push(props.copy.mergedBlocks(block.sourceCount.toString()))
                     }
                     return parts.join("  ")
                   }

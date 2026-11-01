@@ -21,6 +21,7 @@ export const en: Messages = {
   cacheCached: "Cached",
   cacheHit: "Hit",
   summariesTitle: "Summaries",
+  mergedBlocks: (count) => `merged ${count} blocks`,
   noData: "—",
   command: {
     title: "Compressed context settings",
@@ -185,3 +186,4 @@ export const en: Messages = {
     en: "English",
   },
 }
+

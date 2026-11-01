@@ -5,7 +5,7 @@ import { countText } from "../shared/tokens.ts"
 import { loadServerSettings } from "./settings.ts"
 import { isSubagentSession } from "./session-role.ts"
 import type { Disposable } from "./settings-rpc.ts"
-import { loadState, type Block, type State } from "./state.ts"
+import { loadState, sourceIdsOf, type Block, type State } from "./state.ts"
 
 const DESCRIPTION =
   "Shows the checkpoint tree: block ids, tiers, and titles. Use the block ids with decompress to restore content."
@@ -66,7 +66,7 @@ function subtreeLines(block: Block, path: string, all: Map<string, Block>): Tree
 
 /** 输入：父块；输出：合并进它的直接子块（按 order 排）。 */
 function childrenOf(parent: Block, all: Map<string, Block>): Block[] {
-  const ids = parent.sourceBlockIds ?? []
+  const ids = sourceIdsOf(parent)
   const children = ids.map((id) => all.get(id)).filter((block): block is Block => block !== undefined)
   return children.sort((left, right) => left.order - right.order)
 }
@@ -89,7 +89,7 @@ export function renderCheckpointTree(state: State, showTokens: boolean): string 
   const all = byId(state.blocks)
   const consumed = new Set<string>()
   for (const block of state.blocks) {
-    for (const source of block.sourceBlockIds ?? []) consumed.add(source)
+    for (const source of sourceIdsOf(block)) consumed.add(source)
   }
   const roots = state.blocks
     .filter((block) => !consumed.has(block.id))
@@ -145,3 +145,4 @@ export async function registerCheckpointTreeTool(ctx: Plugin.Context): Promise<D
   })
   return registration
 }
+

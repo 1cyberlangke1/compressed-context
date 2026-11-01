@@ -1,4 +1,4 @@
-import type { Block } from "./state.ts"
+import { sourceIdsOf, type Block } from "./state.ts"
 import type { Summary } from "./schema.ts"
 import { summaryBody, summaryTitle } from "./summary.ts"
 import { formatTimestamp } from "../shared/format.ts"
@@ -30,8 +30,10 @@ export function renderBlock(block: Block, options: RenderOptions = {}): string {
   // 层号放方括号，树高放花括号紧跟其后：`[T2] {h6}`，两者不混在一起。
   const tag = `[T${block.tier.toString()}] {h${block.height.toString()}}`
   const extras: string[] = []
-  if (block.sourceBlockIds !== undefined && block.sourceBlockIds.length > 0) {
-    extras.push(`merged ${block.sourceBlockIds.map((id) => `#${id}`).join(" + ")}`)
+  const sources = sourceIdsOf(block)
+  if (sources.length > 0) {
+    // 给模型看的头部也只用数量：完整子块链在 checkpoint_tree 里查得到。
+    extras.push(`merged ${sources.length.toString()} blocks`)
   }
   if (options.showBlockTokens === true) {
     extras.push(`≈${countText(body).toString()} tok`)
@@ -48,13 +50,13 @@ export function renderBlock(block: Block, options: RenderOptions = {}): string {
 /**
  * 输入：已落盘块 + 可选 pending 块 + 渲染开关。
  * 输出：active 顶层块，按 order 排序。
- * 预期：被任何块 sourceBlockIds 引用的块不显示；合并块占据第一个源块的位置。
+ * 预期：被任何块引用的子块不显示；合并块占据第一个源块的位置。
  */
 export function activeBlocks(blocks: readonly Block[], pending?: Block): readonly Block[] {
   const all = pending === undefined ? blocks : [...blocks, pending]
   const consumed = new Set<string>()
   for (const block of all) {
-    for (const sourceId of block.sourceBlockIds ?? []) consumed.add(sourceId)
+    for (const sourceId of sourceIdsOf(block)) consumed.add(sourceId)
   }
   return all
     .filter((block) => !consumed.has(block.id))
@@ -71,3 +73,4 @@ export function renderAll(
     .map((block) => renderBlock(block, options))
     .join("\n\n")
 }
+

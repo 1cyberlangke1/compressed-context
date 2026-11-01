@@ -10,7 +10,7 @@ import { isCompactionInFlight } from "./inflight.ts"
 import { disableNativeCompaction } from "./native-compaction.ts"
 import { activeBlocks, renderSummary } from "./render.ts"
 import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
-import { loadState } from "./state.ts"
+import { loadState, sourceIdsOf } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import { normalizeSettings, resolveSummaryLimits } from "../shared/settings.ts"
 import {
@@ -110,7 +110,7 @@ export async function registerSettingsRpc(
         at: block.at,
         sourceTokens: block.sourceTokens,
         summaryTokens: block.summaryTokens,
-        ...(block.sourceBlockIds === undefined ? {} : { sourceBlockIds: [...block.sourceBlockIds] }),
+        ...(sourceIdsOf(block).length === 0 ? {} : { sourceCount: sourceIdsOf(block).length }),
         body: renderSummary(block.summary),
       }))
       return { blocks }
@@ -176,3 +176,4 @@ export async function registerSettingsRpc(
     },
   })
 }
+

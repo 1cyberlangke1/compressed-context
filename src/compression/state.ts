@@ -32,8 +32,57 @@ export interface Block {
   readonly at: number
   /** active 链中的顺序；合并块占第一个源块的位置。 */
   readonly order: number
-  /** 被本块合并的源块；空表示原始 T1 块。 */
+  /** 被本块合并的源块；空表示原始 T1 块。旧数据用这个字段。 */
   readonly sourceBlockIds?: readonly string[]
+  /**
+   * 子块 id 连续时的紧凑存法：`b3..b6` 只存两个端点。
+   * 与 `sourceBlockIds` 互斥；读取时用 `sourceIdsOf()` 统一展开。
+   */
+  readonly sourceRange?: { readonly first: string; readonly last: string }
+}
+
+/**
+ * 输入：块；输出：它的子块 id 列表。
+ * 预期：`sourceRange` 与 `sourceBlockIds` 二选一；两种情况都展开成同一个列表，
+ *       调用方不用关心存的是哪一种。
+ */
+export function sourceIdsOf(block: {
+  readonly sourceBlockIds?: readonly string[] | undefined
+  readonly sourceRange?: { readonly first: string; readonly last: string } | undefined
+}): readonly string[] {
+  if (block.sourceBlockIds !== undefined) return block.sourceBlockIds
+  const range = block.sourceRange
+  if (range === undefined) return []
+  return expandRange(range.first, range.last)
+}
+
+/** 输入：首尾 id；输出：闭区间内的 id 列表。预期：只处理 `b<数字>` 形状，其它形状返回空。 */
+function expandRange(first: string, last: string): readonly string[] {
+  const from = idNumber(first)
+  const to = idNumber(last)
+  if (from === undefined || to === undefined || to < from) return []
+  return Array.from({ length: to - from + 1 }, (_, index) => `b${(from + index).toString()}`)
+}
+
+/** 输入：块 id；输出：数字部分；不是 `b<数字>` 时 undefined。 */
+function idNumber(id: string): number | undefined {
+  if (!id.startsWith("b")) return undefined
+  const value = Number(id.slice(1))
+  return Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
+/**
+ * 输入：子块 id 列表；输出：能压成闭区间时返回端点，否则 undefined。
+ * 预期：只有 id 数字连续（b3,b4,b5）才压缩；b3,b6 这种带空洞的必须存完整列表。
+ */
+export function contiguousRange(ids: readonly string[]): { first: string; last: string } | undefined {
+  if (ids.length < 2) return undefined
+  const numbers = ids.map((id) => idNumber(id))
+  if (numbers.some((value) => value === undefined)) return undefined
+  const sorted = [...(numbers as number[])].sort((left, right) => left - right)
+  const contiguous = sorted.every((value, index) => index === 0 || value === (sorted[index - 1] ?? 0) + 1)
+  if (!contiguous) return undefined
+  return { first: `b${(sorted[0] ?? 0).toString()}`, last: `b${(sorted[sorted.length - 1] ?? 0).toString()}` }
 }
 
 /** 每个会话一份的压缩状态。 */
@@ -178,6 +227,18 @@ function parseBlock(value: unknown): Block | undefined {
   if (typeof block["at"] !== "number" || typeof block["order"] !== "number") return undefined
   const sourceBlockIds = block["sourceBlockIds"]
   if (sourceBlockIds !== undefined && !isStringArray(sourceBlockIds)) return undefined
+  const rawRange = block["sourceRange"]
+  const sourceRange =
+    typeof rawRange === "object" &&
+    rawRange !== null &&
+    typeof (rawRange as Record<string, unknown>)["first"] === "string" &&
+    typeof (rawRange as Record<string, unknown>)["last"] === "string"
+      ? {
+          first: (rawRange as Record<string, string>)["first"] ?? "",
+          last: (rawRange as Record<string, string>)["last"] ?? "",
+        }
+      : undefined
+  if (rawRange !== undefined && sourceRange === undefined) return undefined
   const summary = parseSummary(block["summary"])
   if (summary === undefined) return undefined
   return {
@@ -192,6 +253,7 @@ function parseBlock(value: unknown): Block | undefined {
     at: block["at"],
     order: block["order"],
     ...(sourceBlockIds === undefined ? {} : { sourceBlockIds }),
+    ...(sourceRange === undefined ? {} : { sourceRange }),
   }
 }
 
@@ -213,7 +275,7 @@ function normalizeSourceTokens(
   const compute = (block: Block, visiting: Set<string>): number => {
     const cached = memo.get(block.id)
     if (cached !== undefined) return cached
-    const sources = block.sourceBlockIds ?? []
+    const sources = sourceIdsOf(block)
     if (block.tier === 1 || sources.length === 0) {
       memo.set(block.id, block.sourceTokens)
       return block.sourceTokens
@@ -399,3 +461,4 @@ export function clearPhase(state: State): State {
 export function withPending(state: State, block: Block): State {
   return { ...state, pending: block }
 }
+

@@ -4,6 +4,7 @@ import type { SummaryFields } from "../src/compression/schema.ts"
 import {
   PENDING_TIMEOUT_MS,
   clearPhase,
+  sourceIdsOf,
   commitPending,
   dropPending,
   expireStalePending,
@@ -155,6 +156,30 @@ describe("state transitions", () => {
     expect(parsed.blocks[0]).toMatchObject({ sourceTokens: 100, summaryTokens: 10 })
   })
 
+  it("紧凑 sourceRange 读回来展开成同样的子块列表", () => {
+    const parsed = parseState({
+      blocks: [
+        {
+          id: "b3",
+          tier: 2,
+          height: 2,
+          summary: { format: "markdown", title: "t", text: "# t\nbody" },
+          fromId: "m1",
+          toId: "m2",
+          sourceTokens: 100,
+          summaryTokens: 10,
+          at: 3,
+          order: 1,
+          sourceRange: { first: "b1", last: "b2" },
+        },
+      ],
+      attempts: 0,
+    })
+    const first = parsed.blocks[0]
+    expect(first?.sourceRange).toEqual({ first: "b1", last: "b2" })
+    expect(first === undefined ? [] : sourceIdsOf(first)).toEqual(["b1", "b2"])
+  })
+
   it("旧版合并块按 sourceBlockIds 递归求原始 token 总量", () => {
     const parsed = parseState({
       blocks: [
@@ -267,3 +292,4 @@ describe("expireStalePending", () => {
     expect(expireStalePending(reloaded, 1_000 + PENDING_TIMEOUT_MS + 1).pending).toBeUndefined()
   })
 })
+

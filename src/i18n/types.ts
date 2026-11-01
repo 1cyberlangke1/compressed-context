@@ -17,6 +17,8 @@ export interface Messages {
   readonly cacheCached: string
   readonly cacheHit: string
   readonly summariesTitle: string
+  /** 合并块的来源块数量标签；具体 id 详情在 checkpoint_tree 里看。 */
+  readonly mergedBlocks: (count: string) => string
   readonly noData: string
   readonly command: {
     readonly title: string

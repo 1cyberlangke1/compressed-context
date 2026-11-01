@@ -4,7 +4,7 @@ import { toBabelSummary } from "./babel.ts"
 import { toMarkdownSummary } from "./markdown.ts"
 import { renderAll, type RenderOptions } from "./render.ts"
 import { isBabelSummary, isMarkdownSummary, type Summary } from "./schema.ts"
-import type { Block, State } from "./state.ts"
+import { sourceIdsOf, type Block, type State } from "./state.ts"
 import { summaryBody, summaryChars } from "./summary.ts"
 import { validateSummary } from "./validate.ts"
 
@@ -92,7 +92,7 @@ export function editBlock(request: EditBlockRequest): EditBlockOutcome {
 
 /** 输入：块列表 + 目标 id；输出：该块是否已被别的块合并。 */
 function isConsumed(blocks: readonly Block[], id: string): boolean {
-  return blocks.some((block) => (block.sourceBlockIds ?? []).includes(id))
+  return blocks.some((block) => sourceIdsOf(block).includes(id))
 }
 
 /**
@@ -110,3 +110,4 @@ function rebuildSummary(
   if (isMarkdownSummary(block.summary)) return toMarkdownSummary(text)
   return "legacyJson"
 }
+

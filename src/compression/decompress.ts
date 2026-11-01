@@ -14,7 +14,7 @@ import { appendFileSync } from "node:fs"
 import { stringify } from "../shared/parts.ts"
 import { countText } from "../shared/tokens.ts"
 import type { Block, StorageLike } from "./state.ts"
-import { loadState } from "./state.ts"
+import { loadState, sourceIdsOf } from "./state.ts"
 import { renderBlock } from "./render.ts"
 import {
   DEFAULT_TEMP_FILE_CAP,
@@ -228,7 +228,7 @@ export async function resolveDecompress(
   const walk = async (block: Block, level: number): Promise<void> => {
     if (visited.has(block.id)) return
     visited.add(block.id)
-    const sources = block.sourceBlockIds ?? []
+    const sources = sourceIdsOf(block)
     if (sources.length === 0) {
       await appendStoredTranscript(ctx.storage, sessionID, block, tempFiles, limits.tempCap, append)
       return
@@ -265,3 +265,5 @@ export async function resolveDecompress(
   }
   return { status: "ok", inline: `${header}\n${chunks.join("")}`, tokens }
 }
+
+

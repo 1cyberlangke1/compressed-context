@@ -6,6 +6,16 @@ import type { Schema } from "effect"
 import type { Plugin } from "@opencode/plugin"
 
 import { CONFIG_FILE } from "../src/shared/config-paths.ts"
+import { sourceIdsOf } from "../src/compression/state.ts"
+
+/**
+ * 输入：块（可为 undefined）。
+ * 输出：它的子块 id 列表。
+ * 预期：兼容旧 `sourceBlockIds` 与新的紧凑 `sourceRange`，测试不用关心存的是哪种。
+ */
+function sourceIds(block: Block | undefined): readonly string[] {
+  return block === undefined ? [] : sourceIdsOf(block)
+}
 
 /** 测试里只作为 JSONC 的旧键名，插件本身不再读 storage 设置。 */
 const SETTINGS_KEY = "settings"
@@ -262,9 +272,22 @@ describe("渲染", () => {
     expect(titled).toContain(blockMarker("b1"))
   })
 
-  it("块头显示层级与合并来源", () => {
+  it("块头显示层级与合并来源数量", () => {
     const merged = renderBlock({ ...block, id: "b3", tier: 2, height: 2, sourceBlockIds: ["b1", "b2"] })
-    expect(merged.startsWith(`${blockMarker("b3")} [T2] {h2} · merged #b1 + #b2`)).toBe(true)
+    expect(merged.startsWith(`${blockMarker("b3")} [T2] {h2} · merged 2 blocks`)).toBe(true)
+  })
+
+  it("紧凑 sourceRange 与旧 sourceBlockIds 渲染结果一致", () => {
+    const legacy = renderBlock({ ...block, id: "b3", tier: 2, height: 2, sourceBlockIds: ["b1", "b2"] })
+    const compact = renderBlock({
+      ...block,
+      id: "b3",
+      tier: 2,
+      height: 2,
+      sourceRange: { first: "b1", last: "b2" },
+    })
+    expect(compact.startsWith(`${blockMarker("b3")} [T2] {h2} · merged 2 blocks`)).toBe(true)
+    expect(compact).toBe(legacy)
   })
 
   it("token 估算与时间线只在开关打开时出现", () => {
@@ -2026,7 +2049,7 @@ describe("compress 工具只做 T1", () => {
     const state = await loadState(storage, "ses_test")
     expect(result.output?.block).toBe("b1")
     expect(state.pending?.tier).toBe(1)
-    expect(state.pending?.sourceBlockIds).toBeUndefined()
+    expect(sourceIds(state.pending)).toEqual([])
     expect(state.phase).toBeUndefined()
   })
 
@@ -2256,7 +2279,7 @@ describe("摘要单层合并", () => {
     expect(state.lastError).toBeUndefined()
     // 单块也能自压：产物仍是 T3、深度 +1；压回预算内后 phase 正常清空。
     expect(state.pending?.tier).toBe(3)
-    expect(state.pending?.sourceBlockIds).toEqual(["b1"])
+    expect(sourceIds(state.pending)).toEqual(["b1"])
     expect(state.pending?.height).toBe(4)
     expect(state.phase).toBeUndefined()
     expect(state.blocks).toHaveLength(1)
@@ -2307,7 +2330,7 @@ describe("摘要单层合并", () => {
     // T3+b2、T3+b3 跨层不许合；但 b2+b3 是 T1+T1，distill 做了它能做的同层合并。
     // T3 本身没被碰：合出的是 T2，不是把 T3 熬进新块。
     expect(state.pending?.tier).toBe(2)
-    expect(state.pending?.sourceBlockIds).toEqual(["b2", "b3"])
+    expect(sourceIds(state.pending)).toEqual(["b2", "b3"])
     // active = b1(T3) + b4(T2)。
     expect(activeBlocks(state.blocks, state.pending)).toHaveLength(2)
   })
@@ -2442,7 +2465,7 @@ describe("摘要单层合并", () => {
     const state = await loadState(storage, "ses_t3_ceiling")
     // T3 段只有一个块：自压路径，产物层仍是 3（封顶），深度 +1。
     expect(state.pending?.tier).toBe(3)
-    expect(state.pending?.sourceBlockIds).toEqual(["b1"])
+    expect(sourceIds(state.pending)).toEqual(["b1"])
     expect(state.pending?.height).toBe(4)
     // 摘要仍然超预算：留 phase 等下一轮继续压。
     expect(state.phase).toBe(2)
@@ -2530,7 +2553,10 @@ describe("摘要单层合并", () => {
     expect(calls).toBe(1)
     expect(result.merged).toBe(true)
     expect(result.pending?.tier).toBe(2)
-    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2"])
+    expect(sourceIds(result.pending)).toEqual(["b1", "b2"])
+    // 连续的 b1,b2 走紧凑存法：只存两个端点，不再存整串 id。
+    expect(result.pending?.sourceRange).toEqual({ first: "b1", last: "b2" })
+    expect(result.pending?.sourceBlockIds).toBeUndefined()
     expect(result.pending?.sourceTokens).toBe(2_000)
     expect(result.pending?.order).toBe(1)
     expect(activeBlocks(result.blocks, result.pending).map((item) => item.id)).toEqual([result.pending?.id])
@@ -2583,7 +2609,7 @@ describe("摘要单层合并", () => {
     })
     expect(calls).toBe(1)
     expect(result.merged).toBe(true)
-    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2"])
+    expect(sourceIds(result.pending)).toEqual(["b1", "b2"])
     expect(result.pending?.tier).toBe(3)
     expect(result.nextPhase).toBeUndefined()
     expect(activeBlocks(result.blocks, result.pending).map((item) => item.id)).toEqual([
@@ -2634,7 +2660,7 @@ describe("摘要单层合并", () => {
     expect(result.merged).toBe(true)
     // 封顶：三个 T3 合成一个 T3，不是 T4。
     expect(result.pending?.tier).toBe(3)
-    expect(result.pending?.sourceBlockIds).toEqual(["b1", "b2", "b3"])
+    expect(sourceIds(result.pending)).toEqual(["b1", "b2", "b3"])
     expect(result.pending?.height).toBe(4)
     expect(result.nextPhase).toBeUndefined()
   })
@@ -2879,7 +2905,7 @@ describe("多次压缩长跑", () => {
       }
       // 不变量 6：所有 T1 块都有转录，能解出原文。
       for (const block of state.blocks) {
-        if (block.sourceBlockIds !== undefined && block.sourceBlockIds.length > 0) continue
+        if (sourceIds(block).length > 0) continue
         const manifest = await loadTranscriptManifest(storage, "ses_soak", block.id)
         expect(manifest).toBeDefined()
       }
@@ -2971,3 +2997,4 @@ describe("多次压缩长跑", () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 })
+

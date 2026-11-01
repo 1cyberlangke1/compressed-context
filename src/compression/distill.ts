@@ -6,6 +6,7 @@ import { activeBlocks, renderAll, renderBlock } from "./render.ts"
 import {
   MAX_DISTILL_ROUNDS,
   MAX_TIER,
+  contiguousRange,
   nextBlockId,
   type Block,
   type CompactionPhase,
@@ -21,6 +22,15 @@ import {
   type SummaryChoiceCandidate,
 } from "./summarize.ts"
 import { minSummaryChars, validateSummary } from "./validate.ts"
+
+/** 输入：子块 id 列表；输出：存进 Block 的紧凑字段。预期：连续存端点，否则存完整列表。 */
+function compactSources(ids: readonly string[]): {
+  readonly sourceBlockIds?: readonly string[]
+  readonly sourceRange?: { readonly first: string; readonly last: string }
+} {
+  const range = contiguousRange(ids)
+  return range === undefined ? { sourceBlockIds: ids } : { sourceRange: range }
+}
 
 /** 一个待合并的同层段：层 + 段内全部块（按 order 从老到新）。 */
 export interface MergeGroup {
@@ -269,7 +279,8 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     summaryTokens: Math.ceil(summaryChars(picked.summary) / 4),
     at: Math.max(...chosen.blocks.map((block) => block.at)),
     order: first.order,
-    sourceBlockIds: chosen.blocks.map((block) => block.id),
+    // 子块编号连续时只存两个端点，带空洞（b3,b6）时退回完整列表。
+    ...compactSources(chosen.blocks.map((block) => block.id)),
   }
   const summary = renderAll(working, merged, renderOptions)
   // 预算只按 token 判断：窗口百分比是 token 口径，字符长度不能拿来和它比。
@@ -288,3 +299,4 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     distillRounds,
   }
 }
+

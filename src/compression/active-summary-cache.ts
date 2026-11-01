@@ -1,5 +1,5 @@
 import { renderAll, type RenderOptions } from "./render.ts"
-import type { State } from "./state.ts"
+import { sourceIdsOf, type State } from "./state.ts"
 
 interface Entry {
   readonly revision: string
@@ -17,7 +17,7 @@ function revisionOf(state: State, options: RenderOptions): string {
       block.tier,
       block.order,
       block.at,
-      block.sourceBlockIds ?? [],
+      sourceIdsOf(block),
     ]),
     pending: state.pending?.id ?? null,
     options,
@@ -48,3 +48,4 @@ export function renderActiveSummary(
 export function clearActiveSummary(sessionID: string): void {
   cache.delete(sessionID)
 }
+
