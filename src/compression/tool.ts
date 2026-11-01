@@ -47,8 +47,8 @@ const CompressOutput = Schema.Struct({
 function fieldRules(format: SummaryFormat): string {
   if (format === "babel") {
     return (
-      "Only `T=<short title>|G=<one-line goal>` is fixed; the body is an adaptive latent index built from anchors you " +
-      "invent for this source. Keep shipped work and still-open work in that body, and never invent facts."
+      "Only `T=<short title>|G=<one-line goal>` is fixed; the body is a dense symbolic index using anchors, Emoji, and " +
+      "logic symbols for maximum token efficiency. Keep shipped work and still-open work in that body, and never invent facts."
     )
   }
   if (format === "markdown") {
