@@ -109,7 +109,8 @@ export function SummaryDialog(props: {
         <text fg={props.theme.text.base} wrapMode="word">
           <b>{`[T${props.block.tier.toString()}] {h${props.block.height.toString()}} ${props.block.id} : ${props.block.title}`}</b>
         </text>
-        <box flexDirection="row" gap={1}>
+        {/* 动作按钮之间留出间隔，别挤成 ✎esc。 */}
+        <box flexDirection="row" gap={2}>
           <text
             fg={editColor()}
             onMouseOver={() => {

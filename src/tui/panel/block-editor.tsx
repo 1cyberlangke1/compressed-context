@@ -130,7 +130,7 @@ export function BlockEditorDialog(props: {
         <text fg={theme.text.base}>
           <b>{`${props.copy.title}  ${props.block.id}`}</b>
         </text>
-        <box flexDirection="row" gap={1}>
+        <box flexDirection="row" gap={2}>
           <text
             fg={cancelColor()}
             onMouseOver={() => {
