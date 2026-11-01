@@ -7,6 +7,7 @@ import type { SummaryBlock } from "../../shared/blocks.ts"
 import { formatTimestamp, formatTokens } from "../../shared/format.ts"
 import type { Settings } from "../../shared/settings.ts"
 import type { UpdateSettings } from "../types.ts"
+import { BlockEditorDialog } from "./block-editor.tsx"
 
 /** 最深色（0-1 归一化 RGB）：暗红，灰背景上仍清晰可辨。 */
 const DEEP_TIER = { r: 0.47, g: 0.08, b: 0.08, a: 1 }
@@ -83,30 +84,70 @@ function getSyntaxStyle(renderer: Context["renderer"]): SyntaxStyle | undefined 
 }
 
 /**
- * 输入：TUI 上下文 + 主题 + 块。
+ * 输入：TUI 上下文 + 主题 + 块 + 编辑器文案 + 会话 + 保存回调。
  * 输出：占满可用高度的阅读弹窗。
- * 预期：标题保持 `[T1] b1 : title`；Babel 按纯文本显示，其余交给 markdown 渲染器，esc 关闭。
+ * 预期：标题保持 `[T1] b1 : title`；右上角先 `✎` 后 `esc`（esc 恒在最右）；
+ *       Babel 按纯文本显示，其余交给 markdown 渲染器，esc 关闭。
  */
 export function SummaryDialog(props: {
   readonly context: Context
   readonly theme: Context["theme"]
   readonly block: SummaryBlock
+  readonly copy: Messages["blockEditor"]
+  readonly sessionID: string
+  readonly onSaved: () => void
 }) {
   const viewportHeight = createMemo(() => Math.max(8, Math.min(30, props.context.renderer.height - 8)))
+  const [hovered, setHovered] = createSignal<"edit" | "esc" | undefined>(undefined)
+  const editColor = () =>
+    hovered() === "edit" ? props.theme.text.feedback.info.base : props.theme.text.muted
+  const escColor = () =>
+    hovered() === "esc" ? props.theme.text.feedback.error.base : props.theme.text.muted
   return (
     <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <text fg={props.theme.text.base} wrapMode="word">
           <b>{`[T${props.block.tier.toString()}] {h${props.block.height.toString()}} ${props.block.id} : ${props.block.title}`}</b>
         </text>
-        <text
-          fg={props.theme.text.muted}
-          onMouseUp={() => {
-            props.context.ui.dialog.clear()
-          }}
-        >
-          esc
-        </text>
+        <box flexDirection="row" gap={1}>
+          <text
+            fg={editColor()}
+            onMouseOver={() => {
+              setHovered("edit")
+            }}
+            onMouseOut={() => {
+              setHovered((current) => (current === "edit" ? undefined : current))
+            }}
+            onMouseUp={() => {
+              props.context.ui.dialog.show(() => (
+                <BlockEditorDialog
+                  context={props.context}
+                  copy={props.copy}
+                  sessionID={props.sessionID}
+                  block={props.block}
+                  onSaved={props.onSaved}
+                />
+              ))
+              props.context.ui.dialog.set({ size: "large", centered: true })
+            }}
+          >
+            ✎
+          </text>
+          <text
+            fg={escColor()}
+            onMouseOver={() => {
+              setHovered("esc")
+            }}
+            onMouseOut={() => {
+              setHovered((current) => (current === "esc" ? undefined : current))
+            }}
+            onMouseUp={() => {
+              props.context.ui.dialog.clear()
+            }}
+          >
+            esc
+          </text>
+        </box>
       </box>
       <scrollbox height={viewportHeight()} scrollY={true} focused={true} width="100%">
         <Show when={props.block.format !== "babel"}>
@@ -151,6 +192,8 @@ export function SummarySection(props: {
   readonly settings: Settings
   readonly updateSettings: UpdateSettings
   readonly blocks: readonly SummaryBlock[]
+  readonly sessionID: string
+  readonly onSaved: () => void
 }) {
   const [hovered, setHovered] = createSignal<string | undefined>(undefined)
   const [frame, setFrame] = createSignal(0)
@@ -179,7 +222,14 @@ export function SummarySection(props: {
   /** 输入：块；输出：无；预期：打开该块的 markdown 阅读弹窗。 */
   const openSummary = (block: SummaryBlock): void => {
     props.context.ui.dialog.show(() => (
-      <SummaryDialog context={props.context} theme={props.theme} block={block} />
+      <SummaryDialog
+        context={props.context}
+        theme={props.theme}
+        block={block}
+        copy={props.copy.blockEditor}
+        sessionID={props.sessionID}
+        onSaved={props.onSaved}
+      />
     ))
     props.context.ui.dialog.set({ size: "large", centered: true })
   }
@@ -260,3 +310,4 @@ export function SummarySection(props: {
     </Show>
   )
 }
+

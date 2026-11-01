@@ -94,7 +94,8 @@ async function createHandlers(
     storage,
     location: { directory },
     session: {
-      get: () => Promise.resolve({ metadata: {} }),
+      // 真实 SessionInfo 一定带 location；缺了它归属判断会把所有会话当外人。
+      get: () => Promise.resolve({ location: { directory }, metadata: {} }),
       context: ({ sessionID }: { sessionID: string }) =>
         Promise.resolve(messagesBySession.get(sessionID) ?? []),
     },

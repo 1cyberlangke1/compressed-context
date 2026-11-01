@@ -1,13 +1,18 @@
 import type { Plugin } from "@opencode/plugin"
 
 import type { SummaryBlock } from "../shared/blocks.ts"
-import { ContextRpc } from "../shared/rpc.ts"
+import { sameLocation } from "../shared/location.ts"
+import { ContextRpc, type BlockUpdateResult } from "../shared/rpc.ts"
 import { loadCacheHistory, recordCacheHistory } from "./cache-history.ts"
+import { editBlock } from "./block-edit.ts"
+import { isSessionDeleted } from "./deleted-sessions.ts"
+import { isCompactionInFlight } from "./inflight.ts"
 import { disableNativeCompaction } from "./native-compaction.ts"
 import { activeBlocks, renderSummary } from "./render.ts"
 import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
 import { loadState } from "./state.ts"
-import { normalizeSettings } from "../shared/settings.ts"
+import { stateStore } from "./state-store.ts"
+import { normalizeSettings, resolveSummaryLimits } from "../shared/settings.ts"
 import {
   loadSettings,
   parseServerSettings,
@@ -34,6 +39,16 @@ function readLayers(input: unknown): readonly string[] | undefined {
 export interface SettingsRpcOptions {
   /** 输入：刚保存的设置；输出：无；预期：让 compress 工具的描述与参数跟着摘要格式切换。 */
   readonly onSaved?: (settings: ServerSettings) => Promise<void>
+}
+
+/**
+ * 输入：会话 ID。
+ * 输出：该会话是否由本实例负责。
+ * 预期：查询失败、会话不存在、或 location 不同一律 false——宁可拒绝，也不跨实例读写别人的会话。
+ */
+async function ownsSession(ctx: Plugin.Context, sessionID: string): Promise<boolean> {
+  const session = await ctx.session.get({ sessionID }).catch(() => undefined)
+  return session !== undefined && sameLocation(session.location, ctx.location)
 }
 
 /**
@@ -78,6 +93,8 @@ export async function registerSettingsRpc(
     },
     blocksGet: async (input) => {
       const sessionID = (input as { readonly sessionID: string }).sessionID
+      // 别的实例的会话一律不返回，避免 TUI 读串到别的目录/会话。
+      if (!(await ownsSession(ctx, sessionID))) return { blocks: [] }
       const state = await loadState(ctx.storage, sessionID)
       // 只返回模型实际看到的 active 链；被合并掉的源块不展示。
       const blocks: SummaryBlock[] = activeBlocks(state.blocks, state.pending).map((block) => ({
@@ -98,10 +115,54 @@ export async function registerSettingsRpc(
       }))
       return { blocks }
     },
+    blockUpdate: async (input) => {
+      const request = input as {
+        readonly sessionID: string
+        readonly blockID: string
+        readonly expectedAt: number
+        readonly text: string
+      }
+      // 归属判断：会话必须属于本实例目录，且没在压缩、没被删。
+      if (!(await ownsSession(ctx, request.sessionID))) {
+        const session = await ctx.session.get({ sessionID: request.sessionID }).catch(() => undefined)
+        return { ok: false, code: session === undefined ? "noSession" : "foreignSession" }
+      }
+      if (isSessionDeleted(request.sessionID)) return { ok: false, code: "noSession" }
+      if (isCompactionInFlight(request.sessionID)) return { ok: false, code: "compacting" }
+
+      const settings = await loadSettings(ctx)
+      // 与压缩时同源：单块上限与整链预算都按当前会话模型窗口折算。
+      const limits = resolveSummaryLimits(settings, await readStoredWindow(ctx, request.sessionID))
+      const store = stateStore(ctx.storage)
+      return store.transact<BlockUpdateResult>(request.sessionID, (current) => {
+        const outcome = editBlock({
+          state: current,
+          blockID: request.blockID,
+          expectedAt: request.expectedAt,
+          text: request.text,
+          blockChars: limits.blockChars,
+          totalChars: limits.budgetTokens,
+          render: {
+            showTimeline: settings.showTimeline,
+            showBlockTokens: settings.showBlockTokens,
+          },
+        })
+        if (!outcome.ok) {
+          return {
+            result: {
+              ok: false,
+              code: outcome.code,
+              ...(outcome.a === undefined ? {} : { a: outcome.a }),
+              ...(outcome.b === undefined ? {} : { b: outcome.b }),
+            },
+          }
+        }
+        return { next: outcome.state, result: { ok: true } }
+      })
+    },
     cacheHistoryGet: async (input) => {
       const sessionID = (input as { readonly sessionID: string }).sessionID
-      const history = await loadCacheHistory(ctx.storage, sessionID)
-      // 只在历史为空时补写一次；已有历史时只读，避免每次 TUI 刷新都拉全文。
+      const history = await loadCacheHistory(ctx.storage, sessionID)      // 只在历史为空时补写一次；已有历史时只读，避免每次 TUI 刷新都拉全文。
       if (history.samples.length === 0) {
         await recordCacheHistory(ctx, sessionID)
         const bootstrapped = await loadCacheHistory(ctx.storage, sessionID)

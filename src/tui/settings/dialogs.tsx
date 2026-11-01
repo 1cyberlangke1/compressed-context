@@ -20,6 +20,7 @@ function DialogFrame(
   props: ParentProps<{ readonly context: Context; readonly title: string; readonly submit: string }>,
 ) {
   const theme = props.context.theme
+  const [hovered, setHovered] = createSignal(false)
   return (
     <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -27,7 +28,13 @@ function DialogFrame(
           <b>{props.title}</b>
         </text>
         <text
-          fg={theme.text.muted}
+          fg={hovered() ? theme.text.feedback.error.base : theme.text.muted}
+          onMouseOver={() => {
+            setHovered(true)
+          }}
+          onMouseOut={() => {
+            setHovered(false)
+          }}
           onMouseUp={() => {
             props.context.ui.dialog.clear()
           }}

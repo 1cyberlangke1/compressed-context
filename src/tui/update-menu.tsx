@@ -39,11 +39,29 @@ const RESULT_TOAST_DURATION_MS = 10_000
  */
 function showProgress(context: Context, title: string, initial: string) {
   const [message, setMessage] = createSignal(initial)
+  const [hovered, setHovered] = createSignal(false)
   context.ui.dialog.show(() => (
     <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
-      <text fg={context.theme.text.base}>
-        <b>{title}</b>
-      </text>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text fg={context.theme.text.base}>
+          <b>{title}</b>
+        </text>
+        {/* 与其它插件弹窗同一套外框：esc 恒在最右，悬停变红。 */}
+        <text
+          fg={hovered() ? context.theme.text.feedback.error.base : context.theme.text.muted}
+          onMouseOver={() => {
+            setHovered(true)
+          }}
+          onMouseOut={() => {
+            setHovered(false)
+          }}
+          onMouseUp={() => {
+            context.ui.dialog.clear()
+          }}
+        >
+          esc
+        </text>
+      </box>
       <text fg={context.theme.text.muted}>{message()}</text>
     </box>
   ))

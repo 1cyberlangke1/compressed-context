@@ -44,6 +44,29 @@ export interface Messages {
     readonly disabled: string
     readonly writeFailed: (error: string) => string
   }
+  /** 摘要块编辑器：服务端只回原因码，文案全部在这里。 */
+  readonly blockEditor: {
+    readonly title: string
+    readonly save: string
+    readonly cancel: string
+    readonly saved: string
+    readonly hint: string
+    readonly errors: {
+      readonly compacting: string
+      readonly nul: string
+      readonly notFound: string
+      readonly merged: string
+      readonly stale: string
+      readonly legacyJson: string
+      readonly badHeader: string
+      readonly unknown: string
+      readonly noSession: string
+      readonly foreignSession: string
+      readonly tooLong: (chars: string, max: string) => string
+      readonly notSmaller: (tokens: string, source: string) => string
+      readonly chainBudget: (tokens: string, budget: string) => string
+    }
+  }
   readonly settings: {
     readonly title: string
     readonly show: string

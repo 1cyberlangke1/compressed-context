@@ -240,6 +240,10 @@ export function SummaryPanel(props: {
         settings={props.settings}
         updateSettings={props.updateSettings}
         blocks={data.blocks()}
+        sessionID={props.sessionID}
+        onSaved={() => {
+          void data.refreshBlocks()
+        }}
       />
     </Show>
   )

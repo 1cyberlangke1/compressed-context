@@ -161,6 +161,59 @@ const BlocksOutputJson = {
   additionalProperties: false,
 } as const
 
+/**
+ * 编辑一个摘要块。
+ * expectedAt 是乐观并发令牌：TUI 打开编辑器时看到的 `block.at`，服务端比对不上就拒绝，
+ * 避免把已经被合并掉的旧块写回去。
+ */
+const BlockUpdateInputJson = {
+  type: "object",
+  properties: {
+    sessionID: { type: "string" },
+    blockID: { type: "string" },
+    expectedAt: { type: "number" },
+    text: { type: "string" },
+  },
+  required: ["sessionID", "blockID", "expectedAt", "text"],
+  additionalProperties: false,
+} as const
+
+/** 编辑失败原因码；界面文案在语言文件里按码取。 */
+export type EditBlockErrorCode =
+  | "compacting"
+  | "nul"
+  | "notFound"
+  | "merged"
+  | "stale"
+  | "legacyJson"
+  | "badHeader"
+  | "tooLong"
+  | "notSmaller"
+  | "chainBudget"
+  | "noSession"
+  | "foreignSession"
+
+/** 编辑回执：失败时 code 必填，a / b 是文案里要插的数字。 */
+export interface BlockUpdateResult {
+  readonly ok: boolean
+  readonly code?: EditBlockErrorCode
+  readonly a?: string
+  readonly b?: string
+}
+
+/** 编辑回执：ok 为假时用 code + 数字参数回传原因，文案由 TUI 按语言渲染。 */
+const BlockUpdateOutputJson = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" },
+    code: { type: "string" },
+    a: { type: "string" },
+    b: { type: "string" },
+  },
+  required: ["ok"],
+  additionalProperties: false,
+} as const
+
 /** 一条缓存命中样本。 */
 const CacheSampleJson = {
   type: "object",
@@ -196,6 +249,7 @@ export const ContextRpc: Rpc.PortableDefinition = {
     settingsGet: { input: SettingsGetInputJson, output: SettingsOutputJson },
     settingsSet: { input: SettingsInputJson, output: OkJson },
     blocksGet: { input: SessionInputJson, output: BlocksOutputJson },
+    blockUpdate: { input: BlockUpdateInputJson, output: BlockUpdateOutputJson },
     cacheHistoryGet: { input: SessionInputJson, output: CacheHistoryOutputJson },
     nativeCompactionDisable: {
       input: NativeCompactionDisableInputJson,
@@ -224,6 +278,15 @@ export interface ContextRpcClient {
     input: { readonly sessionID: string },
     options?: { readonly location?: { readonly directory: string } },
   ): Promise<{ readonly blocks: readonly SummaryBlock[] }>
+  blockUpdate(
+    input: {
+      readonly sessionID: string
+      readonly blockID: string
+      readonly expectedAt: number
+      readonly text: string
+    },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<BlockUpdateResult>
   cacheHistoryGet(
     input: { readonly sessionID: string },
     options?: { readonly location?: { readonly directory: string } },

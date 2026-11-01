@@ -109,3 +109,5 @@ jobs:
       - run: bun scripts/e2e-tool-loop.mjs
       - run: bun scripts/e2e-compress.mjs
       - run: bun scripts/e2e-nudge.mjs
+      # 真实 TUI（PTY）里的插件弹窗：验证 TUI 入口在 Linux 上也能加载并交互。
+      - run: bun scripts/e2e-native-compaction.mjs

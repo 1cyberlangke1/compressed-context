@@ -15,6 +15,8 @@ export interface PanelData {
   readonly stats: Accessor<ContextStats | undefined>
   readonly cache: Accessor<readonly CacheSample[]>
   readonly blocks: Accessor<readonly SummaryBlock[]>
+  /** 编辑块成功后手动重拉 active 链。 */
+  readonly refreshBlocks: () => Promise<void>
 }
 
 /**
@@ -107,5 +109,5 @@ export function usePanelData(input: {
     }),
   )
 
-  return { stats, cache, blocks }
+  return { stats, cache, blocks, refreshBlocks }
 }
