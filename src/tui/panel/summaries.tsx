@@ -199,6 +199,8 @@ export function SummarySection(props: {
   const [frame, setFrame] = createSignal(0)
   /** 当前链的最大折叠深度；用来把深度归一化到 0..1 的渐变。 */
   const maxHeight = createMemo(() => props.blocks.reduce((max, block) => Math.max(max, block.height), 1))
+  /** 列表固定高度：跟随终端高度但夹在 5..12 行，块再多也不会把侧栏撑长。 */
+  const listHeight = createMemo(() => Math.max(5, Math.min(12, Math.floor(props.context.renderer.height / 5))))
 
   // 只有 hover 时跑两帧；鼠标移出或销毁时清理，避免后台定时器。
   createEffect(() => {
@@ -251,8 +253,15 @@ export function SummarySection(props: {
             when={props.blocks.length > 0}
             fallback={<text fg={props.theme.text.muted}>{props.copy.noData}</text>}
           >
-            <box flexDirection="column" width="100%">
-              <For each={props.blocks}>
+            {/* 固定高度的滚动列表：块多了也不会把整个侧栏撑长。 */}
+            <scrollbox
+              height={listHeight()}
+              width="100%"
+              scrollY={true}
+              flexShrink={0}
+            >
+              <box flexDirection="column" width="100%">
+                <For each={props.blocks}>
                 {(block) => {
                   const meta = (): string => {
                     const parts: string[] = []
@@ -303,7 +312,8 @@ export function SummarySection(props: {
                   )
                 }}
               </For>
-            </box>
+              </box>
+            </scrollbox>
           </Show>
         </Show>
       </box>
