@@ -28,10 +28,6 @@ export const en: Messages = {
     title: "Compressed context settings",
     description: "Open plugin settings",
     group: "Plugins",
-    editTitle: "Edit summary block",
-    editDescription: "Pick a summary block and edit its text in place",
-    noSession: "Open a session first",
-    noBlocks: "This session has no summary blocks yet",
   },
   update: {
     checkUpdates: "Check for updates",
@@ -128,7 +124,6 @@ export const en: Messages = {
       interface: "Interface",
     },
     sectionModel: "Per model",
-    allOn: "all on",
     modelCurrent: "Current model",
     modelOverrides: "Configured models",
     modelsConfigured: (count) => count.toString(),

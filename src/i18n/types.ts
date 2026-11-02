@@ -26,10 +26,6 @@ export interface Messages {
     readonly title: string
     readonly description: string
     readonly group: string
-    readonly editTitle: string
-    readonly editDescription: string
-    readonly noSession: string
-    readonly noBlocks: string
   }
   readonly update: {
     readonly checkUpdates: string
@@ -125,7 +121,6 @@ export interface Messages {
       readonly interface: string
     }
     readonly sectionModel: string
-    readonly allOn: string
     readonly modelCurrent: string
     readonly modelOverrides: string
     readonly modelsConfigured: (count: number) => string

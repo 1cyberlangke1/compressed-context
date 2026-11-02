@@ -121,13 +121,12 @@ export function itemsOfGroup(
 }
 
 /**
- * 输入：若干「名字 + 开关状态」+ 文案。
- * 输出：全部打开时给「全部开」，否则只列被关掉的那几项。
- * 预期：只写「开 · 开 · 开」看不出是哪个开关，关掉的项必须带名字。
+ * 输入：若干开关状态 + 文案。
+ * 输出：纯粹的「开 · 关 · 开」状态流，不拼接任何功能名字。
+ * 预期：简洁直观，全部项一一对应当前状态。
  */
-function statesFooter(entries: readonly (readonly [string, boolean])[], copy: Messages): string {
-  const off = entries.filter(([, on]) => !on).map(([label]) => `${label} ${copy.settings.off}`)
-  return off.length === 0 ? copy.settings.allOn : off.join(" · ")
+function statesFooter(states: readonly boolean[], copy: Messages): string {
+  return states.map((on) => (on ? copy.settings.on : copy.settings.off)).join(" · ")
 }
 
 /**
@@ -150,7 +149,7 @@ export function buildSectionOptions(input: {
     {
       title: copy.settings.categories.defaults,
       value: "defaults",
-      footer: `${settings.triggerPercent.toString()}% · ${block.toString()}%/${total.toString()}% · ${nudge}`,
+      footer: `${settings.triggerPercent.toString()}% · ${nudge} · ${block.toString()}%/${total.toString()}% · ${settings.recentT1Blocks.toString()}`,
     },
     {
       title: copy.settings.sectionModel,
@@ -165,12 +164,15 @@ export function buildSectionOptions(input: {
     {
       title: copy.settings.categories.switches,
       value: "switches",
-      footer: statesFooter([
-        [copy.settings.autoCompress, settings.autoCompress],
-        [copy.settings.enableCompressTool, settings.enableCompressTool],
-        [copy.settings.enableDecompressTool, settings.enableDecompressTool],
-        [copy.settings.enableCheckpointTreeTool, settings.enableCheckpointTreeTool],
-      ], copy),
+      footer: statesFooter(
+        [
+          settings.autoCompress,
+          settings.enableCompressTool,
+          settings.enableDecompressTool,
+          settings.enableCheckpointTreeTool,
+        ],
+        copy,
+      ),
     },
     {
       title: copy.settings.categories.decompress,
@@ -182,10 +184,10 @@ export function buildSectionOptions(input: {
       value: "interface",
       footer: `${statesFooter(
         [
-          [copy.settings.show, settings.enabled],
-          [copy.settings.showCacheChart, settings.showCacheChart],
-          [copy.settings.showCacheLog, settings.showCacheLog],
-          [copy.settings.showSummaries, settings.showSummaries],
+          settings.enabled,
+          settings.showCacheChart,
+          settings.showCacheLog,
+          settings.showSummaries,
         ],
         copy,
       )} · ${localeLabel(settings, copy)}`,
@@ -270,37 +272,37 @@ export function buildSettingsOptions(input: {
       "autoCompress",
       copy.settings.autoCompress,
       onOff(settings.autoCompress),
-      copy.settings.categories.defaults,
+      copy.settings.categories.switches,
     ),
     toggle(
       "enableCompressTool",
       copy.settings.enableCompressTool,
       onOff(settings.enableCompressTool),
-      copy.settings.categories.defaults,
+      copy.settings.categories.switches,
     ),
     toggle(
       "enableDecompressTool",
       copy.settings.enableDecompressTool,
       onOff(settings.enableDecompressTool),
-      copy.settings.categories.defaults,
+      copy.settings.categories.switches,
     ),
     toggle(
       "enableCheckpointTreeTool",
       copy.settings.enableCheckpointTreeTool,
       onOff(settings.enableCheckpointTreeTool),
-      copy.settings.categories.defaults,
+      copy.settings.categories.switches,
     ),
     {
       title: copy.settings.summaryBlockPercent,
       value: "blockPercent",
       footer: percentLabel(effectiveSummaryBlockPercent(settings), window),
-      category: copy.settings.categories.summary,
+      category: copy.settings.categories.defaults,
     },
     {
       title: copy.settings.summaryTotalPercent,
       value: "totalPercent",
       footer: percentLabel(effectiveSummaryTotalPercent(settings), window),
-      category: copy.settings.categories.summary,
+      category: copy.settings.categories.defaults,
     },
     {
       title: copy.settings.recentT1Blocks,

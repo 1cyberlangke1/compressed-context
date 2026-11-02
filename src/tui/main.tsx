@@ -9,7 +9,6 @@ import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "../shared/se
 import { configFileLayers } from "./config-layers.ts"
 import { applySettingsMutation, snapshotSettings } from "./settings-draft.ts"
 import { maybePromptNativeCompaction } from "./native-compaction-dialog.ts"
-import { EditCommand } from "./edit-command.tsx"
 import { CachePanel, ModelPanel, Panel, SummaryPanel } from "./panel/panels.tsx"
 import { SettingsCommand } from "./settings.tsx"
 import type { UpdateSettings } from "./types.ts"
@@ -80,10 +79,6 @@ export default Plugin.define({
       append: "app",
       render: () => <SettingsCommand context={context} settings={settings} updateSettings={updateSettings} />,
     })
-    const disposeEditCommand = context.ui.slot({
-      append: "app",
-      render: () => <EditCommand context={context} settings={settings} />,
-    })
 
     // 等 UI 挂载后再弹；检测或弹窗失败都不阻塞插件启动。
     setTimeout(() => {
@@ -92,7 +87,6 @@ export default Plugin.define({
 
     return () => {
       for (const dispose of disposePanels) dispose()
-      disposeEditCommand()
       disposeCommand()
     }
   },

@@ -104,7 +104,12 @@ describe("三层菜单", () => {
       "update",
     ])
     expect(sections[0]?.title).toBe("默认设置")
+    // 默认设置 footer 完整包含四组参数（阈值 · 提醒 · 预算 · 保留块），顺序与子菜单内严格一致
+    expect(sections[0]?.footer).toBe("80% · 50k · 10%/50% · 2")
     expect(sections[1]?.footer).toBe("[google]gemini-3-pro")
+    // 开关分类与界面分类只输出纯粹状态流，不拼接任何冗长功能名字
+    expect(sections[3]?.footer).toBe("开 · 开 · 开 · 开")
+    expect(sections[5]?.footer).toBe("开 · 开 · 关 · 开 · 自动")
     expect(sections.at(-1)?.title).toBe(`${copy.update.checkUpdates} v${PLUGIN_VERSION}`)
     expect(sections.at(-1)?.footer).toBeUndefined()
   })
