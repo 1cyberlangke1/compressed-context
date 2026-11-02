@@ -95,8 +95,10 @@ export interface State {
   readonly phase?: CompactionPhase
   readonly attempts: number
   readonly lastError?: string
-  /** 上一次主动压缩提醒时的上下文 token 数；缺省表示还没建立基线。 */
+  /** 上一次主动压缩提醒时的上下文 token 数（步进游标）；缺省表示还没建立基线。 */
   readonly nudgeBaselineTokens?: number
+  /** 自上次压缩（或会话起始）以来的绝对原点 token 数；不随单次提醒覆盖，用于计算累计增长（50k -> 100k -> 150k）。 */
+  readonly nudgeAnchorTokens?: number
   /** 已发出的主动压缩提醒次数。 */
   readonly nudgeCount?: number
   /**
@@ -328,6 +330,8 @@ export function parseState(value: unknown): State {
   const lastError = typeof record["lastError"] === "string" ? record["lastError"] : undefined
   const nudgeBaselineTokens =
     typeof record["nudgeBaselineTokens"] === "number" ? record["nudgeBaselineTokens"] : undefined
+  const nudgeAnchorTokens =
+    typeof record["nudgeAnchorTokens"] === "number" ? record["nudgeAnchorTokens"] : undefined
   const nudgeCount = typeof record["nudgeCount"] === "number" ? record["nudgeCount"] : undefined
   const distillRounds =
     typeof record["distillRounds"] === "number" && Number.isInteger(record["distillRounds"])
@@ -353,6 +357,7 @@ export function parseState(value: unknown): State {
     ...(pendingAt === undefined || pending === undefined ? {} : { pendingAt }),
     ...(lastError === undefined ? {} : { lastError }),
     ...(nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens }),
+    ...(nudgeAnchorTokens === undefined ? {} : { nudgeAnchorTokens }),
     ...(nudgeCount === undefined ? {} : { nudgeCount }),
     ...(distillRounds === undefined ? {} : { distillRounds }),
     ...(phase === undefined ? {} : { phase }),
@@ -380,6 +385,7 @@ export function commitPending(state: State): State {
     blocks: [...state.blocks, state.pending],
     attempts: 0,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
+    ...(state.nudgeAnchorTokens === undefined ? {} : { nudgeAnchorTokens: state.nudgeAnchorTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
     ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
     ...(state.phase === undefined ? {} : { phase: state.phase }),
@@ -392,6 +398,7 @@ export function dropPending(state: State, error: string): State {
     attempts: state.attempts + 1,
     lastError: error,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
+    ...(state.nudgeAnchorTokens === undefined ? {} : { nudgeAnchorTokens: state.nudgeAnchorTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
     ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
   }
@@ -417,6 +424,9 @@ export function expireStalePending(state: State, now: number): State {
     ...(committed.nudgeBaselineTokens === undefined
       ? {}
       : { nudgeBaselineTokens: committed.nudgeBaselineTokens }),
+    ...(committed.nudgeAnchorTokens === undefined
+      ? {}
+      : { nudgeAnchorTokens: committed.nudgeAnchorTokens }),
     ...(committed.nudgeCount === undefined ? {} : { nudgeCount: committed.nudgeCount }),
     ...(committed.distillRounds === undefined ? {} : { distillRounds: committed.distillRounds }),
   }
@@ -434,6 +444,7 @@ export function retryPending(state: State, error: string): State {
     attempts: state.attempts + 1,
     lastError: error,
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
+    ...(state.nudgeAnchorTokens === undefined ? {} : { nudgeAnchorTokens: state.nudgeAnchorTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
     ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
     ...(state.phase === undefined ? {} : { phase: state.phase }),
@@ -452,6 +463,7 @@ export function clearPhase(state: State): State {
     ...(state.pendingAt === undefined ? {} : { pendingAt: state.pendingAt }),
     ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
     ...(state.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: state.nudgeBaselineTokens }),
+    ...(state.nudgeAnchorTokens === undefined ? {} : { nudgeAnchorTokens: state.nudgeAnchorTokens }),
     ...(state.nudgeCount === undefined ? {} : { nudgeCount: state.nudgeCount }),
     ...(state.distillRounds === undefined ? {} : { distillRounds: state.distillRounds }),
   }

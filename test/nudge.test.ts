@@ -81,17 +81,47 @@ const settings = (nudgeGrowthTokens: number, autoCompress = true) => ({
 })
 
 describe("主动压缩提醒", () => {
-  it("增长量写的是「自上次提醒」，压缩范围才是「自上次压缩块」", () => {
-    const text = buildNudgeText(52_300, true, true)
-    expect(text).toContain("about 52k tokens since the last reminder")
-    expect(text).toContain("entire current conversation flow since the last compressed block")
-    // 不能再把增长量说成自上次压缩块：基线是每次提醒前推的。
-    expect(text).not.toContain("about 52k tokens since the last compressed block")
+  it("增长量显示自上次压缩块（或会话起始）以来的累计增量", () => {
+    const textCompressed = buildNudgeText(52_300, true, true)
+    expect(textCompressed).toContain("about 52k tokens since the last compressed block")
+    expect(textCompressed).toContain("entire current conversation flow since the last compressed block")
+
+    const textUncompressed = buildNudgeText(52_300, false, true)
+    expect(textUncompressed).toContain("about 52k tokens since the session started")
+    expect(textUncompressed).toContain("entire current conversation flow since the session started")
+
     // 明确先劝住：忙或还需要精确细节时不要压缩。
-    expect(text).toContain("Do not compress yet if you are busy or if you still need these exact details")
-    expect(text).toContain("keep working and ignore this reminder")
-    expect(text).toContain("When you reach a natural stopping point")
-    expect(text).toContain("Automatic compression will run later")
+    expect(textCompressed).toContain("Do not compress yet if you are busy or if you still need these exact details")
+    expect(textCompressed).toContain("keep working and ignore this reminder")
+    expect(textCompressed).toContain("When you reach a natural stopping point")
+    expect(textCompressed).toContain("Automatic compression will run later")
+  })
+
+  it("多次连续提醒时累积显示增长量（50k -> 100k -> 150k 形态）", async () => {
+    // 阈值 1_000 tokens（约 4_000 字符）
+    const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
+    const messages = context("x".repeat(4_000))
+
+    // 1. 建立初始基线（无提醒追加）
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(3)
+
+    // 2. 增长约 2_000 tokens，触发第 1 次提醒（报 2.0k）
+    messages[1] = { id: "m1", role: "assistant", content: [{ type: "text", text: "x".repeat(12_000) }] }
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(4)
+    expect(messages[3]?.content[0]?.text).toContain("about 2.0k tokens since the session started")
+    expect((await loadState(storage, "ses_test")).nudgeCount).toBe(1)
+
+    // 清理掉追加的单条 notice，模拟进入下一轮
+    messages.pop()
+
+    // 3. 再增长约 2_000 tokens（累计增长约 4_000 tokens），触发第 2 次提醒（报 4.0k 累积，而非依然报 2.0k）
+    messages[1] = { id: "m1", role: "assistant", content: [{ type: "text", text: "x".repeat(20_000) }] }
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(4)
+    expect(messages[3]?.content[0]?.text).toContain("about 4.0k tokens since the session started")
+    expect((await loadState(storage, "ses_test")).nudgeCount).toBe(2)
   })
 
   it("第一次只建立基线，增长到阈值后才追加一次提醒", async () => {

@@ -578,18 +578,16 @@ export async function maybeAutoCompressStep(input: {
 const NUDGE_PREFIX = "[context-reminder]"
 
 export function buildNudgeText(growthTokens: number, hasCompressed: boolean, autoCompress: boolean): string {
-  // 增长量是从「上一次提醒」起算的基线差，不能写成「自上次压缩块以来」。
-  const growthScope = hasCompressed ? "since the last reminder" : "since the session started"
-  // 压缩覆盖范围才是「自上次压缩块以来」。
-  const compressScope = hasCompressed ? "since the last compressed block" : "since the session started"
+  // 增长量为自上次压缩块（或会话起始）以来的累计量（50k -> 100k -> 150k）。
+  const scope = hasCompressed ? "since the last compressed block" : "since the session started"
   const fallback = autoCompress
     ? "Automatic compression will run later, so there is no rush."
     : "Call compress when convenient."
   return (
-    `${NUDGE_PREFIX} Context has grown by about ${formatTokens(growthTokens)} tokens ${growthScope}. ` +
+    `${NUDGE_PREFIX} Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
     // 默认不压：任务没做完、或还需要这些精确细节时继续干活；只有到了自然的停顿点才压缩。
     "Do not compress yet if you are busy or if you still need these exact details: keep working and ignore this reminder. " +
-    `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${compressScope}. ` +
+    `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope}. ` +
     fallback
   )
 }
@@ -625,20 +623,30 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
       if (blockedByState(state) || state.phase !== undefined) return { result: undefined }
 
       if (state.nudgeBaselineTokens === undefined || state.nudgeBaselineTokens > total) {
-        return { next: { ...state, nudgeBaselineTokens: total }, result: undefined }
+        return {
+          next: {
+            ...state,
+            nudgeBaselineTokens: total,
+            nudgeAnchorTokens: state.nudgeAnchorTokens ?? total,
+          },
+          result: undefined,
+        }
       }
-      const growth = total - state.nudgeBaselineTokens
-      if (growth < settings.nudgeGrowthTokens) return { result: undefined }
+      const stepGrowth = total - state.nudgeBaselineTokens
+      if (stepGrowth < settings.nudgeGrowthTokens) return { result: undefined }
       if (!canEmit) return { result: undefined }
 
+      const anchor = state.nudgeAnchorTokens ?? state.nudgeBaselineTokens
+      const cumulativeGrowth = Math.max(stepGrowth, total - anchor)
       const hasCompressed = state.blocks.length > 0
       return {
         next: {
           ...state,
           nudgeBaselineTokens: total,
+          nudgeAnchorTokens: anchor,
           nudgeCount: (state.nudgeCount ?? 0) + 1,
         },
-        result: buildNudgeText(growth, hasCompressed, settings.autoCompress),
+        result: buildNudgeText(cumulativeGrowth, hasCompressed, settings.autoCompress),
       }
     })
     if (notice === undefined) return

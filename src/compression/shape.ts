@@ -50,7 +50,7 @@ export function shapeLines(format: SummaryFormat | undefined, withCandidate: boo
       withCandidate
         ? "Return ONLY Babel text. First line must be `c=N`, where N is the chosen candidate; second line must be `T=<short title>|G=<one-line goal>`."
         : "Return ONLY Babel text. First line must be `T=<short title>|G=<one-line goal>`.",
-      "After the header, output dense Babel without human grammar/connectives/paragraphs/sentences/JSON/fences.",
+      "After the header, output dense Babel without human grammar/connectives/paragraphs/sentences/JSON/fences. Every statement must be a symbolic mapping (S[], Config[], D[], F[], ?=>, !:); natural language clauses inside brackets are strictly forbidden.",
     ]
   }
   if (format === "markdown") {

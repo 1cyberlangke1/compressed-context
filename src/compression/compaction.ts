@@ -70,13 +70,14 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
             : { pending, pendingAt: Date.now() }),
           ...(phase === undefined ? {} : { phase }),
           ...(lastError === undefined ? {} : { lastError }),
-          ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
           ...(rounds === undefined ? {} : { distillRounds: rounds }),
           ...(baseline !== undefined
-            ? { nudgeBaselineTokens: baseline }
-            : current.nudgeBaselineTokens === undefined
-              ? {}
-              : { nudgeBaselineTokens: current.nudgeBaselineTokens }),
+            ? { nudgeBaselineTokens: baseline, nudgeAnchorTokens: baseline, nudgeCount: 0 }
+            : {
+                ...(current.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: current.nudgeBaselineTokens }),
+                ...(current.nudgeAnchorTokens === undefined ? {} : { nudgeAnchorTokens: current.nudgeAnchorTokens }),
+                ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
+              }),
         }
         return { next, result: undefined }
       })

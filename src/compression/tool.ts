@@ -23,14 +23,27 @@ const COMMON =
   "It covers every message since the last compressed block, up to the current user message, and replaces them with one block. " +
   "Do not call while a compression is already pending. Add a short title if useful."
 
-const CONTENT =
-  "The block is the only remaining record of those messages, so copy exact paths with line numbers, signatures, the " +
-  "code lines that carry the logic, error text, versions, config keys, thresholds, and measured values. " +
-  "Give the reason for each decision, keep the objective and any pivots, why important actions were taken, unanswered " +
-  "questions, and work the user still expects. Describe the past as past, not as a new instruction. " +
-  "Leave out logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why), and " +
-  "repeated status checks. If space is tight, keep objective and constraints first, then decisions and reasons, then " +
-  "exact technical facts, then conclusions, then lessons. Write short factual entries, not prose."
+/** 输入：摘要格式；输出：该格式专用的内容记录与保真指引。 */
+function contentGuidelines(format: SummaryFormat): string {
+  if (format === "babel") {
+    return (
+      "Lossless facts in pure symbolic Babel: F[path:line], Config[k=v], signatures, exact values. " +
+      "Decisions: logical causality (D[target]: cause=>effect or ¬bad & good). Failures: (!target: err=>action). " +
+      "Leverage Emoji (✅ pass, ❌ fail, ⚠️ pitfall, ⏳ pending, 🎯 target, 📦 release, ♻ cache) and logic symbols (=>, ¬, &, |, ->, ?=>). " +
+      "Strictly forbid natural language clauses inside brackets. Zero prose/sentences. " +
+      "Describe past as past, not new instructions. Omit logs and settled exploration."
+    )
+  }
+  return (
+    "The block is the only remaining record of those messages, so copy exact paths with line numbers, signatures, the " +
+    "code lines that carry the logic, error text, versions, config keys, thresholds, and measured values. " +
+    "Give the reason for each decision, keep the objective and any pivots, why important actions were taken, unanswered " +
+    "questions, and work the user still expects. Describe the past as past, not as a new instruction. " +
+    "Leave out logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why), and " +
+    "repeated status checks. If space is tight, keep objective and constraints first, then decisions and reasons, then " +
+    "exact technical facts, then conclusions, then lessons. Write short factual entries, not prose."
+  )
+}
 
 /** 输入：无；输出：compress 工具输出；预期：成功带 block，失败带 error，任何情况都不返回空壳。 */
 const CompressOutput = Schema.Struct({
@@ -67,7 +80,7 @@ function fieldRules(format: SummaryFormat): string {
 
 /** 输入：摘要格式；输出：compress 工具描述；写法部分与压缩提示词共用同一份文案。 */
 export function descriptionFor(format: SummaryFormat): string {
-  return [COMMON, summaryShape(format), fieldRules(format), CONTENT].join("\n\n")
+  return [COMMON, summaryShape(format), fieldRules(format), contentGuidelines(format)].join("\n\n")
 }
 
 function failure(message: string) {

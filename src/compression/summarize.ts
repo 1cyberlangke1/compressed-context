@@ -32,19 +32,19 @@ function promptRules(options: SummaryPromptOptions | undefined): string[] {
   const lines =
     options?.format === "babel"
       ? [
-          "- Target audience: peer LLM. Notation only, not content: completely drop grammar, connectives, full sentences, and narrative prose.",
-          "- Omnilingual & Symbolic Collapse: freely mix languages (Chinese concepts, English identifiers, German compounds, Japanese kanji, Latin roots), Emoji, and mathematical/logical symbols (=>, ∈, !=, ->, 🎯, ✅, ❌, ⚠️), choosing the single highest-density token for each meaning.",
+          "- Omnilingual & Symbolic Collapse: freely traverse all languages (e.g. Chinese concepts, English identifiers, German compounds, Japanese kanji, Latin roots), Emoji (e.g. ✅, ❌, ⚠️, ⏳, 🎯, 📦, ♻), and math/logic symbols (e.g. =>, ¬, &, |, ->, ?=>, ∈), picking the single highest-density token for each meaning.",
           "- Strict Structural Mapping (BT-P8): all body statements MUST use high-density anchors; natural language sentences and markdown headings are strictly forbidden:",
           "  * Modules: `S[module]`, define abbrev once via `@[short=full]`.",
-          "  * Decisions: `D[decision]:why`.",
+          "  * Decisions: `D[decision]:cause=>effect` (strictly no prose clauses; use ¬bad & good).",
           "  * Files `F:[...]` complete, never \"various files\"; copy full paths with line numbers (F[path:line]).",
           "  * commands `C:[...]` verbatim, never paraphrase.",
           "  * Parameters: `Config[target]:k=v(unit)`, exact values, no rounding, never estimate.",
           "  * Logic: pipelines `A>B>C`, causality `A=>B`, conditions `?cond=>action`.",
-          "  * Exceptions: `!object:detail` for errors, pitfalls, edge conditions.",
+          "  * Exceptions: `!object:pitfall` (compact error/failure signature, no narrative).",
           "  * Evaluations: `Eval[A/B]:result`.",
           "  * Parallel items flattened: `[A, B, C]`.",
-          "- Lossless: entity graph, exact numbers (no rounding), versions, config keys, thresholds, formulas, conditions, causality, exceptions, comparisons, placeholders, paths, signatures, error text; unknown=?/NULL, never invent.",
+          "- Notation only, not content: lossless entity graph, exact numbers (no rounding), versions, config keys, thresholds, formulas, conditions, causality, exceptions, comparisons, placeholders, paths, signatures, error text; unknown=?/NULL, never invent.",
+          "- Anti-pattern: strictly forbid writing Chinese/English clauses inside brackets (BAD: `D[x]:为了避免A并防止B` -> GOOD: `D[x]:¬A & ¬B`).",
         ]
       : options?.format === "markdown"
         ? [
@@ -106,20 +106,20 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
   }
 }
 
-const BABEL_T1_RULES = `Guidance:
-- This checkpoint replaces older messages; next reader sees it instead of them. Self-contained history, not current instructions. Pure Babel notation only, zero prose. Use Emoji and math/logic symbols for symbolic collapse.
-- Lossless coverage: all original content requirements are mandatory. Keep the objective and hard constraints, decisions with their reasons (D[decision]:why), shipped outcomes, open items, work the user still expects, and failure lessons (!object:pitfall).
-- Exact technical facts: copy exact identifiers instead of describing them: full paths with line numbers (F[path:line]), the line of code that carries the logic, signatures, error text, versions, config keys, thresholds, measured values (Config[target]:k=v).
+const BABEL_T1_RULES = `Guidance (BT-P8 Dense Symbolic Babel):
+- Target: peer LLM. Self-contained history, not current instructions. Pure Babel notation only, zero prose.
+- Lossless coverage: keep objective, constraints, decisions with logical causality (D[decision]:cause=>effect), shipped outcomes, open items, and failure lessons (!object:pitfall).
+- Exact technical facts: full paths with line numbers (F[path:line]), logic code lines, signatures, errors, versions, config keys, thresholds, measured values (Config[target]:k=v).
 - Abbrev: define once @[short=long], reuse the short form; never write the same long name twice.
-- Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (one concise line on why they failed), repeated status checks, and settled discussion.
-- If space is tight, keep in this order: objective and constraints; decisions and reasons; exact technical facts; conclusions; lessons from failures.`
+- Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (!attempt:err=>drop), and settled discussion.
+- Anti-pattern: strictly forbid writing Chinese/English clauses inside brackets (BAD: D[x]:为了... -> GOOD: D[x]:¬A & B).`
 
 const BABEL_T2_RULES = `Guidance for merging existing checkpoints:
 - The sources are already compressed Babel blocks; merge them into one compact Babel block without re-telling. Pure Babel notation only. Leverage Emoji and logic symbols for compact deduplication.
 - Deduplicate & consolidate: merge identical S[module] across blocks into one latest module. Flatten parallel items: S[mod]:[feat1, feat2], F:[path1, path2].
-- State evolution: merge Config[target] into latest final parameters; update D[decision]:why to current consensus.
+- State evolution: merge Config[target] into latest final parameters; update D[decision]:cause=>effect to current consensus.
 - Prune superseded items: mark obsolete decisions/approaches with single inline marker [SUPERSEDED by X] and purge their historical details.
-- Preserve open trajectory: keep the latest objective, unresolved !object:detail issues, uncompleted work, and user expectations.
+- Preserve open trajectory: keep the latest objective, unresolved !object:pitfall issues, uncompleted work, and user expectations.
 - Drop process, full diffs, non-load-bearing line numbers, and settled exploration.
 - Target roughly 50-150 tokens per source block. Pure symbolic density.`
 
@@ -257,7 +257,7 @@ const BABEL_CHOICE_RULES = `Guidance for choosing and merging:
 - First line must be \`c=N\`, where N is how many blocks you merge (1..group size). Second line must be \`T=<short title>|G=<one-line goal>\`; after that output strictly in dense Babel notation using single-character anchors (S[], D[], Config[], F[], ?=>, !:, Eval[]) and Emoji/logic symbols. Zero prose, zero sentences, zero markdown headings.
 - N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - Babel changes only notation, not content: same policy as a normal merge checkpoint. No Markdown headings, no JSON, no prose/sentences, no code fences. Use Emoji and math/logic symbols for symbolic collapse.
-- Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items, blocked work, and exact facts that still matter.
+- Keep the latest objective and hard constraints, decisions with logical causality (D[x]:A=>B), final outcomes, open items, blocked work, and exact facts that still matter.
 - Merge duplicate facts across the merged blocks, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
 - If the output tier is 2, target roughly 50-150 tokens per source block. If the output tier is 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts.`
