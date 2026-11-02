@@ -120,13 +120,18 @@ export function itemsOfGroup(
   return options.filter((option) => ACTION_GROUPS[option.value] === group)
 }
 
+/** 输入：布尔开关值 + 文案；输出：「开」或「关」。 */
+function onOff(value: boolean, copy: Messages): string {
+  return value ? copy.settings.on : copy.settings.off
+}
+
 /**
  * 输入：若干开关状态 + 文案。
  * 输出：纯粹的「开 · 关 · 开」状态流，不拼接任何功能名字。
  * 预期：简洁直观，全部项一一对应当前状态。
  */
 function statesFooter(states: readonly boolean[], copy: Messages): string {
-  return states.map((on) => (on ? copy.settings.on : copy.settings.off)).join(" · ")
+  return states.map((value) => onOff(value, copy)).join(" · ")
 }
 
 /**
@@ -159,7 +164,7 @@ export function buildSectionOptions(input: {
     {
       title: copy.settings.categories.summary,
       value: "summary",
-      footer: `${summaryFormatLabel(settings, copy)} · ${summaryLanguageLabel(settings, copy)}`,
+      footer: `${summaryLanguageLabel(settings, copy)} · ${summaryFormatLabel(settings, copy)} · ${onOff(settings.showTimeline, copy)} · ${onOff(settings.showBlockTokens, copy)}`,
     },
     {
       title: copy.settings.categories.switches,
@@ -177,7 +182,7 @@ export function buildSectionOptions(input: {
     {
       title: copy.settings.categories.decompress,
       value: "decompress",
-      footer: `${formatTokens(effectiveDecompressInlineMax(settings))} · ${effectiveDecompressTempCap(settings).toString()} · ${effectiveDecompressTempMaxAgeHours(settings).toString()}h`,
+      footer: `${formatTokens(effectiveDecompressInlineMax(settings))} · ${effectiveDecompressTempCap(settings).toString()} · ${effectiveDecompressTempMaxAgeHours(settings).toString()}h · ${onOff(settings.decompressShowTokens, copy)}`,
     },
     {
       title: copy.settings.categories.interface,
