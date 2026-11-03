@@ -113,15 +113,11 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
 
     /**
      * 阶段一：把新原文折成 T1。
-     * 预期：没有新原文时原样通过；摘要已超预算（phase 有值）但新原文不够长时也让位给合并。
-     *       older 够长时必须先折进链：fromHook 只保留最近 keep 窗口，落在保留区之外又没进
-     *       摘要的原文会同时不在摘要和保留区里，等于丢历史。
+     * 预期：没有新原文时原样通过；有 pending（compress 工具）时直接沿用。
+     *       只在摘要还在预算内时执行——超预算时折 T1 只会让摘要更大。
      */
     const foldNewSource = async (chain: Chain): Promise<StageOutcome> => {
-      const fold =
-        older.length > 0 &&
-        sourceChars > 0 &&
-        (state.phase === undefined || sourceChars >= MIN_SOURCE_CHARS)
+      const fold = older.length > 0 && sourceChars > 0
       if (!fold) return { chain }
       // 已有 pending（compress 工具）直接沿用，只把连环合并计数归零。
       if (chain.pending !== undefined) return { chain: { ...chain, rounds: 0 } }
@@ -202,15 +198,17 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
       pending: state.pending,
       rounds: state.distillRounds ?? 0,
     }
-    let failure: string | undefined
-    for (const stage of [foldNewSource, mergeOverBudget]) {
-      const outcome = await stage(chain)
-      chain = outcome.chain
-      if (outcome.error !== undefined) {
-        failure = outcome.error
-        break
-      }
-    }
+    // 一次压缩只发一次摘要请求，两个动作互斥：
+    // - 摘要没超限 → 折 T1，把新原文收进摘要；
+    // - 摘要超限 → 合并，除非这次新原文已经够长（例如一次粘贴了大段文本）：
+    //   那种原文必须先折进摘要，否则超出保留窗口的部分会丢。
+    // 触发层在超限后一有新内容就入队，正常情况新原文不会累积到这个长度。
+    const mergeOnly =
+      state.phase !== undefined && (older.length === 0 || sourceChars < MIN_SOURCE_CHARS)
+    const stage = mergeOnly ? mergeOverBudget : foldNewSource
+    const outcome = await stage(chain)
+    chain = outcome.chain
+    const failure = outcome.error
 
     // 没有块也没有新原文：留给宿主自己判定「没有可压缩内容」。
     if (chain.blocks.length === 0 && chain.pending === undefined && failure === undefined) return

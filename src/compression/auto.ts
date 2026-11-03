@@ -229,6 +229,34 @@ async function hasUserSinceCompaction(ctx: Plugin.Context, sessionID: string): P
 }
 
 /**
+ * 输入：插件上下文 + sessionID。
+ * 输出：最近一次 completed compaction 之后是否有可压缩的新内容。
+ * 预期：合并必须在「有新内容」时立刻触发，不能只等新的 user 消息——同一回合里的模型输出
+ *       和工具结果会一直堆，堆到超出 OpenCode 保留的最近窗口后，合并就保不住它们。
+ *       读不到历史时返回 true，交给压缩钩子给出真实结果。
+ */
+async function hasContentSinceCompaction(ctx: Plugin.Context, sessionID: string): Promise<boolean> {
+  try {
+    const messages = await ctx.session.context({ sessionID })
+    let latest = -1
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index]
+      if (message?.type === "compaction" && message.status === "completed") latest = index
+    }
+    if (latest < 0) return true
+    return messages.slice(latest + 1).some((message) => {
+      if (message.type === "compaction") return false
+      if (messageTextOf(message).trim().length > 0) return true
+      // 只有工具调用/结果的消息正文为空，但同样是可压内容。
+      const content = (message as { readonly content?: unknown }).content
+      return Array.isArray(content) && content.length > 0
+    })
+  } catch {
+    return true
+  }
+}
+
+/**
  * 输入：一条 session 消息。
  * 输出：它的正文。
  * 预期：不同版本把正文放在 `text` 或 `content[].text`，两种都要认；都没有就返回空串，
@@ -485,14 +513,13 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
       (await effectiveLimit(input.ctx.storage, input.sessionID, input.model))
 
     // 已开头的合并链：与 autoCompress 无关，手动压缩后也要继续 T2/T3。
-    // 但要等新的 user 消息：刚压完就再请求一刀，宿主会回「没有可压缩内容」并留下一条虚假失败。
+    // 摘要一超限就立刻入队合并，不等新的 user 消息：等下去只会让同一回合的新内容堆到
+    // 保留窗口之外，那时合并就保不住它们了。
+    const overBudget = summaryOverBudget(state, settings, limit)
     if (state.phase !== undefined) {
-      if (
-        summaryOverBudget(state, settings, limit) &&
-        (await hasUserSinceCompaction(input.ctx, input.sessionID))
-      ) {
+      if (overBudget && (await hasContentSinceCompaction(input.ctx, input.sessionID))) {
         await requestCompaction(input.ctx, input.sessionID)
-      } else if (!summaryOverBudget(state, settings, limit)) {
+      } else if (!overBudget) {
         await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
       }
       return
@@ -502,12 +529,11 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     if (!settings.autoCompress) return
     // 摘要自己撑爆预算也要合并：与上下文占用无关。否则手动压完就超预算、phase 又丢了时，
     // 要等到下一次用量过线才会再压一刀，中间一直卡着超预算的摘要。
-    // 必须等新的 user 消息：压完立刻再请求一刀只会得到宿主的「没有可压缩内容」。
     if (
-      summaryOverBudget(state, settings, limit) &&
+      overBudget &&
       mergePossible(state, settings.recentT1Blocks) &&
       (state.distillRounds ?? 0) < MAX_DISTILL_ROUNDS &&
-      (await hasUserSinceCompaction(input.ctx, input.sessionID))
+      (await hasContentSinceCompaction(input.ctx, input.sessionID))
     ) {
       await armMergePhase(input.ctx, input.sessionID)
       await requestCompaction(input.ctx, input.sessionID)
@@ -555,26 +581,24 @@ export async function maybeAutoCompressStep(input: {
     const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
     const effective = await effectiveLimit(input.ctx.storage, input.sessionID, session.model)
 
-    // 已开头的合并链：与 autoCompress 无关；同样要求有新的 user 消息。
+    // 已开头的合并链：与 autoCompress 无关；摘要超限就立刻合并，不等新的 user 消息。
+    const overBudget = summaryOverBudget(state, settings, effective)
     if (state.phase !== undefined) {
-      if (
-        summaryOverBudget(state, settings, effective) &&
-        (await hasUserSinceCompaction(input.ctx, input.sessionID))
-      ) {
+      if (overBudget && (await hasContentSinceCompaction(input.ctx, input.sessionID))) {
         await requestCompaction(input.ctx, input.sessionID)
-      } else if (!summaryOverBudget(state, settings, effective)) {
+      } else if (!overBudget) {
         await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
       }
       return
     }
 
     if (!settings.autoCompress) return
-    // 与 context 路径同理：摘要超预算就合并，不等用量过线；同样要求有新的 user 消息。
+    // 与 context 路径同理：摘要超限就立刻合并，不等用量过线，也不等新的 user 消息。
     if (
-      summaryOverBudget(state, settings, effective) &&
+      overBudget &&
       mergePossible(state, settings.recentT1Blocks) &&
       (state.distillRounds ?? 0) < MAX_DISTILL_ROUNDS &&
-      (await hasUserSinceCompaction(input.ctx, input.sessionID))
+      (await hasContentSinceCompaction(input.ctx, input.sessionID))
     ) {
       await armMergePhase(input.ctx, input.sessionID)
       await requestCompaction(input.ctx, input.sessionID)

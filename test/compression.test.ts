@@ -1271,6 +1271,78 @@ describe("自动压缩", () => {
     expect(compacts).toBe(1)
   })
 
+  it("超限且上次压缩后只有模型输出时，step.ended 也立刻入队合并", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
+        triggerPercent: 80,
+        summaryTotalPercent: 1,
+      },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: {
+        blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)],
+        attempts: 0,
+        phase: 2,
+      },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      undefined,
+      // 上次压缩之后没有新的 user 消息，只有模型这一步的输出：同样是可压内容，
+      // 必须立刻合并，否则它会一直堆到超出保留窗口。
+      [
+        { type: "compaction", status: "completed", summary: "old" },
+        { type: "assistant", content: [{ type: "text", text: "step output" }] },
+      ],
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 10, write: 0 } },
+    })
+    expect(compacts).toBe(1)
+  })
+
+  it("超限但上次压缩后没有任何新内容时不入队", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 100_000 }, model: { contextLimit: 100_000 } },
+        triggerPercent: 80,
+        summaryTotalPercent: 1,
+      },
+      [EFFECTIVE_WINDOW_KEY]: 100_000,
+      [stateKey("ses_test")]: {
+        blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)],
+        attempts: 0,
+        phase: 2,
+      },
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      undefined,
+      // 历史里只剩 checkpoint：再请求一刀只会得到「没有可压缩内容」。
+      [{ type: "compaction", status: "completed", summary: "old" }],
+    )
+    await maybeAutoCompressStep({
+      ctx,
+      sessionID: "ses_test",
+      tokens: { input: 1, cache: { read: 10, write: 0 } },
+    })
+    expect(compacts).toBe(0)
+  })
+
   it("phase 为空但摘要超预算时 step.ended 也入队合并（保留区用默认值）", async () => {
     const storage = memoryStorage({
       [SETTINGS_KEY]: {
@@ -1492,6 +1564,41 @@ describe("自动压缩", () => {
       },
     )
     // 消息量远低于阈值，但摘要确实超预算：必须入队，否则合并永远等不到。
+    await maybeAutoCompress({
+      ctx,
+      sessionID: "ses_test",
+      messages: [{ id: "m1", role: "user", content: [{ type: "text", text: "hi" }] }],
+      system: [],
+      tools: {},
+      model: { providerID: "test", id: "test" },
+    })
+    expect(compacts).toBe(1)
+  })
+
+  it("超限且上次压缩后只有模型输出时，context 请求也立刻入队合并", async () => {
+    const storage = memoryStorage({
+      [SETTINGS_KEY]: {
+        models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
+        triggerPercent: 60,
+        summaryTotalPercent: 1,
+      },
+      [stateKey("ses_test")]: withPhase({ blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)], attempts: 0 }, 2),
+    })
+    let compacts = 0
+    const ctx = fakeCtx(
+      storage,
+      () => Promise.resolve({ text: JSON.stringify(summary) }),
+      () => {
+        compacts += 1
+        return Promise.resolve()
+      },
+      undefined,
+      // 上次压缩之后没有新的 user 消息，只有模型这一步的输出。
+      [
+        { type: "compaction", status: "completed", summary: "old" },
+        { type: "assistant", content: [{ type: "text", text: "step output" }] },
+      ],
+    )
     await maybeAutoCompress({
       ctx,
       sessionID: "ses_test",
@@ -2246,7 +2353,7 @@ describe("摘要单层合并", () => {
     expect(event.result?.summary).toContain("T2")
   })
 
-  it("压缩后仍超预算时继续合并，不等下一次请求", async () => {
+  it("超限且新原文很短时只合并，一次压缩只调一次模型", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {
       models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
@@ -2256,43 +2363,87 @@ describe("摘要单层合并", () => {
       recentT1Blocks: 0,
       summaryFormat: "json",
     })
-    // 四个 24k 字符的 T1：摘要远超 1% × 50k = 500 token 的预算。
-    await saveState(storage, "ses_fold_then_merge", {
+    // 四个 24k 字符的 T1：摘要远超 1% × 50k = 500 token 的限制。
+    await saveState(storage, "ses_over_limit_merge", {
       blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3), longBlock("b4", 1, 4)],
       attempts: 0,
       phase: 2,
     })
-    let merges = 0
+    const prompts: string[] = []
     const ctx = fakeCtx(
       storage,
       (input) => {
-        // 合并提示词要求模型额外给出 candidate；T1 提示词没有这一段。
-        if (input.prompt.includes('"candidate": N')) {
-          merges += 1
-          return Promise.resolve({ text: JSON.stringify({ candidate: 4, ...summary }) })
-        }
+        prompts.push(input.prompt)
+        return Promise.resolve({ text: JSON.stringify({ candidate: 4, ...summary }) })
+      },
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_over_limit_merge",
+      model: { providerID: "fake", id: "model" },
+      messages: [
+        message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
+        // 正常情况：触发及时，新原文很短。
+        message("assistant", "step output", "m1"),
+      ],
+    }
+
+    await handleCompaction(ctx, event)
+
+    const state = await loadState(storage, "ses_over_limit_merge")
+    expect(state.lastError).toBeUndefined()
+    // 一次压缩只发一次模型请求，而且是合并（提示词要求 candidate），不是 T1。
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain('"candidate": N')
+    // 没有折出新 T1：四个块合成一个 T2，摘要回到限制内。
+    expect(activeBlocks(state.blocks, state.pending)).toHaveLength(1)
+    expect(state.pending?.tier).toBe(2)
+    expect(countText(event.result?.summary ?? "")).toBeLessThanOrEqual(500)
+  })
+
+  it("超限但这次粘贴了大段原文时先折 T1，一次压缩只调一次模型", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      recentT1Blocks: 0,
+      summaryFormat: "json",
+    })
+    await saveState(storage, "ses_over_limit_paste", {
+      blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2)],
+      attempts: 0,
+      phase: 2,
+    })
+    const prompts: string[] = []
+    const ctx = fakeCtx(
+      storage,
+      (input) => {
+        prompts.push(input.prompt)
         return Promise.resolve({ text: JSON.stringify(summary) })
       },
       () => Promise.resolve(),
     )
     const event: CompactionEvent = {
-      sessionID: "ses_fold_then_merge",
+      sessionID: "ses_over_limit_paste",
       model: { providerID: "fake", id: "model" },
       messages: [
         message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
-        // 新原文超过 MIN_SOURCE_CHARS：旧逻辑先做 T1 就返回，永远轮不到合并。
+        // 一次粘贴的大段原文：不折进摘要就会被丢，所以这次必须先做 T1。
         message("assistant", "x".repeat(20_000), "m1"),
       ],
     }
 
     await handleCompaction(ctx, event)
 
-    const state = await loadState(storage, "ses_fold_then_merge")
+    const state = await loadState(storage, "ses_over_limit_paste")
     expect(state.lastError).toBeUndefined()
-    // 同一次压缩里折完新原文必须继续合并，把摘要压回预算内。
-    expect(merges).toBeGreaterThan(0)
-    expect(countText(event.result?.summary ?? "")).toBeLessThanOrEqual(500)
-    expect(activeBlocks(state.blocks, state.pending).some((item) => item.tier === 2)).toBe(true)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).not.toContain('"candidate": N')
+    // 新原文入链：多出一个 T1 块，摘要仍然超限，phase 留给下一次合并。
+    expect(state.pending?.tier).toBe(1)
+    expect(state.phase).toBe(2)
   })
 
   it("只剩一个块且超预算时自压，压回预算后清 phase", async () => {
