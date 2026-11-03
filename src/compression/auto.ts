@@ -587,7 +587,7 @@ export function buildNudgeText(growthTokens: number, hasCompressed: boolean, aut
     `${NUDGE_PREFIX} Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
     // 默认不压：任务没做完、或还需要这些精确细节时继续干活；只有到了自然的停顿点才压缩。
     "Do not compress yet if you are busy or if you still need these exact details: keep working and ignore this reminder. " +
-    `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope}. ` +
+    `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope} (carrying forward still-open objectives). ` +
     fallback
   )
 }

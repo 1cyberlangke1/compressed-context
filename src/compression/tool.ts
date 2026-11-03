@@ -29,16 +29,18 @@ function contentGuidelines(format: SummaryFormat): string {
     return (
       "Lossless facts in pure symbolic Babel: F[path:line], Config[k=v], signatures, exact values. " +
       "Decisions: logical causality (D[target]: cause=>effect or ¬bad & good). Failures: (!target: err=>action). " +
+      "Open objectives: keep still-open work as ⏳[target]: <goal> (?=> <next>); carry forward verbatim across tiers. " +
       "Leverage Emoji (✅ pass, ❌ fail, ⚠️ pitfall, ⏳ pending, 🎯 target, 📦 release, ♻ cache) and logic symbols (=>, ¬, &, |, ->, ?=>). " +
       "Strictly forbid natural language clauses inside brackets. Zero prose/sentences. " +
-      "Describe past as past, not new instructions. Omit logs and settled exploration."
+      "Describe past as settled history (✅), not active directives to re-execute. Omit logs and settled exploration."
     )
   }
   return (
     "The block is the only remaining record of those messages, so copy exact paths with line numbers, signatures, the " +
     "code lines that carry the logic, error text, versions, config keys, thresholds, and measured values. " +
     "Give the reason for each decision, keep the objective and any pivots, why important actions were taken, unanswered " +
-    "questions, and work the user still expects. Describe the past as past, not as a new instruction. " +
+    "questions, and work the user still expects. Carry forward still-open user objectives (e.g. Open objectives: ...). " +
+    "Describe the past as settled history, never as live directives to re-execute. " +
     "Leave out logs, repeated reads, exploration that produced nothing, abandoned attempts (one line on why), and " +
     "repeated status checks. If space is tight, keep objective and constraints first, then decisions and reasons, then " +
     "exact technical facts, then conclusions, then lessons. Write short factual entries, not prose."

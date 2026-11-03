@@ -36,6 +36,7 @@ function promptRules(options: SummaryPromptOptions | undefined): string[] {
           "- Strict Structural Mapping (BT-P8): all body statements MUST use high-density anchors; natural language sentences and markdown headings are strictly forbidden:",
           "  * Modules: `S[module]`, define abbrev once via `@[short=full]`.",
           "  * Decisions: `D[decision]:cause=>effect` (strictly no prose clauses; use ¬bad & good).",
+          "  * Open objectives: `⏳[target]: <goal> (?=> <next>)`, carry forward verbatim across tiers until completed (✅) or superseded.",
           "  * Files `F:[...]` complete, never \"various files\"; copy full paths with line numbers (F[path:line]).",
           "  * commands `C:[...]` verbatim, never paraphrase.",
           "  * Parameters: `Config[target]:k=v(unit)`, exact values, no rounding, never estimate.",
@@ -44,6 +45,7 @@ function promptRules(options: SummaryPromptOptions | undefined): string[] {
           "  * Evaluations: `Eval[A/B]:result`.",
           "  * Parallel items flattened: `[A, B, C]`.",
           "- Notation only, not content: lossless entity graph, exact numbers (no rounding), versions, config keys, thresholds, formulas, conditions, causality, exceptions, comparisons, placeholders, paths, signatures, error text; unknown=?/NULL, never invent.",
+          "- Pruning: mark obsolete approaches with single inline marker `[SUPERSEDED by #bN]` and purge historical details.",
           "- Anti-pattern: strictly forbid writing Chinese/English clauses inside brackets (BAD: `D[x]:为了避免A并防止B` -> GOOD: `D[x]:¬A & ¬B`).",
         ]
       : options?.format === "markdown"
@@ -53,12 +55,14 @@ function promptRules(options: SummaryPromptOptions | undefined): string[] {
             "- Only include sections with real content; never invent entries to fill a section.",
             "- Use real file paths in `## Files`; put config keys and function names in `## Facts`.",
             "- Put work in `### Completed` only when it was actually finished; plans go in `### Active` or `## Open Items`.",
+            "- Keep still-open user objectives and planned next steps in `### Active` or `## Open Items` (e.g. `- Open objective: <goal>`); carry them forward across merges.",
             `- Keep this summary under ${maxChars.toString()} characters.`,
           ]
         : [
             "- Only \"goal\" is required. Omit any optional field that has no real content; never invent entries to fill it.",
             "- Use \"files\" only for real file paths; put config keys and function names in \"facts\".",
             "- Put work in \"progress.completed\" only when the source shows it was finished; plans go in \"progress.active\" or \"open_items\".",
+            "- Carry forward still-open user objectives in \"open_items\"; re-carry them across merges.",
             `- Keep this summary under ${maxChars.toString()} characters.`,
           ]
   if (options?.totalChars !== undefined) {
@@ -108,7 +112,9 @@ export function sessionGenerator(session: SessionGenerateLike, sessionID: string
 
 const BABEL_T1_RULES = `Guidance (BT-P8 Dense Symbolic Babel):
 - Target: peer LLM. Self-contained history, not current instructions. Pure Babel notation only, zero prose.
-- Lossless coverage: keep objective, constraints, decisions with logical causality (D[decision]:cause=>effect), shipped outcomes, open items, and failure lessons (!object:pitfall).
+- The summary records the PAST as of this block. Outcomes are settled facts (✅), not active directives to re-run.
+- Lossless coverage: keep objective, constraints, decisions with logical causality (D[decision]:cause=>effect), shipped outcomes (✅), open items/objectives (⏳[target]: <goal> (?=> <next>)), and failure lessons (!object:pitfall).
+- Open objectives carry-forward: active user objectives (⏳) must be recorded; in later merges they carry forward verbatim until completed (✅) or superseded.
 - Exact technical facts: full paths with line numbers (F[path:line]), logic code lines, signatures, errors, versions, config keys, thresholds, measured values (Config[target]:k=v).
 - Abbrev: define once @[short=long], reuse the short form; never write the same long name twice.
 - Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (!attempt:err=>drop), and settled discussion.
@@ -118,24 +124,25 @@ const BABEL_T2_RULES = `Guidance for merging existing checkpoints:
 - The sources are already compressed Babel blocks; merge them into one compact Babel block without re-telling. Pure Babel notation only. Leverage Emoji and logic symbols for compact deduplication.
 - Deduplicate & consolidate: merge identical S[module] across blocks into one latest module. Flatten parallel items: S[mod]:[feat1, feat2], F:[path1, path2].
 - State evolution: merge Config[target] into latest final parameters; update D[decision]:cause=>effect to current consensus.
-- Prune superseded items: mark obsolete decisions/approaches with single inline marker [SUPERSEDED by X] and purge their historical details.
-- Preserve open trajectory: keep the latest objective, unresolved !object:pitfall issues, uncompleted work, and user expectations.
+- Prune superseded items: mark obsolete decisions/approaches with single inline marker [SUPERSEDED by #bN] and purge their historical details.
+- Preserve open trajectory: re-carry open ⏳[target] verbatim from source blocks — they survive across tiers until completed (✅) or superseded. Keep unresolved !object:pitfall issues and user expectations.
 - Drop process, full diffs, non-load-bearing line numbers, and settled exploration.
 - Target roughly 50-150 tokens per source block. Pure symbolic density.`
 
 const BABEL_T3_RULES = `Guidance for ultra-condensing existing checkpoints:
 - Reduce the sources to an ultra-minimal telegraphic lookup index. Pure symbols, Emoji, and dense keywords only.
 - Index rows: 1-2 dense anchor lines per source component: S[module]:final_outcome | Config[key]=value.
-- Invariants only: keep only shipped architectural invariants, active constraints, and uncompleted user goals.
+- Invariants only: keep only shipped architectural invariants, active constraints, and uncompleted user goals (⏳).
 - Purge: drop all intermediate D[decision] rationale, resolved !errors, and obsolete history.
-- Open user-requested objectives survive until a later source marks them completed or superseded.
+- Open user-requested objectives (⏳) survive until a later source marks them completed (✅) or superseded.
 - Target roughly 30-60 tokens per source block. Absolute token floor.`
 
 const TIER1_RULES = `Guidance:
 - This checkpoint replaces the messages above; the next reader sees it instead of them, so it must stand on its own.
-- Describe what already happened as history. Do not turn a recorded plan or request into an instruction to act now.
+- The summary records the PAST as of this block's creation. Describe what already happened as settled history, never as live directives to re-execute.
 - Copy exact identifiers instead of describing them: full paths with line numbers, function and type signatures, the line of code that carries the logic, error text, versions, config keys, thresholds, and measured numbers.
 - For each decision, say why it was made. Keep discovered constraints, the user's objective and any change of direction, the reason behind important actions, unanswered questions, and work the user still expects.
+- Open objectives carry-forward: if the conversation contains an active user objective or planned next step that is neither completed nor superseded, keep an explicit line (e.g. "- Open objective: <goal>").
 - Quote the user only when the exact wording matters; otherwise paraphrase and never invent a quote.
 - Omit build/test logs, repeated reads, exploration that produced nothing, abandoned attempts (keep one line on why they failed), repeated status checks, and discussion that has already reached a conclusion.
 - If space is tight, keep in this order: objective and constraints; decisions and reasons; exact technical facts; conclusions; lessons from failures.
@@ -144,8 +151,9 @@ const TIER1_RULES = `Guidance:
 const TIER2_RULES = `Guidance for merging existing checkpoints:
 - The sources are already compressed summaries, not raw conversation. Merge them into one checkpoint that covers all of them; do not re-tell the process.
 - Keep only what future work needs: the latest objective and hard constraints; decisions with their reasons; final outcomes; open items and blocked work; the user's still-open expectations.
+- Open objectives: if ANY source block's summary names an open user objective that is not marked completed or superseded, re-carry it verbatim (e.g. "- Open objective: <goal>"). They are the last thing to drop and the first thing to restore.
 - Keep exact paths, signatures, errors, versions, config keys, and measured values only when they still matter. Drop line numbers, full diffs, code listings, logs, repeated reads, and intermediate debugging.
-- Merge duplicate facts across sources and keep the latest status. Mark superseded or obsolete content with one short marker; do not keep its details.
+- Merge duplicate facts across sources and keep the latest status. Whether content is OBSOLETE or SUPERSEDED — mark with a single line: '[SUPERSEDED by #bN]' or '[OBSOLETE: <reason>]'. Do NOT keep obsolete details.
 - A failed attempt may stay as one line saying what failed and why, because that prevents repeating it.
 - Target roughly 50-150 tokens per source block. Prefer dense factual entries over narrative.`
 
@@ -238,7 +246,9 @@ const CHOICE_RULES = `Guidance for choosing and merging:
 - Add a top-level "candidate": N field to the JSON object, where N is how many blocks you merge (1..group size). The rest of the object must follow the exact shape above.
 - N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items and blocked work, and exact facts that still matter.
-- Merge duplicate facts across the merged blocks, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- Open objectives: re-carry open user objectives verbatim from source blocks until marked completed or superseded.
+- Merge duplicate facts across the merged blocks, keep the latest status, and mark superseded or obsolete content with '[SUPERSEDED by #bN]' without keeping its details.
+- Drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
 - If the output tier is 2, target roughly 50-150 tokens per source block. If the output tier is 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts. Write in the source conversation's primary language.`
 
@@ -248,7 +258,9 @@ const MARKDOWN_CHOICE_RULES = `Guidance for choosing and merging:
 - N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - After that line, write a self-contained markdown checkpoint starting with a short \`# Title\`.
 - Keep the latest objective and hard constraints, decisions with their reasons, final outcomes, open items and blocked work, and exact facts that still matter.
-- Merge duplicate facts across the merged blocks, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- Open objectives: re-carry open user objectives verbatim from source blocks until marked completed or superseded (e.g. "- Open objective: ...").
+- Merge duplicate facts across the merged blocks, keep the latest status, and mark superseded or obsolete content with '[SUPERSEDED by #bN]' without keeping its details.
+- Drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
 - If the output tier is 2, target roughly 50-150 tokens per source block. If the output tier is 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts. Write in the source conversation's primary language.`
 
@@ -258,7 +270,9 @@ const BABEL_CHOICE_RULES = `Guidance for choosing and merging:
 - N = 1 means re-condensing that single block one tier higher: keep noticeably more detail per source block than a multi-block merge.
 - Babel changes only notation, not content: same policy as a normal merge checkpoint. No Markdown headings, no JSON, no prose/sentences, no code fences. Use Emoji and math/logic symbols for symbolic collapse.
 - Keep the latest objective and hard constraints, decisions with logical causality (D[x]:A=>B), final outcomes, open items, blocked work, and exact facts that still matter.
-- Merge duplicate facts across the merged blocks, keep the latest status, and drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
+- Open objectives: re-carry open ⏳[target] verbatim from source blocks until marked completed (✅) or superseded.
+- Merge duplicate facts across the merged blocks, keep the latest status, and mark superseded approaches with [SUPERSEDED by #bN] without keeping historical details.
+- Drop process, logs, repeated reads, full diffs, and non-load-bearing line numbers.
 - If the output tier is 2, target roughly 50-150 tokens per source block. If the output tier is 3, be ultra-condensed: one to three single-line facts per source block.
 - Do not invent facts.`
 

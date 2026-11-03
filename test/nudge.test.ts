@@ -94,6 +94,7 @@ describe("主动压缩提醒", () => {
     expect(textCompressed).toContain("Do not compress yet if you are busy or if you still need these exact details")
     expect(textCompressed).toContain("keep working and ignore this reminder")
     expect(textCompressed).toContain("When you reach a natural stopping point")
+    expect(textCompressed).toContain("carrying forward still-open objectives")
     expect(textCompressed).toContain("Automatic compression will run later")
   })
 
