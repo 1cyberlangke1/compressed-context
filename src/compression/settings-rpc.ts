@@ -13,7 +13,10 @@ import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
 import { loadState } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import { normalizeSettings, resolveSummaryLimits } from "../shared/settings.ts"
+import { resolveConfigFiles } from "../shared/config-paths.ts"
+import { watchConfigFiles } from "./settings-watcher.ts"
 import {
+  clearConfigCache,
   loadSettings,
   parseServerSettings,
   readStoredWindow,
@@ -62,7 +65,11 @@ export async function registerSettingsRpc(
   ctx: Plugin.Context,
   options?: SettingsRpcOptions,
 ): Promise<Disposable> {
-  return ctx.rpc.register(ContextRpc, {
+  const directory = ctx.location.directory
+  const configFiles = resolveConfigFiles(directory, undefined)
+  const selfSaveRef: { mark?: (filePath: string) => void } = {}
+
+  const rpc = await ctx.rpc.register(ContextRpc, {
     settingsGet: async (input) => {
       const layers = readLayers(input)
       const settings = await loadSettings(ctx, layers)
@@ -84,7 +91,8 @@ export async function registerSettingsRpc(
       if (parsed === undefined) return { ok: false }
       const next = normalizeSettings(merged)
       try {
-        await saveSettings(ctx, next, layers)
+        const target = await saveSettings(ctx, next, layers)
+        selfSaveRef.mark?.(target)
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
@@ -176,6 +184,39 @@ export async function registerSettingsRpc(
       return disableNativeCompaction(path)
     },
   })
+
+  const watcher = watchConfigFiles({
+    files: configFiles,
+    onChange: async () => {
+      clearConfigCache()
+      try {
+        const settings = await loadSettings(ctx)
+        const parsed = parseServerSettings(settings)
+        if (parsed !== undefined && options?.onSaved !== undefined) {
+          await options.onSaved(parsed)
+        }
+        const resolvedWindow = await readStoredWindow(ctx)
+        void (rpc as { events: { emit(name: string, data: unknown): Promise<void> } }).events
+          .emit("settingsUpdated", {
+            ...settings,
+            ...(resolvedWindow === undefined ? {} : { resolvedWindow }),
+          })
+          .catch(() => undefined)
+      } catch {
+        // 读取失败时不报错
+      }
+    },
+  })
+  selfSaveRef.mark = (filePath) => {
+    watcher.markSelfSaved(filePath)
+  }
+
+  return {
+    dispose: async () => {
+      watcher.dispose()
+      await rpc.dispose()
+    },
+  }
 }
 
 

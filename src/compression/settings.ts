@@ -49,6 +49,11 @@ const CONFIG_CACHE_MS = 1000
 /** 路径列表 → 缓存条目。 */
 const configCache = new Map<string, { readonly at: number; readonly result: ConfigReadResult }>()
 
+/** 清空配置读取缓存，让随后的读取强制从磁盘重新解析。 */
+export function clearConfigCache(): void {
+  configCache.clear()
+}
+
 /** 输入：配置路径列表；输出：稳定的缓存键。 */
 function configCacheKey(paths: readonly string[]): string {
   return paths.join("\n")
@@ -275,14 +280,14 @@ export async function loadServerSettings(
 
 /**
  * 输入：插件上下文 + 完整设置 + 可选层路径。
- * 输出：无；失败抛错，由 RPC 转成 ok:false。
+ * 输出：实际写入的目标配置文件绝对路径；失败抛错，由 RPC 转成 ok:false。
  * 预期：只把变化键写进最近的已存在项目文件；没有项目文件时写全局。
  */
 export async function saveSettings(
   ctx: SettingsContext,
   settings: Settings,
   layers?: readonly string[],
-): Promise<void> {
+): Promise<string> {
   const paths = resolveConfigFiles(ctx.location?.directory ?? process.cwd(), layers)
   const merged = await readMergedConfig(paths)
   const normalized = normalizeSettings({ ...settings })
@@ -314,4 +319,5 @@ export async function saveSettings(
   }
   // 写盘后立刻失效，避免随后的 settingsGet 读到旧缓存。
   configCache.delete(configCacheKey(paths))
+  return target
 }

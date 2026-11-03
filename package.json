@@ -57,6 +57,7 @@
     "test": "vitest run",
     "test:tui": "cd tui-test && bun test",
     "test:e2e:nudge": "bun scripts/e2e-nudge.mjs",
+    "test:e2e:settings-sync": "bun scripts/e2e-settings-sync.mjs",
     "test:e2e:tool-loop": "bun scripts/e2e-tool-loop.mjs",
     "test:e2e:native-compaction": "bun scripts/e2e-native-compaction.mjs",
     "test:e2e:block-edit": "bun scripts/build-tui.mjs && bun scripts/e2e-block-edit.mjs",

@@ -109,6 +109,8 @@ jobs:
       - run: bun scripts/e2e-tool-loop.mjs
       - run: bun scripts/e2e-compress.mjs
       - run: bun scripts/e2e-nudge.mjs
+      # 外部文件变更与多层配置实时自动同步。
+      - run: bun scripts/e2e-settings-sync.mjs
       # 打断压缩后的恢复链路：假 provider 挂住摘要请求，验证 interrupted 不会留死锁。
       - run: bun scripts/e2e-repro-interrupt.mjs
       # 真实 TUI（PTY）需要发布口径的 dist/tui.js。

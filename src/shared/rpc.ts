@@ -262,7 +262,9 @@ export const ContextRpc: Rpc.PortableDefinition = {
       output: NativeCompactionDisableOutputJson,
     },
   },
-  events: {},
+  events: {
+    settingsUpdated: { schema: SettingsOutputJson },
+  },
 }
 
 /** 服务端设置读取结果。 */
@@ -303,6 +305,12 @@ export interface ContextRpcClient {
     },
     options?: { readonly location?: { readonly directory: string } },
   ): Promise<{ readonly ok: boolean; readonly error?: string }>
+  readonly events: {
+    on(
+      name: "settingsUpdated",
+      handler: (event: { readonly data: ContextSettingsResult }) => void,
+    ): () => void
+  }
 }
 
 /** 输入：带 rpc 方法的 TUI client；输出：类型化 RPC 客户端。 */

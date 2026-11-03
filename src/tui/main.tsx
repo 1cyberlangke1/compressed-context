@@ -41,6 +41,12 @@ export default Plugin.define({
       // 服务端插件尚未加载：先用默认值，保存时再报错。
     }
     const [settings, setSettings] = createStore<Settings>(initial)
+
+    // 监听来自服务端的配置更新事件（外部窗口保存或直接修改配置文件）：
+    const offSettingsUpdated = rpc.events.on("settingsUpdated", (event) => {
+      setSettings(reconcile(normalizeSettings({ ...event.data })))
+    })
+
     const updateSettings: UpdateSettings = async (mutation) => {
       // 必须连 models 一起浅拷贝：单独 spread store 时 models 仍是 store 的代理，
       // 往里写新键会被忽略，保存出去的 models 永远是空的。
@@ -86,6 +92,7 @@ export default Plugin.define({
     }, 0)
 
     return () => {
+      offSettingsUpdated()
       for (const dispose of disposePanels) dispose()
       disposeCommand()
     }
