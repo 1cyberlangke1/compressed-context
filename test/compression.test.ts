@@ -2246,6 +2246,55 @@ describe("摘要单层合并", () => {
     expect(event.result?.summary).toContain("T2")
   })
 
+  it("压缩后仍超预算时继续合并，不等下一次请求", async () => {
+    const storage = memoryStorage()
+    await storage.set("settings", {
+      models: { test: { contextLimit: 50_000 }, model: { contextLimit: 50_000 } },
+      triggerPercent: 60,
+      summaryBlockPercent: 20,
+      summaryTotalPercent: 1,
+      recentT1Blocks: 0,
+      summaryFormat: "json",
+    })
+    // 四个 24k 字符的 T1：摘要远超 1% × 50k = 500 token 的预算。
+    await saveState(storage, "ses_fold_then_merge", {
+      blocks: [longBlock("b1", 1, 1), longBlock("b2", 1, 2), longBlock("b3", 1, 3), longBlock("b4", 1, 4)],
+      attempts: 0,
+      phase: 2,
+    })
+    let merges = 0
+    const ctx = fakeCtx(
+      storage,
+      (input) => {
+        // 合并提示词要求模型额外给出 candidate；T1 提示词没有这一段。
+        if (input.prompt.includes('"candidate": N')) {
+          merges += 1
+          return Promise.resolve({ text: JSON.stringify({ candidate: 4, ...summary }) })
+        }
+        return Promise.resolve({ text: JSON.stringify(summary) })
+      },
+      () => Promise.resolve(),
+    )
+    const event: CompactionEvent = {
+      sessionID: "ses_fold_then_merge",
+      model: { providerID: "fake", id: "model" },
+      messages: [
+        message("user", "<conversation-checkpoint>[T1] old</conversation-checkpoint>", "m0"),
+        // 新原文超过 MIN_SOURCE_CHARS：旧逻辑先做 T1 就返回，永远轮不到合并。
+        message("assistant", "x".repeat(20_000), "m1"),
+      ],
+    }
+
+    await handleCompaction(ctx, event)
+
+    const state = await loadState(storage, "ses_fold_then_merge")
+    expect(state.lastError).toBeUndefined()
+    // 同一次压缩里折完新原文必须继续合并，把摘要压回预算内。
+    expect(merges).toBeGreaterThan(0)
+    expect(countText(event.result?.summary ?? "")).toBeLessThanOrEqual(500)
+    expect(activeBlocks(state.blocks, state.pending).some((item) => item.tier === 2)).toBe(true)
+  })
+
   it("只剩一个块且超预算时自压，压回预算后清 phase", async () => {
     const storage = memoryStorage()
     await storage.set("settings", {
