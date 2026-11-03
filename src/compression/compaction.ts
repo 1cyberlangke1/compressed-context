@@ -2,7 +2,7 @@ import type { Plugin } from "@opencode/plugin"
 
 import { resolveForModel, resolveSummaryLimits } from "../shared/settings.ts"
 import { renderActiveSummary } from "./active-summary-cache.ts"
-import { measuredPromptTokens, resolveLimit } from "./auto.ts"
+import { resolveLimit } from "./auto.ts"
 import { createT1Block } from "./block.ts"
 import { distillOnce, planT1Phase } from "./distill.ts"
 import { endCompaction, tryBeginCompaction } from "./inflight.ts"
@@ -38,8 +38,6 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
   if (!tryBeginCompaction(event.sessionID)) return
   try {
     const state = await loadState(ctx.storage, event.sessionID)
-    // 压缩成功后 nudge 基线要跟着重置到最近一次真实 usage；在钩子开始时取，避免事后上下文被裁掉。
-    const baseline = await measuredPromptTokens(ctx, event.sessionID)
     const settings = resolveForModel(await loadServerSettings(ctx), event.model)
     // auto 窗口在运行时解析后钳制摘要上限；数字窗口已在保存时校验，这里统一再钳一次。
     const windowTokens = await resolveLimit(ctx, event.model, settings.contextLimit, event.sessionID)
@@ -71,10 +69,14 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
           ...(phase === undefined ? {} : { phase }),
           ...(lastError === undefined ? {} : { lastError }),
           ...(rounds === undefined ? {} : { distillRounds: rounds }),
-          ...(baseline !== undefined
-            ? { nudgeBaselineTokens: baseline, nudgeAnchorTokens: baseline, nudgeCount: 0 }
+          // 成功即重置提醒基线：旧口径按整段 prompt 记账，留着会把新口径的内容量当成「负增长」。
+          // 清空后由下一次 maybeNudge 用压缩后的内容量重新建立基线。
+          ...(error === undefined
+            ? { nudgeCount: 0 }
             : {
-                ...(current.nudgeBaselineTokens === undefined ? {} : { nudgeBaselineTokens: current.nudgeBaselineTokens }),
+                ...(current.nudgeBaselineTokens === undefined
+                  ? {}
+                  : { nudgeBaselineTokens: current.nudgeBaselineTokens }),
                 ...(current.nudgeAnchorTokens === undefined ? {} : { nudgeAnchorTokens: current.nudgeAnchorTokens }),
                 ...(current.nudgeCount === undefined ? {} : { nudgeCount: current.nudgeCount }),
               }),

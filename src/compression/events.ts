@@ -14,7 +14,6 @@ import {
   resolvedWindowKey,
 } from "./settings.ts"
 import { deleteTranscriptsForSession } from "./transcript-store.ts"
-import { measuredPromptTokens } from "./auto.ts"
 import { isCompactionInFlight } from "./inflight.ts"
 import {
   STATE_PREFIX,
@@ -77,18 +76,10 @@ export async function handleCompactionEvent(
       // 否则它属于下一层 compaction，留给下一次 ended。
       if (await hasBlockInLatestCompaction(ctx, sessionID, state.pending.id)) {
         const committed = commitPending(state)
-        // 压缩成功后把提醒步进基线和累计原点都重置到最近一次真实 usage，清零 nudgeCount。
-        const baseline = await measuredPromptTokens(ctx, sessionID)
+        // 压缩成功后清掉提醒基线：下一次 maybeNudge 会用压缩后的内容量重新建立，
+        // 不再拿整段 prompt 的旧口径当基线（否则新口径的内容量会被判成负增长）。
         return {
-          next:
-            baseline === undefined
-              ? { ...committed, nudgeCount: 0 }
-              : {
-                  ...committed,
-                  nudgeCount: 0,
-                  nudgeBaselineTokens: baseline,
-                  nudgeAnchorTokens: baseline,
-                },
+          next: { ...committed, nudgeCount: 0 },
           result: undefined,
         }
       }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { countText, estimateCategories } from "../src/shared/tokens.ts"
+import { contentCategories, countText, estimateCategories } from "../src/shared/tokens.ts"
 
 describe("countText", () => {
   it("ASCII 按 4 字符取整，CJK 按 1:1", () => {
@@ -164,5 +164,27 @@ describe("estimateCategories", () => {
       messages: [{ content: [{ type: "effort" }] }],
     })
     expect(result).toEqual({ system: 0, tools: 0, tool: 0, text: 0, recent: 0, summaries: 0, media: 0 })
+  })
+})
+
+describe("contentCategories", () => {
+  it("只汇总会增长的对话内容：工具定义 + 工具结果 + 文本 + 媒体", () => {
+    const categories = {
+      system: 12_000,
+      tools: 5_300,
+      tool: 35_000,
+      text: 16_000,
+      recent: 26_000,
+      summaries: 61_000,
+      media: 1_500,
+    }
+    // 系统提示词、最近保留区、摘要块都不算「新长出来的内容」。
+    expect(contentCategories(categories)).toBe(5_300 + 35_000 + 16_000 + 1_500)
+  })
+
+  it("空估算返回 0", () => {
+    expect(
+      contentCategories({ system: 0, tools: 0, tool: 0, text: 0, recent: 0, summaries: 0, media: 0 }),
+    ).toBe(0)
   })
 })

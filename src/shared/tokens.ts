@@ -243,6 +243,15 @@ export function estimateCategories(input: {
   return { system, tools, tool, text, recent, summaries, media }
 }
 
+/**
+ * 输入：分类估算。
+ * 输出：真正会随对话推进增长、也是压缩要折叠的内容 token：工具定义 + 工具结果 + 文本 + 媒体。
+ * 预期：提醒只该看这部分；系统提示词、已有摘要块、最近保留区都不算「新长出来的内容」。
+ */
+export function contentCategories(categories: TokenCategories): number {
+  return categories.tools + categories.tool + categories.text + categories.media
+}
+
 /** 输入：分类估算；输出：各类之和。 */
 export function totalCategories(categories: TokenCategories): number {
   return (

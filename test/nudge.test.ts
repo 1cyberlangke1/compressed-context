@@ -252,4 +252,86 @@ describe("主动压缩提醒", () => {
     expect(messages).toHaveLength(4)
     expect((await loadState(storage, "ses_test")).nudgeBaselineTokens).toBeGreaterThan(baseline ?? 0)
   })
+
+  it("系统提示词、摘要块和最近保留区膨胀都不算增长", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
+    const messages = context("x".repeat(24_000))
+
+    // 建立基线：此时内容量约 6k（原文够长，才有可压缩内容）。
+    const first = { ...input(storage, messages), system: [{ type: "text", text: "s".repeat(8_000) }] }
+    await maybeNudge(first)
+    expect(messages).toHaveLength(3)
+    const baseline = (await loadState(storage, "ses_test")).nudgeBaselineTokens
+    expect(baseline).toBeGreaterThan(0)
+
+    // 只有系统提示词涨了 20k 字符（约 5k tokens）：不是对话内容，不该提醒。
+    const grownSystem = { ...input(storage, messages), system: [{ type: "text", text: "s".repeat(28_000) }] }
+    await maybeNudge(grownSystem)
+    expect(messages).toHaveLength(3)
+
+    // 新增一大段摘要块与最近保留区：都是已压缩/法定保留，不该提醒。
+    messages.push({
+      id: "m3",
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text:
+            "<conversation-checkpoint>\n" +
+            `<summary>${"a".repeat(40_000)}</summary>\n` +
+            `<recent-context>${"b".repeat(40_000)}</recent-context>\n` +
+            "</conversation-checkpoint>",
+        },
+      ],
+    })
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(4)
+    expect((await loadState(storage, "ses_test")).nudgeCount ?? 0).toBe(0)
+
+    // 真正新增工具结果时才提醒：8k 字符约 2k tokens，超过 1k 阈值。
+    messages.push({
+      id: "m4",
+      role: "assistant",
+      content: [{ type: "tool-result", name: "read", result: { type: "text", value: "r".repeat(8_000) } }],
+    })
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(6)
+    expect(messages[5]?.content[0]?.text).toContain("about 2.0k tokens since the session started")
+    expect((await loadState(storage, "ses_test")).nudgeCount).toBe(1)
+  })
+
+  it("多模态媒体占用计入增长量", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
+    const messages = context("x".repeat(24_000))
+    // 先建立基线（图片尚未出现）。
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(3)
+
+    // 一张无尺寸信息的图片按 1500 tokens 计，超过 1k 阈值。
+    messages.push({
+      id: "m3",
+      role: "user",
+      content: [{ type: "media", media: { source: { type: "base64", mediaType: "image/png" } } }],
+    })
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(5)
+    expect(messages[4]?.content[0]?.text).toContain("about 1.5k tokens since the session started")
+  })
+
+  it("工具定义变多也计入增长量", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: settings(1_000) })
+    const messages = context("x".repeat(24_000))
+    await maybeNudge(input(storage, messages))
+    expect(messages).toHaveLength(3)
+
+    // 新挂载一个描述很长的工具（8k 字符约 2k tokens），属于真正新增的请求内容。
+    const withTools = {
+      ...input(storage, messages),
+      tools: { big: { description: "d".repeat(8_000), input: {} } },
+    }
+    await maybeNudge(withTools)
+    expect(messages).toHaveLength(4)
+    expect((await loadState(storage, "ses_test")).nudgeCount).toBe(1)
+  })
 })
+

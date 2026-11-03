@@ -3,7 +3,13 @@ import type { Plugin } from "@opencode/plugin"
 import { formatTokens } from "../shared/format.ts"
 import { sameLocation } from "../shared/location.ts"
 import { resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
-import { countText, estimateCategories, totalCategories, type ToolDefinitionLike } from "../shared/tokens.ts"
+import {
+  contentCategories,
+  countText,
+  estimateCategories,
+  totalCategories,
+  type ToolDefinitionLike,
+} from "../shared/tokens.ts"
 import { endCompactionRequest, isCompactionInFlight, tryBeginCompactionRequest } from "./inflight.ts"
 import { pickMergeGroup } from "./distill.ts"
 import { activeBlocks, renderAll } from "./render.ts"
@@ -382,6 +388,22 @@ function estimateTotal(input: AutoInput): number {
   )
 }
 
+/**
+ * 输入：system / tools / messages。
+ * 输出：会随对话增长的内容 token（工具定义 + 工具结果 + 文本 + 媒体）。
+ * 预期：提醒的增长量只用这个口径；系统提示词、摘要块、最近保留区都不计入，
+ *       否则压缩完刚留下的 recent 会被当成「新增长」重复催压。
+ */
+function contentTokens(input: AutoInput): number {
+  return contentCategories(
+    estimateCategories({
+      system: input.system,
+      tools: input.tools,
+      messages: input.messages,
+    }),
+  )
+}
+
 /** 单个 assistant 的真实 prompt 大小；output/reasoning 不属于本轮输入。 */
 function promptTokens(tokens: {
   readonly input: number
@@ -578,7 +600,7 @@ export async function maybeAutoCompressStep(input: {
 const NUDGE_PREFIX = "[context-reminder]"
 
 export function buildNudgeText(growthTokens: number, hasCompressed: boolean, autoCompress: boolean): string {
-  // 增长量为自上次压缩块（或会话起始）以来的累计量（50k -> 100k -> 150k）。
+  // 增长量为自上次压缩块（或会话起始）以来新增的对话内容量（工具定义/结果、文本、媒体），50k -> 100k -> 150k。
   const scope = hasCompressed ? "since the last compressed block" : "since the session started"
   const fallback = autoCompress
     ? "Automatic compression will run later, so there is no rush."
@@ -600,7 +622,9 @@ export type NudgeInput = Omit<AutoInput, "messages"> & {
 /**
  * 输入：服务端上下文 + 可追加消息。
  * 输出：无。
- * 预期：按 nudgeGrowthTokens 增长量在请求尾部追加一次提醒；压缩中、有 pending、或没有可压缩内容时跳过。
+ * 预期：按 nudgeGrowthTokens 的「对话内容增长量」在请求尾部追加一次提醒；压缩中、有 pending、
+ *       或没有可压缩内容时跳过。增长量只统计工具定义、工具结果、文本与媒体，不含系统提示词、
+ *       已有摘要块和最近保留区——后三者不是需要压缩的新增内容。
  */
 export async function maybeNudge(input: NudgeInput): Promise<void> {
   try {
@@ -613,7 +637,9 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     // compress 工具被关闭时提醒没有意义：模型即使看到也调不动。
     if (!settings.enableCompressTool) return
 
-    const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
+    // 只看会增长的内容（工具定义 + 工具结果 + 文本 + 媒体），不拿整段 prompt 做减法：
+    // 后者会把系统提示词、摘要块和刚留下的最近保留区都算成「新增长」，阈值被严重虚标。
+    const total = contentTokens(input)
     const eligible = eligibleMessages(input.messages)
     const canEmit = eligible.length > 0 && buildTranscript(eligible).length >= MIN_SOURCE_CHARS
 
