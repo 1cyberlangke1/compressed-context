@@ -623,32 +623,32 @@ export async function maybeAutoCompressStep(input: {
 const NUDGE_PREFIX = "[context-reminder]"
 
 /**
- * 输入：本次增长量、当前上下文构成、是否已有压缩块、自动压缩开关、摘要格式。
+ * 输入：本次增长量、当前上下文构成、是否已有压缩块、摘要格式。
  * 输出：提醒文本。
- * 预期：先给真实构成与增长量，再劝「忙就继续干活」，最后附该格式的摘要写法铁律；
- *       铁律用正反例压制自然语言散文，避免模型在括号里写整句。
+ * 预期：先给真实构成与增长量，再给「这段流还在用就放着、有结论时再压」的可核对判据，
+ *       接着附该格式的摘要写法铁律，最后用一句动作锚点把回复钉在工具调用上。
+ *       重复规格是有意的：工具描述在请求最顶部，长上下文里注意力衰减，尾部这份才是模型读得到的。
  */
 export function buildNudgeText(input: {
   readonly growthTokens: number
   readonly categories: TokenCategories
   readonly hasCompressed: boolean
-  readonly autoCompress: boolean
   readonly format: SummaryFormat
 }): string {
   const scope = input.hasCompressed ? "since the last compressed block" : "since the session started"
   const breakdown = formatCategoryBreakdown(input.categories)
-  const fallback = input.autoCompress
-    ? "Automatic compression will run later, so there is no rush."
-    : "Call compress when convenient."
   const lines = [
     `${NUDGE_PREFIX}${breakdown.length > 0 ? ` Context: ${breakdown}.` : ""}`,
     // 增长量只算会膨胀的内容（工具定义/结果、文本、媒体），不含系统提示词、摘要块与最近保留区。
     `Content has grown by about ${formatTokens(input.growthTokens)} tokens ${scope}.`,
-    // 默认不压：任务没做完、或还需要这些精确细节时继续干活；只有到了自然的停顿点才压缩。
-    "If you are busy or still need these exact details, keep working and ignore this reminder. " +
-      `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope} (carrying forward still-open objectives). ${fallback}`,
+    // 保留「可以放着」的出口，判据是这段流是否仍在用；不写「稍后会自动压缩」这种无对象、无约束的安慰。
+    "If this flow is still in use, leave it — this reminder returns as the context grows again. " +
+      "Otherwise, compress once the work has reached a conclusion: results recorded, failures explained, decisions made — carrying forward still-open objectives.",
     "",
     formatRules(input.format),
+    "",
+    // 动作锚点：把生成方向钉在工具调用上，避免模型把摘要写成普通回复（Claude 上会直接结束回合）。
+    "If you compress, call the compress tool with the summary — never write the summary as a plain reply.",
   ]
   return lines.join("\n")
 }
@@ -748,7 +748,6 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
           growthTokens: cumulativeGrowth,
           categories,
           hasCompressed,
-          autoCompress: settings.autoCompress,
           format: settings.summaryFormat,
         }),
       }

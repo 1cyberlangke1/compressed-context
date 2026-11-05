@@ -75,10 +75,9 @@ function input(storage: StorageLike, messages: MessageLike[]) {
   }
 }
 
-const settings = (nudgeGrowthTokens: number, autoCompress = true) => ({
+const settings = (nudgeGrowthTokens: number) => ({
   ...DEFAULT_SERVER_SETTINGS,
   nudgeGrowthTokens,
-  autoCompress,
 })
 
 describe("主动压缩提醒", () => {
@@ -99,27 +98,22 @@ describe("主动压缩提醒", () => {
       growthTokens: 52_300,
       categories: categories(),
       hasCompressed: true,
-      autoCompress: true,
       format: "babel",
     })
     expect(textCompressed).toContain("Content has grown by about 52k tokens since the last compressed block")
-    expect(textCompressed).toContain("entire current conversation flow since the last compressed block")
 
     const textUncompressed = buildNudgeText({
       growthTokens: 52_300,
       categories: categories(),
       hasCompressed: false,
-      autoCompress: true,
       format: "babel",
     })
     expect(textUncompressed).toContain("Content has grown by about 52k tokens since the session started")
-    expect(textUncompressed).toContain("entire current conversation flow since the session started")
 
-    // 明确先劝住：忙或还需要精确细节时不要压缩。
-    expect(textCompressed).toContain("If you are busy or still need these exact details, keep working and ignore this reminder")
-    expect(textCompressed).toContain("When you reach a natural stopping point")
+    // 必须有「还在用就放着」的出口，以及可核对的「有结论再压」判据。
+    expect(textCompressed).toContain("If this flow is still in use, leave it")
+    expect(textCompressed).toContain("compress once the work has reached a conclusion")
     expect(textCompressed).toContain("carrying forward still-open objectives")
-    expect(textCompressed).toContain("Automatic compression will run later")
   })
 
   it("提醒里带上按类别的上下文构成，只列非零项", () => {
@@ -127,7 +121,6 @@ describe("主动压缩提醒", () => {
       growthTokens: 51_000,
       categories: categories({ system: 12_000, tools: 5_300, tool: 45_200, text: 15_100, summaries: 38_000, media: 1_500 }),
       hasCompressed: true,
-      autoCompress: true,
       format: "babel",
     })
     expect(text).toContain(
@@ -142,7 +135,6 @@ describe("主动压缩提醒", () => {
       growthTokens: 51_000,
       categories: categories({ tool: 45_200 }),
       hasCompressed: true,
-      autoCompress: true,
       format: "babel",
     })
     expect(text).toContain("BABEL FORMAT LOCK (zero prose)")
@@ -159,7 +151,6 @@ describe("主动压缩提醒", () => {
       growthTokens: 51_000,
       categories: categories({ text: 20_000 }),
       hasCompressed: true,
-      autoCompress: true,
       format: "markdown",
     })
     expect(markdown).toContain("SUMMARY FORMAT (dense facts, zero narrative)")
@@ -170,7 +161,6 @@ describe("主动压缩提醒", () => {
       growthTokens: 51_000,
       categories: categories({ text: 20_000 }),
       hasCompressed: true,
-      autoCompress: true,
       format: "json",
     })
     expect(json).toContain("SUMMARY FORMAT (JSON, zero commentary)")
@@ -215,7 +205,7 @@ describe("主动压缩提醒", () => {
     messages[1] = { id: "m1", role: "assistant", content: [{ type: "text", text: "x".repeat(12_000) }] }
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(4)
-    expect(messages[3]?.content[0]?.text).toContain("entire current conversation flow")
+    expect(messages[3]?.content[0]?.text).toContain("If this flow is still in use, leave it")
     const state = await loadState(storage, "ses_test")
     expect(state.nudgeCount).toBe(1)
 
@@ -266,18 +256,6 @@ describe("主动压缩提醒", () => {
     const messages = context("x".repeat(20_000))
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(3)
-  })
-
-  it("自动压缩关闭时文案改为手动调用", () => {
-    expect(
-      buildNudgeText({
-        growthTokens: 10_000,
-        categories: categories(),
-        hasCompressed: false,
-        autoCompress: false,
-        format: "babel",
-      }),
-    ).toContain("Call compress when convenient")
   })
 
   it("子代理会话不追加提醒", async () => {

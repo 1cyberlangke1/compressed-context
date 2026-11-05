@@ -233,7 +233,7 @@ try {
   const nudged = secondTurn.filter((body) => nudgeOf(body) !== undefined)
   assert.ok(nudged.length > 0, "second turn must carry a context-reminder")
   const reminder = nudgeOf(nudged[0])
-  assert.ok(reminder?.includes("entire current conversation flow"), "reminder must describe the whole flow")
+  assert.ok(reminder?.includes("compress once the work has reached a conclusion"), "reminder must give a checkable compression criterion")
   console.log("nudge:", reminder)
 
   const systemBefore = requests[0]?.messages?.[0]?.content
@@ -267,19 +267,6 @@ try {
   assert.ok(nudgedAgain.length > 0, "second threshold crossing must nudge again")
   assert.equal(stateFor(sessionID)?.nudgeCount, 2, "nudge count should accumulate")
   console.log("case passed: second threshold crossing nudges again")
-
-  // 关闭自动压缩后，文案应改为「需要时手动调用 compress」。
-  await writeSettings({ autoCompress: false })
-
-  const beforeManual = requests.length
-  await promptSession(sessionID, longText)
-  const manualBatch = requests.slice(beforeManual)
-  const manualNudge = manualBatch.map((body) => nudgeOf(body)).find((text) => text !== undefined)
-  assert.ok(
-    manualNudge?.toLowerCase().includes("call compress when convenient"),
-    "manual wording when autoCompress is off",
-  )
-  console.log("case passed: manual wording after disabling auto compression")
 
   // 关闭 compress 工具后，即使提醒设置仍然打开，也不能发提醒。
   await writeSettings({ enableCompressTool: false })
