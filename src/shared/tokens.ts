@@ -1,4 +1,5 @@
 import { attachmentTokens } from "./media.ts"
+import { formatTokens } from "./format.ts"
 import { CHECKPOINT_PREFIX, RECENT_TAG, SUMMARY_TAG, stringify, toolInput, toolResult, toolResultText } from "./parts.ts"
 
 /**
@@ -250,6 +251,25 @@ export function estimateCategories(input: {
  */
 export function contentCategories(categories: TokenCategories): number {
   return categories.tools + categories.tool + categories.text + categories.media
+}
+
+/**
+ * 输入：分类估算。
+ * 输出：一行构成摘要，如 `12.0k system | 5.3k tools | 45.2k tool | 15.1k text | 38.0k summaries`。
+ * 预期：只列出非零类别，媒体非零时插在文本之后；全为 0 时返回空串。
+ */
+export function formatCategoryBreakdown(categories: TokenCategories): string {
+  const parts: string[] = []
+  const push = (label: string, value: number): void => {
+    if (value > 0) parts.push(`${formatTokens(value)} ${label}`)
+  }
+  push("system", categories.system)
+  push("tools", categories.tools)
+  push("tool", categories.tool)
+  push("text", categories.text)
+  push("media", categories.media)
+  push("summaries", categories.summaries)
+  return parts.join(" | ")
 }
 
 /** 输入：分类估算；输出：各类之和。 */

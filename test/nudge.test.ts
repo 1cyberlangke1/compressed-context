@@ -10,6 +10,7 @@ import { DEFAULT_SERVER_SETTINGS, loadServerSettings } from "../src/compression/
 import { loadState, saveState, type Block, type StorageLike } from "../src/compression/state.ts"
 import type { MessageLike } from "../src/compression/select.ts"
 import { CONFIG_FILE } from "../src/shared/config-paths.ts"
+import type { TokenCategories } from "../src/shared/tokens.ts"
 
 /** 测试里只作为 JSONC 的旧键名，插件本身不再读 storage 设置。 */
 const SETTINGS_KEY = "settings"
@@ -81,21 +82,100 @@ const settings = (nudgeGrowthTokens: number, autoCompress = true) => ({
 })
 
 describe("主动压缩提醒", () => {
+  /** 输入：可选分类覆盖；输出：完整的分类估算；预期：默认全 0，便于只断言关心的字段。 */
+  const categories = (overrides: Partial<TokenCategories> = {}): TokenCategories => ({
+    system: 0,
+    tools: 0,
+    tool: 0,
+    text: 0,
+    recent: 0,
+    summaries: 0,
+    media: 0,
+    ...overrides,
+  })
+
   it("增长量显示自上次压缩块（或会话起始）以来的累计增量", () => {
-    const textCompressed = buildNudgeText(52_300, true, true)
-    expect(textCompressed).toContain("about 52k tokens since the last compressed block")
+    const textCompressed = buildNudgeText({
+      growthTokens: 52_300,
+      categories: categories(),
+      hasCompressed: true,
+      autoCompress: true,
+      format: "babel",
+    })
+    expect(textCompressed).toContain("Content has grown by about 52k tokens since the last compressed block")
     expect(textCompressed).toContain("entire current conversation flow since the last compressed block")
 
-    const textUncompressed = buildNudgeText(52_300, false, true)
-    expect(textUncompressed).toContain("about 52k tokens since the session started")
+    const textUncompressed = buildNudgeText({
+      growthTokens: 52_300,
+      categories: categories(),
+      hasCompressed: false,
+      autoCompress: true,
+      format: "babel",
+    })
+    expect(textUncompressed).toContain("Content has grown by about 52k tokens since the session started")
     expect(textUncompressed).toContain("entire current conversation flow since the session started")
 
     // 明确先劝住：忙或还需要精确细节时不要压缩。
-    expect(textCompressed).toContain("Do not compress yet if you are busy or if you still need these exact details")
-    expect(textCompressed).toContain("keep working and ignore this reminder")
+    expect(textCompressed).toContain("If you are busy or still need these exact details, keep working and ignore this reminder")
     expect(textCompressed).toContain("When you reach a natural stopping point")
     expect(textCompressed).toContain("carrying forward still-open objectives")
     expect(textCompressed).toContain("Automatic compression will run later")
+  })
+
+  it("提醒里带上按类别的上下文构成，只列非零项", () => {
+    const text = buildNudgeText({
+      growthTokens: 51_000,
+      categories: categories({ system: 12_000, tools: 5_300, tool: 45_200, text: 15_100, summaries: 38_000, media: 1_500 }),
+      hasCompressed: true,
+      autoCompress: true,
+      format: "babel",
+    })
+    expect(text).toContain(
+      "Context: 12k system | 5.3k tools | 45k tool | 15k text | 1.5k media | 38k summaries.",
+    )
+    // recent 不参与构成行：它不是可压缩的新增内容。
+    expect(text).not.toContain("recent")
+  })
+
+  it("Babel 提醒带正反例铁律，禁止括号里写整句", () => {
+    const text = buildNudgeText({
+      growthTokens: 51_000,
+      categories: categories({ tool: 45_200 }),
+      hasCompressed: true,
+      autoCompress: true,
+      format: "babel",
+    })
+    expect(text).toContain("BABEL FORMAT LOCK (zero prose)")
+    expect(text).toContain("T=<title>|G=<goal>")
+    expect(text).toContain("❌ D[db]: 因为并发高所以换成了 LMDB")
+    expect(text).toContain("✅ D[db]: concurrency_lock => LMDB & perf_up")
+    expect(text).toContain("⏳[target]")
+    // 不同格式的规则不会串台。
+    expect(text).not.toContain("SUMMARY FORMAT (JSON")
+  })
+
+  it("Markdown 与 JSON 提醒各自只带对应格式的规则", () => {
+    const markdown = buildNudgeText({
+      growthTokens: 51_000,
+      categories: categories({ text: 20_000 }),
+      hasCompressed: true,
+      autoCompress: true,
+      format: "markdown",
+    })
+    expect(markdown).toContain("SUMMARY FORMAT (dense facts, zero narrative)")
+    expect(markdown).toContain("Open objectives")
+    expect(markdown).not.toContain("BABEL FORMAT LOCK")
+
+    const json = buildNudgeText({
+      growthTokens: 51_000,
+      categories: categories({ text: 20_000 }),
+      hasCompressed: true,
+      autoCompress: true,
+      format: "json",
+    })
+    expect(json).toContain("SUMMARY FORMAT (JSON, zero commentary)")
+    expect(json).toContain("progress{completed,active,blocked}")
+    expect(json).not.toContain("BABEL FORMAT LOCK")
   })
 
   it("多次连续提醒时累积显示增长量（50k -> 100k -> 150k 形态）", async () => {
@@ -189,7 +269,15 @@ describe("主动压缩提醒", () => {
   })
 
   it("自动压缩关闭时文案改为手动调用", () => {
-    expect(buildNudgeText(10_000, false, false)).toContain("Call compress when convenient")
+    expect(
+      buildNudgeText({
+        growthTokens: 10_000,
+        categories: categories(),
+        hasCompressed: false,
+        autoCompress: false,
+        format: "babel",
+      }),
+    ).toContain("Call compress when convenient")
   })
 
   it("子代理会话不追加提醒", async () => {

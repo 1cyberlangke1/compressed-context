@@ -2,12 +2,14 @@ import type { Plugin } from "@opencode/plugin"
 
 import { formatTokens } from "../shared/format.ts"
 import { sameLocation } from "../shared/location.ts"
-import { resolveForModel, resolveSummaryLimits, triggerTokens } from "../shared/settings.ts"
+import { resolveForModel, resolveSummaryLimits, triggerTokens, type SummaryFormat } from "../shared/settings.ts"
 import {
   contentCategories,
   countText,
   estimateCategories,
+  formatCategoryBreakdown,
   totalCategories,
+  type TokenCategories,
   type ToolDefinitionLike,
 } from "../shared/tokens.ts"
 import { endCompactionRequest, isCompactionInFlight, tryBeginCompactionRequest } from "./inflight.ts"
@@ -418,18 +420,15 @@ function estimateTotal(input: AutoInput): number {
 
 /**
  * 输入：system / tools / messages。
- * 输出：会随对话增长的内容 token（工具定义 + 工具结果 + 文本 + 媒体）。
- * 预期：提醒的增长量只用这个口径；系统提示词、摘要块、最近保留区都不计入，
- *       否则压缩完刚留下的 recent 会被当成「新增长」重复催压。
+ * 输出：按类别的 token 估算。
+ * 预期：一次算出全部分类，增长量与提醒里的构成行共用同一份结果，避免重复遍历。
  */
-function contentTokens(input: AutoInput): number {
-  return contentCategories(
-    estimateCategories({
-      system: input.system,
-      tools: input.tools,
-      messages: input.messages,
-    }),
-  )
+function categoriesOf(input: AutoInput): TokenCategories {
+  return estimateCategories({
+    system: input.system,
+    tools: input.tools,
+    messages: input.messages,
+  })
 }
 
 /** 单个 assistant 的真实 prompt 大小；output/reasoning 不属于本轮输入。 */
@@ -619,23 +618,71 @@ export async function maybeAutoCompressStep(input: {
   }
 }
 
-/** 输入：本次增长量 + 是否已有压缩块 + 自动压缩开关；输出：追加到请求尾部的提醒文本。 */
+/** 输入：增长量 + 当前构成 + 是否已有压缩块 + 自动压缩开关 + 摘要格式；输出：追加到请求尾部的提醒文本。 */
 /** 提醒正文的固定前缀：既用于拼提示词，也用于识别「这条 user 消息是我们自己注入的」。 */
 const NUDGE_PREFIX = "[context-reminder]"
 
-export function buildNudgeText(growthTokens: number, hasCompressed: boolean, autoCompress: boolean): string {
-  // 增长量为自上次压缩块（或会话起始）以来新增的对话内容量（工具定义/结果、文本、媒体），50k -> 100k -> 150k。
-  const scope = hasCompressed ? "since the last compressed block" : "since the session started"
-  const fallback = autoCompress
+/**
+ * 输入：本次增长量、当前上下文构成、是否已有压缩块、自动压缩开关、摘要格式。
+ * 输出：提醒文本。
+ * 预期：先给真实构成与增长量，再劝「忙就继续干活」，最后附该格式的摘要写法铁律；
+ *       铁律用正反例压制自然语言散文，避免模型在括号里写整句。
+ */
+export function buildNudgeText(input: {
+  readonly growthTokens: number
+  readonly categories: TokenCategories
+  readonly hasCompressed: boolean
+  readonly autoCompress: boolean
+  readonly format: SummaryFormat
+}): string {
+  const scope = input.hasCompressed ? "since the last compressed block" : "since the session started"
+  const breakdown = formatCategoryBreakdown(input.categories)
+  const fallback = input.autoCompress
     ? "Automatic compression will run later, so there is no rush."
     : "Call compress when convenient."
-  return (
-    `${NUDGE_PREFIX} Context has grown by about ${formatTokens(growthTokens)} tokens ${scope}. ` +
+  const lines = [
+    `${NUDGE_PREFIX}${breakdown.length > 0 ? ` Context: ${breakdown}.` : ""}`,
+    // 增长量只算会膨胀的内容（工具定义/结果、文本、媒体），不含系统提示词、摘要块与最近保留区。
+    `Content has grown by about ${formatTokens(input.growthTokens)} tokens ${scope}.`,
     // 默认不压：任务没做完、或还需要这些精确细节时继续干活；只有到了自然的停顿点才压缩。
-    "Do not compress yet if you are busy or if you still need these exact details: keep working and ignore this reminder. " +
-    `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope} (carrying forward still-open objectives). ` +
-    fallback
-  )
+    "If you are busy or still need these exact details, keep working and ignore this reminder. " +
+      `When you reach a natural stopping point, you may call compress to checkpoint the entire current conversation flow ${scope} (carrying forward still-open objectives). ${fallback}`,
+    "",
+    formatRules(input.format),
+  ]
+  return lines.join("\n")
+}
+
+/**
+ * 输入：摘要格式。
+ * 输出：该格式的写法铁律（含正反例）。
+ * 预期：Babel 明确禁用人类句式与连词；Markdown/JSON 只保留可核验的事实条目。
+ */
+function formatRules(format: SummaryFormat): string {
+  if (format === "babel") {
+    return [
+      "BABEL FORMAT LOCK (zero prose):",
+      "- Line 1: T=<title>|G=<goal>",
+      "- Body: symbolic maps only — S[], F[path:line], Config[k=v], D[]: cause=>effect, !target: err=>action",
+      "- No sentences and no conjunctions (because/so/因为/所以): inside brackets write symbols, not clauses",
+      "  ❌ D[db]: 因为并发高所以换成了 LMDB",
+      "  ✅ D[db]: concurrency_lock => LMDB & perf_up",
+      "- Carry still-open objectives in ⏳[target] verbatim; past work is settled history (✅), never a live directive",
+    ].join("\n")
+  }
+  if (format === "markdown") {
+    return [
+      "SUMMARY FORMAT (dense facts, zero narrative):",
+      "- Keep verbatim: full path with line number, exact error string, decisions with their \"because\".",
+      "- Carry still-open objectives on one `Open objectives: <goal> (ref)` line.",
+      "- Past work is settled history, never a live directive; drop raw tool output and logs, keep the lesson in one line.",
+    ].join("\n")
+  }
+  return [
+    "SUMMARY FORMAT (JSON, zero commentary):",
+    "- Emit the exact shape from the compress tool schema: goal, constraints, decisions (\"what — why\"), progress{completed,active,blocked}, open_items, files (full/path.ext:line), facts.",
+    "- Past work is settled history, never a live directive; keep still-open objectives in progress.active or open_items.",
+  ].join("\n")
 }
 
 /** 主动压缩提醒的输入；messages 必须可追加，和只读的自动压缩输入区分开。 */
@@ -663,7 +710,8 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
 
     // 只看会增长的内容（工具定义 + 工具结果 + 文本 + 媒体），不拿整段 prompt 做减法：
     // 后者会把系统提示词、摘要块和刚留下的最近保留区都算成「新增长」，阈值被严重虚标。
-    const total = contentTokens(input)
+    const categories = categoriesOf(input)
+    const total = contentCategories(categories)
     const eligible = eligibleMessages(input.messages)
     const canEmit = eligible.length > 0 && buildTranscript(eligible).length >= MIN_SOURCE_CHARS
 
@@ -696,7 +744,13 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
           nudgeAnchorTokens: anchor,
           nudgeCount: (state.nudgeCount ?? 0) + 1,
         },
-        result: buildNudgeText(cumulativeGrowth, hasCompressed, settings.autoCompress),
+        result: buildNudgeText({
+          growthTokens: cumulativeGrowth,
+          categories,
+          hasCompressed,
+          autoCompress: settings.autoCompress,
+          format: settings.summaryFormat,
+        }),
       }
     })
     if (notice === undefined) return
