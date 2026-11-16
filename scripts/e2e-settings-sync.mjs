@@ -133,7 +133,24 @@ try {
     return json.output ?? json.data ?? json
   }
 
-  // 1. 验证初始配置
+  /** 输入：RPC 方法名；输出：无；预期：轮询到插件 RPC 真正注册完成，避免 server ready 早于插件加载的竞态。 */
+  const waitForRpc = async (method) => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/rpc/compressed-context/${method}`, {
+        method: "POST",
+        headers: { authorization: basic, "content-type": "application/json", "x-opencode-directory": projectDir },
+        body: JSON.stringify({ input: {} }),
+      })
+      if (response.ok) return
+      const text = await response.text()
+      if (!text.includes("rpc.unavailable")) throw new Error(`${method} failed: ${response.status} ${text}`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    throw new Error(`${method} RPC did not become available`)
+  }
+
+  // 1. 验证初始配置（先等插件 RPC 注册完成）
+  await waitForRpc("settingsGet")
   const initial = await api("POST", "/api/rpc/compressed-context/settingsGet", { input: {} })
   assert.equal(initial.triggerPercent, 80, "initial triggerPercent should be 80")
   assert.equal(initial.nudgeGrowthTokens, 50000, "initial nudgeGrowthTokens should be 50000")
