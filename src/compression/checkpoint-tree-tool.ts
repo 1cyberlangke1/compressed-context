@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
+import { diagnostic, diagnosticResult } from "../shared/diagnostic.ts"
 import { countText } from "../shared/tokens.ts"
 import { loadServerSettings } from "./settings.ts"
 import { isSubagentSession } from "./session-role.ts"
@@ -12,7 +13,26 @@ const DESCRIPTION =
 
 const CheckpointTreeOutput = Schema.Struct({
   inline: Schema.String,
+  error: Schema.optional(Schema.String),
+  code: Schema.optional(Schema.String),
+  at: Schema.optional(Schema.String),
+  expected: Schema.optional(Schema.String),
+  got: Schema.optional(Schema.String),
+  excerpt: Schema.optional(Schema.String),
+  fix: Schema.optional(Schema.String),
 })
+
+/** 输入：错误码 + 摘要 + 精确字段；输出：checkpoint_tree 失败返回体（不再把错误伪装成正常 inline）。 */
+function treeFailure(
+  code: string,
+  summary: string,
+  extra?: { readonly expected?: string; readonly got?: string; readonly fix?: string },
+) {
+  return diagnosticResult(
+    diagnostic({ tool: "checkpoint_tree", code, summary, ...(extra ?? {}) }),
+    { inline: "" },
+  )
+}
 
 /** 树里的一行：Dewey 编号 + 块 id + 层级 + 可选 token + 可选标题。 */
 interface TreeLine {
@@ -126,15 +146,19 @@ export async function registerCheckpointTreeTool(ctx: Plugin.Context): Promise<D
       execute: async (_input, toolCtx) => {
         // 第二道防线：context 钩子已经对子代理隐藏工具，这里再挡一次直接调用。
         if (await isSubagentSession(ctx, toolCtx.sessionID)) {
-          return {
-            output: { inline: "checkpoint_tree is unavailable in subagent sessions" },
-            content: "checkpoint_tree is unavailable in subagent sessions",
-          }
+          return treeFailure("SUBAGENT_DENIED", "checkpoint_tree is unavailable in subagent sessions", {
+            expected: "a top-level session",
+            got: "a subagent session (parentID set)",
+            fix: "call checkpoint_tree from the main session, not from a subagent",
+          })
         }
         const settings = await loadServerSettings(ctx)
         if (!settings.enableCheckpointTreeTool) {
-          const message = "checkpoint_tree tool is disabled in settings"
-          return { output: { inline: message }, content: message }
+          return treeFailure("TOOL_DISABLED", "checkpoint_tree tool is disabled in settings", {
+            expected: "enableCheckpointTreeTool=true",
+            got: "enableCheckpointTreeTool=false",
+            fix: "turn the checkpoint_tree tool on in settings, then call again",
+          })
         }
         const state = await loadState(ctx.storage, toolCtx.sessionID)
         const tree = renderCheckpointTree(state, settings.showBlockTokens)

@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
+import { diagnostic, diagnosticResult, type Diagnostic } from "../shared/diagnostic.ts"
 import { effectiveDecompressInlineMax, effectiveDecompressTempCap } from "../shared/settings.ts"
 import { loadServerSettings } from "./settings.ts"
 import { isSubagentSession } from "./session-role.ts"
@@ -22,20 +23,36 @@ const DecompressOutput = Schema.Struct({
   path: Schema.optional(Schema.String),
   tokens: Schema.optional(Schema.Number),
   error: Schema.optional(Schema.String),
+  code: Schema.optional(Schema.String),
+  at: Schema.optional(Schema.String),
+  expected: Schema.optional(Schema.String),
+  got: Schema.optional(Schema.String),
+  excerpt: Schema.optional(Schema.String),
+  fix: Schema.optional(Schema.String),
 })
 
 /**
- * 输入：错误文案。
+ * 输入：错误码、核心摘要（等于 output.error）、可选精确字段。
  * 输出：工具失败返回体。
- * 预期：`output.error`、`content` 前缀、`metadata.error` 三处形状固定；
- *       不含 `status` 字段——decompress 的输出契约与 compress 不同。
+ * 预期：编译器式诊断走 diagnosticResult 单点渲染；不含 `status` 字段——decompress 的输出契约与 compress 不同。
  */
-function failure(message: string) {
-  return {
-    output: { error: message },
-    content: `ERROR: ${message}`,
-    metadata: { error: true },
-  }
+function failure(
+  code: string,
+  summary: string,
+  extra?: {
+    readonly at?: string
+    readonly expected?: string
+    readonly got?: string
+    readonly excerpt?: string
+    readonly fix?: string
+  },
+) {
+  return diagnosticResult(diagnostic({ tool: "decompress", code, summary, ...(extra ?? {}) }), {})
+}
+
+/** 输入：解析层产出的诊断；输出：decompress 失败返回体。 */
+function fromDiagnostic(d: Diagnostic) {
+  return diagnosticResult(d, {})
 }
 
 /**
@@ -54,12 +71,20 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
       execute: async (input, toolCtx) => {
         // 第二道防线：context 钩子已经对子代理隐藏工具，这里再挡一次直接调用。
         if (await isSubagentSession(ctx, toolCtx.sessionID)) {
-          return failure("decompress is unavailable in subagent sessions")
+          return failure("SUBAGENT_DENIED", "decompress is unavailable in subagent sessions", {
+            expected: "a top-level session",
+            got: "a subagent session (parentID set)",
+            fix: "call decompress from the main session, not from a subagent",
+          })
         }
         const { resolveDecompress } = await import("./decompress.ts")
         const settings = await loadServerSettings(ctx)
         if (!settings.enableDecompressTool) {
-          return failure("decompress tool is disabled in settings")
+          return failure("TOOL_DISABLED", "decompress tool is disabled in settings", {
+            expected: "enableDecompressTool=true",
+            got: "enableDecompressTool=false",
+            fix: "turn the decompress tool on in settings, then call again",
+          })
         }
         const result = await resolveDecompress(input, ctx, toolCtx.sessionID, {
           inlineMax: effectiveDecompressInlineMax(settings),
@@ -67,7 +92,7 @@ export async function registerDecompressTool(ctx: Plugin.Context): Promise<Dispo
           showTokens: settings.decompressShowTokens,
         })
         if (result.status === "error") {
-          return failure(result.message)
+          return fromDiagnostic(result.diagnostic)
         }
         const output: { inline?: string; path?: string; tokens?: number } = {
           ...(result.path === undefined ? {} : { path: result.path }),

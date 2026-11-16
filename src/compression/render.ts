@@ -1,3 +1,4 @@
+import { formatSourceSegments } from "../shared/blocks.ts"
 import { sourceIdsOf, type Block } from "./state.ts"
 import type { Summary } from "./schema.ts"
 import { summaryBody, summaryTitle } from "./summary.ts"
@@ -32,12 +33,8 @@ export function renderBlock(block: Block, options: RenderOptions = {}): string {
   const extras: string[] = []
   const sources = sourceIdsOf(block)
   if (sources.length > 0) {
-    // 连续来源显示端点（#b1…#b2），带空洞的显示完整清单，看得出合并了哪些块。
-    const label =
-      block.sourceRange === undefined
-        ? sources.map((id) => `#${id}`).join(" + ")
-        : `#${block.sourceRange.first}…#${block.sourceRange.last}`
-    extras.push(`merged ${label}`)
+    // 按连续段分组：纯连续显示 #b1…#b8；带空洞显示 #b34…#b50 + #b52…#b77，不逐条铺开。
+    extras.push(`merged ${formatSourceSegments(sources)}`)
   }
   if (options.showBlockTokens === true) {
     extras.push(`≈${countText(body).toString()} tok`)

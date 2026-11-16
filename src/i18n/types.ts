@@ -17,9 +17,7 @@ export interface Messages {
   readonly cacheCached: string
   readonly cacheHit: string
   readonly summariesTitle: string
-  /** 连续来源：显示首尾端点。 */
-  readonly mergedRange: (from: string, to: string) => string
-  /** 带空洞的来源：显示完整清单。 */
+  /** 合并来源：按连续段分组的紧凑文本（如 #b34…#b50 + #b52…#b77）。 */
   readonly mergedJoined: (ids: string) => string
   readonly noData: string
   readonly command: {

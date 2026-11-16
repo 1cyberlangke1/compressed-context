@@ -207,9 +207,12 @@ describe("checkpoint_tree 独立开关", () => {
     expect(result.content).not.toContain("disabled")
   })
 
-  it("关闭 checkpoint_tree、开启 decompress 时返回禁用提示", async () => {
+  it("关闭 checkpoint_tree、开启 decompress 时返回禁用诊断而非正常 inline", async () => {
     const execute = await setupTree({ enableCheckpointTreeTool: false, enableDecompressTool: true })
     const result = await execute({}, { sessionID: "ses_a" })
     expect(result.content).toContain("disabled")
+    expect(result.content).toContain("ERROR: checkpoint_tree:")
+    expect(result.content).toContain("(TOOL_DISABLED)")
+    expect(result.content).toContain("got: enableCheckpointTreeTool=false")
   })
 })

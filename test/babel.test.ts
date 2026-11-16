@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { splitBabelCandidate, toBabelSummary } from "../src/compression/babel.ts"
+import { babelShapeDiagnostic, explainBabelShape, splitBabelCandidate, toBabelSummary } from "../src/compression/babel.ts"
 import { toSummary } from "../src/compression/normalize.ts"
 import { isBabelSummary, isMarkdownSummary } from "../src/compression/schema.ts"
 import { parseState } from "../src/compression/state.ts"
@@ -37,6 +37,58 @@ describe("toBabelSummary", () => {
     expect(toBabelSummary("T=|G=目标\nD 正文")).toBeUndefined()
     expect(toBabelSummary("T=标题|G=\nD 正文")).toBeUndefined()
     expect(toBabelSummary("T=标题|G=目标")).toBeUndefined()
+  })
+})
+
+describe("Babel 形状诊断（编译器式精确错误）", () => {
+  it("单行 T=标题 缺 |G= 时给出原文、期望、实得、修法", () => {
+    const issue = explainBabelShape("T=修复提醒判据重写")
+    expect(issue).toBeDefined()
+    expect(issue?.got).toBe("T=修复提醒判据重写")
+    expect(issue?.expected).toContain("T=<title>|G=<goal>")
+    expect(issue?.fix).toContain("append '|G=<goal>'")
+  })
+
+  it("只有 G=目标 时提示补 T=", () => {
+    const issue = explainBabelShape("G=让判据可核对")
+    expect(issue?.fix).toContain("T=<title>|")
+  })
+
+  it("两行 T/G 缺第二行时定位到 babel[2:1]", () => {
+    const issue = explainBabelShape("T=标题\n正文没写 G")
+    expect(issue?.at).toBe("babel[2:1]")
+    expect(issue?.fix).toContain("G=<goal>")
+  })
+
+  it("首行完全不是 T= 时定位到 babel[1:1]", () => {
+    const issue = explainBabelShape("D 只有正文没有首行")
+    expect(issue?.at).toBe("babel[1:1]")
+    expect(issue?.got).toBe("D 只有正文没有首行")
+  })
+
+  it("合法首行但没有正文时定位到 babel[2:1]", () => {
+    const issue = explainBabelShape("T=标题|G=目标")
+    expect(issue?.at).toBe("babel[2:1]")
+    expect(issue?.got).toBe("<empty>")
+  })
+
+  it("合法形状返回 undefined（不误报）", () => {
+    expect(explainBabelShape(VALID)).toBeUndefined()
+  })
+
+  it("babelShapeDiagnostic 对字符串与对象都产出 BABEL_HEADER 诊断", () => {
+    expect(babelShapeDiagnostic("T=标题", "babel")?.code).toBe("BABEL_HEADER")
+    expect(babelShapeDiagnostic({ babel: "T=标题" }, "babel")?.code).toBe("BABEL_HEADER")
+  })
+
+  it("参数里没有 babel 文本时产出 SUMMARY_SHAPE 诊断", () => {
+    const d = babelShapeDiagnostic({ other: 1 }, "babel")
+    expect(d?.code).toBe("SUMMARY_SHAPE")
+    expect(d?.got).toContain("other")
+  })
+
+  it("合法摘要不产出诊断", () => {
+    expect(babelShapeDiagnostic({ babel: VALID }, "babel")).toBeUndefined()
   })
 })
 

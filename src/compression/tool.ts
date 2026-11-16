@@ -1,7 +1,9 @@
 import type { Plugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
+import { diagnostic, diagnosticResult, type Diagnostic } from "../shared/diagnostic.ts"
 import { resolveSummaryLimits, type SummaryFormat } from "../shared/settings.ts"
+import { babelShapeDiagnostic } from "./babel.ts"
 import { createT1Block } from "./block.ts"
 import { endCompactionRequest, tryBeginCompactionRequest } from "./inflight.ts"
 import { toSummary } from "./normalize.ts"
@@ -47,11 +49,17 @@ function contentGuidelines(format: SummaryFormat): string {
   )
 }
 
-/** 输入：无；输出：compress 工具输出；预期：成功带 block，失败带 error，任何情况都不返回空壳。 */
+/** 输入：无；输出：compress 工具输出；预期：成功带 block，失败带 error 与编译器式诊断字段，任何情况都不返回空壳。 */
 const CompressOutput = Schema.Struct({
   block: Schema.optional(Schema.String),
   status: Schema.String,
   error: Schema.optional(Schema.String),
+  code: Schema.optional(Schema.String),
+  at: Schema.optional(Schema.String),
+  expected: Schema.optional(Schema.String),
+  got: Schema.optional(Schema.String),
+  excerpt: Schema.optional(Schema.String),
+  fix: Schema.optional(Schema.String),
 })
 
 /**
@@ -85,12 +93,40 @@ export function descriptionFor(format: SummaryFormat): string {
   return [COMMON, summaryShape(format), fieldRules(format), contentGuidelines(format)].join("\n\n")
 }
 
-function failure(message: string) {
-  return {
-    output: { status: "error", error: message },
-    content: `ERROR: ${message}`,
-    metadata: { error: true },
-  }
+/** 输入：错误码 + 核心一句摘要 + 可选精确字段；输出：诊断数据。 */
+type FailureCode =
+  | "SUBAGENT_DENIED"
+  | "ALREADY_IN_PROGRESS"
+  | "CONTEXT_READ_FAILED"
+  | "NOTHING_TO_COMPRESS"
+  | "SOURCE_TOO_SMALL"
+  | "TOOL_DISABLED"
+  | "INVALID_SUMMARY"
+  | "VALIDATION_FAILED"
+  | "MESSAGE_IDS_MISSING"
+  | "COMPACT_START_FAILED"
+
+/** 输入：精确字段（可选键不落成显式 undefined）。 */
+interface FailureExtra {
+  readonly at?: string
+  readonly expected?: string
+  readonly got?: string
+  readonly excerpt?: string
+  readonly fix?: string
+}
+
+/**
+ * 输入：语义错误码、核心摘要（等于旧文案，供 output.error 兼容既有断言）、可选精确字段。
+ * 输出：compress 工具的失败返回体。
+ * 预期：编译器式诊断走 diagnosticResult 单点渲染；工具层不再自己拼 `ERROR:` 文案。
+ */
+function failure(code: FailureCode, summary: string, extra?: FailureExtra) {
+  return diagnosticResult(diagnostic({ tool: "compress", code, summary, ...(extra ?? {}) }), { status: "error" })
+}
+
+/** 输入：解析层产出的完整诊断；输出：compress 失败返回体。预期：保留其 at/expected/got/excerpt/fix。 */
+function fromDiagnostic(d: Diagnostic) {
+  return diagnosticResult(d, { status: "error" })
 }
 
 /** compress 工具的注册句柄：注销 + 切换摘要格式。 */
@@ -122,14 +158,30 @@ export async function registerCompressTool(
         const sessionID = toolCtx.sessionID
         // 第二道防线：context 钩子已经对子代理隐藏工具，这里再挡一次直接调用。
         if (await isSubagentSession(ctx, sessionID)) {
-          return failure("compress is unavailable in subagent sessions")
+          return failure("SUBAGENT_DENIED", "compress is unavailable in subagent sessions", {
+            expected: "a top-level session",
+            got: "a subagent session (parentID set)",
+            fix: "call compress from the main session, not from a subagent",
+          })
         }
         // 与自动压缩共用同一个进程级发起锁：手动和自动只能有一个真正调用 session.compact。
         // 抢不到时直接失败，不能等锁；否则同一会话会并发入队两次压缩。
-        if (!tryBeginCompactionRequest(sessionID)) return failure("compression already in progress")
+        if (!tryBeginCompactionRequest(sessionID)) {
+          return failure("ALREADY_IN_PROGRESS", "compression already in progress", {
+            expected: "no in-flight compaction",
+            got: "another compaction holds the request lock",
+            fix: "wait for the current compaction, then call compress again",
+          })
+        }
         try {
           const state = await loadState(ctx.storage, sessionID)
-          if (state.pending || state.phase !== undefined) return failure("compression already in progress")
+          if (state.pending || state.phase !== undefined) {
+            return failure("ALREADY_IN_PROGRESS", "compression already in progress", {
+              expected: "no pending block and no merge phase",
+              got: state.pending === undefined ? `phase=${String(state.phase)}` : `pending=${state.pending.id}`,
+              fix: "wait for the pending compaction to settle, then call compress again",
+            })
+          }
 
           let eligible: readonly MessageLike[] | undefined
           try {
@@ -139,29 +191,76 @@ export async function registerCompressTool(
             // 兼容旧测试替身；生产路径不传 legacyCache。
             eligible = legacyCache === undefined ? undefined : (legacyCache.get(sessionID) ?? [])
           }
-          if (eligible === undefined) return failure("failed to read session context")
+          if (eligible === undefined) {
+            return failure("CONTEXT_READ_FAILED", "failed to read session context", {
+              at: "ctx.session.context({ sessionID })",
+              expected: "the current session message list",
+              got: "undefined (read threw)",
+              fix: "retry the tool call; if it keeps failing, check the session still exists",
+            })
+          }
           const transcript = buildTranscript(eligible)
           const sourceChars = transcript.length
-          if (eligible.length === 0) return failure("nothing to compress")
+          if (eligible.length === 0) {
+            return failure("NOTHING_TO_COMPRESS", "nothing to compress", {
+              expected: "at least one compressible message",
+              got: "0 eligible messages",
+              fix: "wait for new conversation content, then call compress again",
+            })
+          }
           if (sourceChars < MIN_SOURCE_CHARS) {
             return failure(
+              "SOURCE_TOO_SMALL",
               `not enough content to compress (${sourceChars.toString()} chars, min ${MIN_SOURCE_CHARS.toString()})`,
+              {
+                at: "session.messages",
+                expected: `>= ${MIN_SOURCE_CHARS.toString()} chars of source`,
+                got: `${sourceChars.toString()} chars`,
+                fix: "wait for more conversation, or lower the threshold in settings",
+              },
             )
           }
 
           const settings = await loadServerSettings(ctx)
-          if (!settings.enableCompressTool) return failure("compress tool is disabled in settings")
+          if (!settings.enableCompressTool) {
+            return failure("TOOL_DISABLED", "compress tool is disabled in settings", {
+              expected: "enableCompressTool=true",
+              got: "enableCompressTool=false",
+              fix: "turn the compress tool on in settings, then call again",
+            })
+          }
           // 优先用当前会话模型自己的窗口；取不到再回退最近一次解析值。
           const windowTokens = await readStoredWindow(ctx, sessionID)
           const limits = resolveSummaryLimits(settings, windowTokens)
           const summary = toSummary(input, settings.summaryFormat)
-          if (summary === undefined) return failure("invalid summary shape")
+          if (summary === undefined) {
+            const shape = babelShapeDiagnostic(input, settings.summaryFormat)
+            return shape === undefined
+              ? failure("INVALID_SUMMARY", "invalid summary shape", {
+                  at: `input.${settings.summaryFormat}`,
+                  expected: "a well-formed summary",
+                  got: JSON.stringify(input).slice(0, 120),
+                  fix: "check the tool argument shape for the active summary format",
+                })
+              : fromDiagnostic(shape)
+          }
           const validation = validateSummary(summary, sourceChars, undefined, limits.blockChars)
-          if (!validation.ok) return failure(validation.message)
+          if (!validation.ok) {
+            return failure("VALIDATION_FAILED", validation.message, {
+              at: validation.fields.join(", ") || "summary",
+              expected: `non-empty fields and length within [${MIN_SOURCE_CHARS.toString()}, ${limits.blockChars.toString()}]`,
+              got: validation.message,
+              fix: `fix the flagged fields (${validation.fields.join(", ") || "summary"}) and call compress again`,
+            })
+          }
 
           const range = messageRange(eligible)
           if (range === undefined) {
-            return failure("messages are missing ids")
+            return failure("MESSAGE_IDS_MISSING", "messages are missing ids", {
+              expected: "every eligible message has an id",
+              got: "at least one message without an id",
+              fix: "retry; if it persists the session context is corrupted",
+            })
           }
 
           // 长耗时的摘要校验在锁外完成；落 pending 时重新检查状态并用最新 blocks 生成 id。
@@ -179,7 +278,13 @@ export async function registerCompressTool(
             })
             return { next: withPending(fresh, block), result: { block } }
           })
-          if ("error" in saved) return failure(saved.error)
+          if ("error" in saved) {
+            return failure("ALREADY_IN_PROGRESS", saved.error, {
+              expected: "no concurrent state change",
+              got: saved.error,
+              fix: "wait for the current compaction, then call compress again",
+            })
+          }
           const block = saved.block
 
           // transcript 落盘失败不应阻断摘要；解压时会降级为占位符。
@@ -197,7 +302,12 @@ export async function registerCompressTool(
               next: { ...fresh, lastError: String(error) },
               result: undefined,
             }))
-            return failure(`failed to start compaction: ${String(error)}`)
+            return failure("COMPACT_START_FAILED", `failed to start compaction: ${String(error)}`, {
+              at: "ctx.session.compact({ sessionID })",
+              expected: "compaction request accepted",
+              got: String(error),
+              fix: "retry; if it persists check that the session is still active",
+            })
           }
 
           return {

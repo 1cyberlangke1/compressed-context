@@ -1,5 +1,6 @@
 import type { Schema } from "effect"
 
+import { expandSourceIds, idNumber } from "../shared/blocks.ts"
 import { toBabelSummary } from "./babel.ts"
 import { isSessionDeleted } from "./deleted-sessions.ts"
 import { type Summary, type SummaryFields } from "./schema.ts"
@@ -50,25 +51,7 @@ export function sourceIdsOf(block: {
   readonly sourceBlockIds?: readonly string[] | undefined
   readonly sourceRange?: { readonly first: string; readonly last: string } | undefined
 }): readonly string[] {
-  if (block.sourceBlockIds !== undefined) return block.sourceBlockIds
-  const range = block.sourceRange
-  if (range === undefined) return []
-  return expandRange(range.first, range.last)
-}
-
-/** 输入：首尾 id；输出：闭区间内的 id 列表。预期：只处理 `b<数字>` 形状，其它形状返回空。 */
-function expandRange(first: string, last: string): readonly string[] {
-  const from = idNumber(first)
-  const to = idNumber(last)
-  if (from === undefined || to === undefined || to < from) return []
-  return Array.from({ length: to - from + 1 }, (_, index) => `b${(from + index).toString()}`)
-}
-
-/** 输入：块 id；输出：数字部分；不是 `b<数字>` 时 undefined。 */
-function idNumber(id: string): number | undefined {
-  if (!id.startsWith("b")) return undefined
-  const value = Number(id.slice(1))
-  return Number.isInteger(value) && value >= 0 ? value : undefined
+  return expandSourceIds(block)
 }
 
 /**

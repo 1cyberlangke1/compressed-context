@@ -3,7 +3,7 @@ import { RGBA, SyntaxStyle } from "@opentui/core"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 
 import type { Messages } from "../../i18n/index.ts"
-import type { SummaryBlock } from "../../shared/blocks.ts"
+import { expandSourceIds, formatSourceSegments, type SummaryBlock } from "../../shared/blocks.ts"
 import { formatTimestamp, formatTokens } from "../../shared/format.ts"
 import type { Settings } from "../../shared/settings.ts"
 import type { UpdateSettings } from "../types.ts"
@@ -267,13 +267,10 @@ export function SummarySection(props: {
                   const meta = (): string => {
                     const parts: string[] = []
                     if (props.settings.showTimeline) parts.push(formatTimestamp(block.at))
-                    if (block.sourceRange !== undefined) {
-                      // 连续来源显示端点；带空洞的来源显示完整清单，看得出合并了哪些块。
-                      parts.push(props.copy.mergedRange(`#${block.sourceRange.first}`, `#${block.sourceRange.last}`))
-                    } else if (block.sourceBlockIds !== undefined && block.sourceBlockIds.length > 0) {
-                      parts.push(
-                        props.copy.mergedJoined(block.sourceBlockIds.map((id) => `#${id}`).join(" + ")),
-                      )
+                    // 按连续段分组：纯连续显示 #b1…#b8；带空洞显示 #b34…#b50 + #b52…#b77，不逐条铺开。
+                    const sources = expandSourceIds(block)
+                    if (sources.length > 0) {
+                      parts.push(props.copy.mergedJoined(formatSourceSegments(sources)))
                     }
                     return parts.join("  ")
                   }

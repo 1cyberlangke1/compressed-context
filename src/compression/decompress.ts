@@ -11,6 +11,7 @@
 
 import { appendFileSync } from "node:fs"
 
+import { diagnostic, type Diagnostic } from "../shared/diagnostic.ts"
 import { stringify } from "../shared/parts.ts"
 import { countText } from "../shared/tokens.ts"
 import type { Block, StorageLike } from "./state.ts"
@@ -49,10 +50,29 @@ const DEFAULT_LIMITS: DecompressLimits = {
   showTokens: true,
 }
 
-/** 解压工具结果；ok 时 inline 或 path 至少一项存在。 */
+/** 解压工具结果；ok 时 inline 或 path 至少一项存在。error 同时带 message（兼容旧消费方）与编译器式诊断。 */
 export type DecompressResult =
   | { readonly status: "ok"; readonly inline: string; readonly path?: string; readonly tokens?: number }
-  | { readonly status: "error"; readonly message: string }
+  | { readonly status: "error"; readonly message: string; readonly diagnostic: Diagnostic }
+
+/** 输入：错误码、摘要、精确字段；输出：带诊断的 error 结果。预期：message 等于诊断 summary。 */
+function decompressError(
+  code: string,
+  summary: string,
+  extra?: {
+    readonly at?: string
+    readonly expected?: string
+    readonly got?: string
+    readonly excerpt?: string
+    readonly fix?: string
+  },
+): DecompressResult {
+  return {
+    status: "error",
+    message: summary,
+    diagnostic: diagnostic({ tool: "decompress", code, summary, ...(extra ?? {}) }),
+  }
+}
 
 /** 生产默认临时文件存储；按目录前缀扫描，不维护进程内列表。 */
 const defaultTempFiles = createTempFileStore({ cap: DEFAULT_TEMP_FILE_CAP })
@@ -166,7 +186,12 @@ export async function resolveDecompress(
 ): Promise<DecompressResult> {
   const raw = args["block"]
   if (typeof raw !== "string" || raw.trim().length === 0) {
-    return { status: "error", message: "block is required (e.g. b3)" }
+    return decompressError("BLOCK_REQUIRED", "block is required (e.g. b3)", {
+      at: "input.block",
+      expected: "a block id string",
+      got: raw === undefined ? "undefined" : JSON.stringify(raw),
+      fix: "call checkpoint_tree first and pass one of its ids, e.g. { \"block\": \"b3\" }",
+    })
   }
   const blockId = raw.trim()
   // full 优先于 depth；depth 必须是正整数。
@@ -175,7 +200,12 @@ export async function resolveDecompress(
   let depth: number | undefined
   if (!full && rawDepth !== undefined) {
     if (typeof rawDepth !== "number" || !Number.isInteger(rawDepth) || rawDepth < 1) {
-      return { status: "error", message: "depth must be a positive integer (e.g. depth: 2)" }
+      return decompressError("DEPTH_INVALID", "depth must be a positive integer (e.g. depth: 2)", {
+        at: "input.depth",
+        expected: "an integer in 1..20",
+        got: `${JSON.stringify(rawDepth)} (${typeof rawDepth})`,
+        fix: "pass a positive integer such as depth: 2, or omit depth to expand one level",
+      })
     }
     depth = rawDepth
   }
@@ -183,13 +213,23 @@ export async function resolveDecompress(
 
   const state = await loadState(ctx.storage, sessionID)
   if (state.blocks.length === 0) {
-    return { status: "error", message: `block ${blockId} not found (session has no compressed blocks)` }
+    return decompressError("NO_BLOCKS", `block ${blockId} not found (session has no compressed blocks)`, {
+      at: `state.blocks["${blockId}"]`,
+      expected: "at least one compressed block in this session",
+      got: "0 blocks",
+      fix: "run compress first, then call decompress with a block id",
+    })
   }
 
   const byId = new Map(state.blocks.map((block) => [block.id, block]))
   const target = byId.get(blockId)
   if (target === undefined) {
-    return { status: "error", message: `block ${blockId} not found` }
+    return decompressError("BLOCK_NOT_FOUND", `block ${blockId} not found`, {
+      at: `state.blocks["${blockId}"]`,
+      expected: `an existing id, e.g. ${state.blocks[0]?.id ?? "b1"}`,
+      got: `"${blockId}" not in [${state.blocks.map((b) => b.id).join(", ")}]`,
+      fix: "call checkpoint_tree and copy a real block id",
+    })
   }
 
   const chunks: string[] = []
@@ -221,7 +261,12 @@ export async function resolveDecompress(
   // limit 语义：walk 到 level >= limit 时渲染该层子块的摘要而非继续下探。
   const MAX_DEPTH = 20
   if (!full && depth !== undefined && depth > MAX_DEPTH) {
-    return { status: "error", message: `depth must be at most ${MAX_DEPTH.toString()}` }
+    return decompressError("DEPTH_TOO_LARGE", `depth must be at most ${MAX_DEPTH.toString()}`, {
+      at: "input.depth",
+      expected: `an integer <= ${MAX_DEPTH.toString()}`,
+      got: depth.toString(),
+      fix: `use depth <= ${MAX_DEPTH.toString()}, or full: true to go all the way`,
+    })
   }
   const limit = full ? Number.POSITIVE_INFINITY : (depth ?? 0)
   const visited = new Set<string>()

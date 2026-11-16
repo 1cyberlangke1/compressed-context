@@ -21,7 +21,6 @@ export const en: Messages = {
   cacheCached: "Cached",
   cacheHit: "Hit",
   summariesTitle: "Summaries",
-  mergedRange: (from, to) => `merged ${from}…${to}`,
   mergedJoined: (ids) => `merged ${ids}`,
   noData: "—",
   command: {

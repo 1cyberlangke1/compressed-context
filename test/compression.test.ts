@@ -272,12 +272,12 @@ describe("渲染", () => {
     expect(titled).toContain(blockMarker("b1"))
   })
 
-  it("块头显示层级与合并来源", () => {
+  it("块头显示层级与合并来源（连续来源压成端点）", () => {
     const merged = renderBlock({ ...block, id: "b3", tier: 2, height: 2, sourceBlockIds: ["b1", "b2"] })
-    expect(merged.startsWith(`${blockMarker("b3")} [T2] {h2} · merged #b1 + #b2`)).toBe(true)
+    expect(merged.startsWith(`${blockMarker("b3")} [T2] {h2} · merged #b1…#b2`)).toBe(true)
   })
 
-  it("连续来源显示端点，带空洞的来源显示完整清单", () => {
+  it("连续来源显示端点，带空洞的来源按连续段分组", () => {
     const compact = renderBlock({
       ...block,
       id: "b3",
@@ -2093,9 +2093,12 @@ describe("缓存尾追加", () => {
 describe("compress 工具只做 T1", () => {
   interface ToolDefinition {
     execute: (
-      input: SummaryFields,
+      input: SummaryFields | { readonly babel?: string; readonly markdown?: string },
       ctx: { sessionID: string },
-    ) => Promise<{ content: string; output?: { block?: string; status: string; error?: string } }>
+    ) => Promise<{
+      content: string
+      output?: { block?: string; status: string; error?: string; code?: string; got?: string }
+    }>
   }
 
   /** 输入：storage；输出：捕获工具定义。 */
@@ -2224,13 +2227,33 @@ describe("compress 工具只做 T1", () => {
     expect((await loadState(storage, "ses_test")).pending?.id).toBe("b1")
   })
 
+  it("Babel 摘要缺 |G= 时返回编译器式精确诊断", async () => {
+    const storage = memoryStorage({ [SETTINGS_KEY]: { summaryFormat: "babel" } })
+    const { ctx, tool } = toolCtx(storage)
+    await registerCompressTool(ctx, new Map([["ses_test", toolMessages()]]))
+    const result = await tool().execute({ babel: "T=修复提醒判据重写" }, { sessionID: "ses_test" })
+    expect(result.output?.status).toBe("error")
+    expect(result.output?.code).toBe("BABEL_HEADER")
+    // 编译器式：原文片段、期望形状、实得值、修法都在模型读到的 content 里。
+    expect(result.content).toContain("got: T=修复提醒判据重写")
+    expect(result.content).toContain("expected: T=<title>|G=<goal>")
+    expect(result.content).toContain("excerpt: T=修复提醒判据重写")
+    expect(result.content).toContain("append '|G=<goal>'")
+  })
+
   it("无 eligible 时失败，且返回合法 output", async () => {
     const storage = memoryStorage()
     const { ctx, tool } = toolCtx(storage)
     await registerCompressTool(ctx, new Map())
     const result = await tool().execute(summary, { sessionID: "ses_test" })
     expect(result.content).toContain("nothing to compress")
-    expect(result.output).toEqual({ status: "error", error: "nothing to compress" })
+    expect(result.output).toMatchObject({
+      status: "error",
+      error: "nothing to compress",
+      code: "NOTHING_TO_COMPRESS",
+      got: "0 eligible messages",
+    })
+    expect(result.content).toContain("got: 0 eligible messages")
   })
 
   it("内容不足时失败", async () => {
