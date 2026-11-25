@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { resolveMessages } from "../../i18n/index.ts"
 import { modelTint, tintAt } from "../../shared/model-color.ts"
 import { fieldLayers, layerLabel, summarySegments, type Layer } from "../../shared/model-summary.ts"
-import { contextRpc, rpcLocation } from "../../shared/rpc.ts"
+import { contextRpc, rpcLocation, type CalibrationSnapshot } from "../../shared/rpc.ts"
 import { localeArgument, resolveForModel, type Settings } from "../../shared/settings.ts"
 import { toHex, toRgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
@@ -89,8 +89,8 @@ export function ModelPanel(props: {
 
   const chars = createMemo(() => Array.from(modelName()))
 
-  /** 该模型当前的校准系数；服务端不可用时不显示这一段。 */
-  const [calibration, setCalibration] = createSignal<{ cjk: number; ascii: number; samples: number }>()
+  /** 该模型当前的估算误差；服务端不可用时不显示这一段。 */
+  const [calibration, setCalibration] = createSignal<CalibrationSnapshot>()
 
   createEffect(() => {
     const model = current()
@@ -111,6 +111,14 @@ export function ModelPanel(props: {
     })()
   })
 
+  /** 生效模型最近一次的平均相对误差（先验或学习值，看当前用哪套）。 */
+  const estimateError = createMemo(() => {
+    const snapshot = calibration()
+    if (snapshot === undefined) return undefined
+    const value = snapshot.source === "prior" ? snapshot.emaPrior : snapshot.emaLearned
+    return value > 0 ? value : undefined
+  })
+
   return (
     <box flexDirection="column">
       <text>
@@ -125,10 +133,10 @@ export function ModelPanel(props: {
         <For each={segments()}>
           {(segment) => <text fg={colorOf(segment.layer)}>{segment.text}</text>}
         </For>
-        <Show when={calibration()}>
+        <Show when={estimateError()}>
           {(value) => (
             <text fg={theme.text.muted}>
-              {`${copy().modelPanel.icons.calibration} ${value().cjk.toFixed(2)}/${value().ascii.toFixed(2)}`}
+              {`${copy().modelPanel.icons.calibration} ${(value() * 100).toFixed(1)}%`}
             </text>
           )}
         </Show>
@@ -136,3 +144,4 @@ export function ModelPanel(props: {
     </box>
   )
 }
+

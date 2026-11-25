@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { resolveForModel, resolveSummaryLimits } from "../shared/settings.ts"
-import { charsTokens, countChars } from "../shared/tokens.ts"
+import { priceText } from "../shared/tokens.ts"
 import { renderActiveSummary } from "./active-summary-cache.ts"
 import { resolveLimit } from "./auto.ts"
 import { calibrationCoefs } from "./calibration.ts"
@@ -58,7 +58,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
     // 摘要预算用该模型学到的系数，和触发端、面板共用同一套数字。
     const coefs = await calibrationCoefs(ctx.storage, event.model)
     /** 输入：摘要文本；输出：按当前系数估算的 token。 */
-    const summaryTokens = (text: string): number => charsTokens(countChars(text), coefs)
+    const summaryTokens = (text: string): number => priceText(text, coefs)
     // auto 窗口在运行时解析后钳制摘要上限；数字窗口已在保存时校验，这里统一再钳一次。
     const windowTokens = await resolveLimit(ctx, event.model, settings.contextLimit, event.sessionID)
     const limits = resolveSummaryLimits(settings, windowTokens)
@@ -243,3 +243,4 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
     endCompaction(event.sessionID)
   }
 }
+

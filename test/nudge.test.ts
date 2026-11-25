@@ -10,7 +10,8 @@ import { DEFAULT_SERVER_SETTINGS, loadServerSettings } from "../src/compression/
 import { loadState, saveState, type Block, type StorageLike } from "../src/compression/state.ts"
 import type { MessageLike } from "../src/compression/select.ts"
 import { CONFIG_FILE } from "../src/shared/config-paths.ts"
-import type { TokenCategories } from "../src/shared/tokens.ts"
+import { formatTokens } from "../src/shared/format.ts"
+import { priceText, type TokenCategories } from "../src/shared/tokens.ts"
 
 /** 测试里只作为 JSONC 的旧键名，插件本身不再读 storage 设置。 */
 const SETTINGS_KEY = "settings"
@@ -177,21 +178,23 @@ describe("主动压缩提醒", () => {
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(3)
 
-    // 2. 增长约 2_000 tokens，触发第 1 次提醒（报 2.0k）
+    // 2. 增长到阈值，触发第 1 次提醒（数值按当前估算器算，不写死）
     messages[1] = { id: "m1", role: "assistant", content: [{ type: "text", text: "x".repeat(12_000) }] }
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(4)
-    expect(messages[3]?.content[0]?.text).toContain("about 2.0k tokens since the session started")
+    const firstGrowth = priceText("x".repeat(12_000)) - priceText("x".repeat(4_000))
+    expect(messages[3]?.content[0]?.text).toContain(`about ${formatTokens(firstGrowth)} tokens since the session started`)
     expect((await loadState(storage, "ses_test")).nudgeCount).toBe(1)
 
     // 清理掉追加的单条 notice，模拟进入下一轮
     messages.pop()
 
-    // 3. 再增长约 2_000 tokens（累计增长约 4_000 tokens），触发第 2 次提醒（报 4.0k 累积，而非依然报 2.0k）
+    // 3. 再增长一段（累计报总数，而非依然报上一次的增量）
     messages[1] = { id: "m1", role: "assistant", content: [{ type: "text", text: "x".repeat(20_000) }] }
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(4)
-    expect(messages[3]?.content[0]?.text).toContain("about 4.0k tokens since the session started")
+    const secondGrowth = priceText("x".repeat(20_000)) - priceText("x".repeat(4_000))
+    expect(messages[3]?.content[0]?.text).toContain(`about ${formatTokens(secondGrowth)} tokens since the session started`)
     expect((await loadState(storage, "ses_test")).nudgeCount).toBe(2)
   })
 
@@ -310,7 +313,7 @@ describe("主动压缩提醒", () => {
     await maybeNudge(input(storage, messages))
     const baseline = (await loadState(storage, "ses_test")).nudgeBaselineTokens
 
-    messages[1] = { id: "m1", role: "assistant", content: [{ type: "text", text: "x".repeat(12_000) }] }
+    messages[1] = { id: "m1", role: "assistant", content: [{ type: "text", text: "x".repeat(20_000) }] }
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(4)
 
@@ -354,7 +357,7 @@ describe("主动压缩提醒", () => {
     expect(messages).toHaveLength(4)
     expect((await loadState(storage, "ses_test")).nudgeCount ?? 0).toBe(0)
 
-    // 真正新增工具结果时才提醒：8k 字符约 2k tokens，超过 1k 阈值。
+    // 真正新增工具结果时才提醒：数值按当前估算器算。
     messages.push({
       id: "m4",
       role: "assistant",
@@ -362,7 +365,9 @@ describe("主动压缩提醒", () => {
     })
     await maybeNudge(input(storage, messages))
     expect(messages).toHaveLength(6)
-    expect(messages[5]?.content[0]?.text).toContain("about 2.0k tokens since the session started")
+    expect(messages[5]?.content[0]?.text).toContain(
+      `about ${formatTokens(priceText("r".repeat(8_000)))} tokens since the session started`,
+    )
     expect((await loadState(storage, "ses_test")).nudgeCount).toBe(1)
   })
 

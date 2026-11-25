@@ -14,6 +14,7 @@ import { loadState } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import { normalizeSettings, resolveSummaryLimits, type ModelIdentity } from "../shared/settings.ts"
 import {
+  coefsToArray,
   loadCalibrationLayers,
   loadEffectiveCalibration,
   resetCalibration,
@@ -21,7 +22,7 @@ import {
   type ResetScope,
   type WritableScope,
 } from "./calibration.ts"
-import { DEFAULT_TOKEN_COEFS } from "../shared/tokens.ts"
+import { DEFAULT_BUCKET_COEFS } from "../shared/tokens.ts"
 import { resolveConfigFiles } from "../shared/config-paths.ts"
 import { watchConfigFiles } from "./settings-watcher.ts"
 import {
@@ -57,22 +58,22 @@ function readModel(input: unknown): ModelIdentity | undefined {
   return { providerID: value.slice(0, slash), id: value.slice(slash + 1) }
 }
 
-/** 输入：RPC 参数；输出：模型 + 两个系数 + 目标层；缺字段或非法返回 undefined。 */
+/** 输入：RPC 参数；输出：模型 + 系数数组 + 目标层；缺字段或非法返回 undefined。 */
 function readCalibrationSet(
   input: unknown,
 ): {
   readonly model: ModelIdentity
-  readonly cjk: number
-  readonly ascii: number
+  readonly coefs: readonly number[]
   readonly scope: WritableScope
 } | undefined {
   const model = readModel(input)
   if (model === undefined) return undefined
-  const record = input as { readonly cjk?: unknown; readonly ascii?: unknown; readonly scope?: unknown }
-  if (typeof record.cjk !== "number" || typeof record.ascii !== "number") return undefined
-  if (!Number.isFinite(record.cjk) || !Number.isFinite(record.ascii)) return undefined
+  const record = input as { readonly coefs?: unknown; readonly scope?: unknown }
+  if (!Array.isArray(record.coefs)) return undefined
+  const coefs = record.coefs.filter((item): item is number => typeof item === "number" && Number.isFinite(item))
+  if (coefs.length !== record.coefs.length) return undefined
   if (record.scope !== "exact" && record.scope !== "model") return undefined
-  return { model, cjk: record.cjk, ascii: record.ascii, scope: record.scope }
+  return { model, coefs, scope: record.scope }
 }
 
 /** 输入：RPC 参数；输出：模型 + 重置范围；缺字段或非法返回 undefined。 */
@@ -233,35 +234,47 @@ export async function registerSettingsRpc(
     },
     calibrationGet: async (input) => {
       const model = readModel(input)
+      const prior = coefsToArray(DEFAULT_BUCKET_COEFS)
       if (model === undefined) {
         return {
           scope: "default" as const,
-          cjk: DEFAULT_TOKEN_COEFS.cjk,
-          ascii: DEFAULT_TOKEN_COEFS.ascii,
+          source: "prior" as const,
+          coefs: prior,
           samples: 0,
-          model: { cjk: DEFAULT_TOKEN_COEFS.cjk, ascii: DEFAULT_TOKEN_COEFS.ascii, samples: 0 },
+          emaPrior: 0,
+          emaLearned: 0,
+          model: { coefs: prior, samples: 0, emaPrior: 0, emaLearned: 0 },
         }
       }
       const effective = await loadEffectiveCalibration(ctx.storage, model)
       const layers = await loadCalibrationLayers(ctx.storage, model)
+      /** 输入：单层状态；输出：RPC 用的最小快照。 */
+      const layer = (state: typeof layers.model): {
+        coefs: readonly number[]
+        samples: number
+        emaPrior: number
+        emaLearned: number
+      } => ({
+        coefs: [...state.coefs],
+        samples: state.samples,
+        emaPrior: state.emaPrior,
+        emaLearned: state.emaLearned,
+      })
       return {
         scope: effective.scope,
-        cjk: effective.state.cjk,
-        ascii: effective.state.ascii,
+        source: effective.source,
+        coefs: coefsToArray(effective.coefs),
         samples: effective.state.samples,
-        model: { cjk: layers.model.cjk, ascii: layers.model.ascii, samples: layers.model.samples },
-        ...(layers.exact === undefined
-          ? {}
-          : { exact: { cjk: layers.exact.cjk, ascii: layers.exact.ascii, samples: layers.exact.samples } }),
+        emaPrior: effective.state.emaPrior,
+        emaLearned: effective.state.emaLearned,
+        model: layer(layers.model),
+        ...(layers.exact === undefined ? {} : { exact: layer(layers.exact) }),
       }
     },
     calibrationSet: async (input) => {
       const parsed = readCalibrationSet(input)
       if (parsed === undefined) return { ok: false, error: "invalid coefficient" }
-      const ok = await setManualCalibration(ctx.storage, parsed.model, {
-        cjk: parsed.cjk,
-        ascii: parsed.ascii,
-      }, parsed.scope)
+      const ok = await setManualCalibration(ctx.storage, parsed.model, parsed.coefs, parsed.scope)
       return ok ? { ok: true } : { ok: false, error: "coefficient out of range" }
     },
     calibrationReset: async (input) => {

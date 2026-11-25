@@ -32,7 +32,7 @@ import {
 } from "../shared/settings.ts"
 import type { UpdateCheckResult } from "../shared/update.ts"
 import { CoefDialog, CountDialog, PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
-import { TOKEN_COEF_MAX, TOKEN_COEF_MIN } from "../shared/tokens.ts"
+import { BUCKET_NAMES, bucketBand, DEFAULT_BUCKET_COEFS, type BucketName } from "../shared/tokens.ts"
 import { effectiveWindow } from "../shared/model-summary.ts"
 import {
   buildEditorOptions,
@@ -132,15 +132,14 @@ export function SettingsCommand(props: {
     }
   }
 
-  /** 输入：模型键 + 两个系数 + 目标层；输出：写入是否成功。预期：越界由服务端拒绝。 */
+  /** 输入：模型键 + 系数数组 + 目标层；输出：写入是否成功。预期：越界由服务端拒绝。 */
   const writeCalibration = async (
     model: string,
-    cjk: number,
-    ascii: number,
+    coefs: readonly number[],
     scope: "exact" | "model",
   ): Promise<boolean> => {
     try {
-      const got = await contextRpc(props.context.client).calibrationSet({ model, cjk, ascii, scope }, rpcLocation(props.context))
+      const got = await contextRpc(props.context.client).calibrationSet({ model, coefs, scope }, rpcLocation(props.context))
       return got.ok
     } catch {
       return false
@@ -791,18 +790,18 @@ export function SettingsCommand(props: {
     }
   }
 
-  /** 输入：校准状态；输出：菜单右侧摘要；没有记录时显示默认值。 */
-  const calibrationFooter = (
-    state: { readonly cjk: number; readonly ascii: number; readonly samples: number } | undefined,
-  ): string =>
-    state === undefined
-      ? copy().settings.calibrationUnset
-      : `${state.cjk.toFixed(2)} / ${state.ascii.toFixed(2)} · ${state.samples.toString()}`
+  /** 输入：校准快照；输出：菜单右侧摘要；没有记录时显示先验。 */
+  const calibrationFooter = (snapshot: CalibrationSnapshot | undefined): string => {
+    if (snapshot === undefined) return copy().settings.calibrationUnset
+    const error = snapshot.source === "prior" ? snapshot.emaPrior : snapshot.emaLearned
+    const percent = error > 0 ? `${(error * 100).toFixed(1)}%` : "--"
+    return `${percent} · ${snapshot.samples.toString()}`
+  }
 
   /**
    * 输入：无。
    * 输出：back 回上一层，done 结束（输入框已在屏幕上）。
-   * 预期：分「本提供商」和「全部提供商」两层编辑；手改后学习只更新被改的那一层。
+   * 预期：先选层（本提供商 / 全部提供商），再选桶改系数；手改后学习重新证明自己。
    */
   const openCalibration = async (): Promise<Flow> => {
     const model = currentModel()
@@ -810,11 +809,12 @@ export function SettingsCommand(props: {
     const key = `${model.providerID}/${model.id}`
     const snapshot = await fetchCalibration(key)
     if (snapshot === undefined) return "back"
-    /** 输入：单层快照；输出：`1.36 / 0.19 · 12` 或「未设置」。 */
-    const layerText = (layer: CalibrationSnapshot["model"] | undefined): string =>
-      layer === undefined
-        ? copy().settings.calibrationScopeUnset
-        : `${layer.cjk.toFixed(2)} / ${layer.ascii.toFixed(2)} · ${layer.samples.toString()}`
+    /** 输入：单层快照；输出：`5.9% · 12` 或「未设置」。 */
+    const layerText = (layer: CalibrationSnapshot["model"] | undefined): string => {
+      if (layer === undefined) return copy().settings.calibrationScopeUnset
+      const error = layer.emaLearned > 0 ? layer.emaLearned : layer.emaPrior
+      return `${error > 0 ? `${(error * 100).toFixed(1)}%` : "--"} · ${layer.samples.toString()}`
+    }
     const picked = await props.context.ui.dialog.select<"exact" | "model" | "resetExact" | "resetModel">({
       title: `${copy().settings.calibration} · ${keyLabel(key)}`,
       options: [
@@ -835,35 +835,34 @@ export function SettingsCommand(props: {
     }
     const scope = picked
     const layer = scope === "exact" ? snapshot.exact : snapshot.model
-    const current = layer ?? { cjk: TOKEN_COEF_MIN.cjk, ascii: TOKEN_COEF_MIN.ascii, samples: 0 }
-    const field = await props.context.ui.dialog.select<"cjk" | "ascii">({
+    const values = layer?.coefs ?? BUCKET_NAMES.map((name) => DEFAULT_BUCKET_COEFS[name])
+    const bucket = await props.context.ui.dialog.select<BucketName>({
       title: `${keyLabel(key)} · ${
         scope === "exact" ? copy().settings.calibrationExactScope : copy().settings.calibrationModelScope
       }`,
-      options: [
-        { title: copy().settings.calibrationCjk, value: "cjk", footer: current.cjk.toFixed(3) },
-        { title: copy().settings.calibrationAscii, value: "ascii", footer: current.ascii.toFixed(3) },
-      ],
+      options: BUCKET_NAMES.map((name, index) => ({
+        title: name,
+        value: name,
+        footer: (values[index] ?? 0).toFixed(3),
+      })),
     })
-    if (field === undefined) return "back"
-    const isCjk = field === "cjk"
+    if (bucket === undefined) return "back"
+    const index = BUCKET_NAMES.indexOf(bucket)
+    const band = bucketBand(bucket)
     props.context.ui.dialog.show(() => (
       <CoefDialog
         context={props.context}
         copy={copy()}
-        title={isCjk ? copy().settings.calibrationCjk : copy().settings.calibrationAscii}
+        title={bucket}
         hint={copy().settings.calibrationHint}
         invalid={copy().settings.calibrationInvalid}
-        initial={(isCjk ? current.cjk : current.ascii).toFixed(3)}
-        min={isCjk ? TOKEN_COEF_MIN.cjk : TOKEN_COEF_MIN.ascii}
-        max={isCjk ? TOKEN_COEF_MAX.cjk : TOKEN_COEF_MAX.ascii}
+        initial={(values[index] ?? 0).toFixed(3)}
+        min={band.lo}
+        max={band.hi}
         onConfirm={(value) => {
-          void writeCalibration(
-            key,
-            isCjk ? value : current.cjk,
-            isCjk ? current.ascii : value,
-            scope,
-          )
+          const next = [...values]
+          next[index] = value
+          void writeCalibration(key, next, scope)
         }}
       />
     ))

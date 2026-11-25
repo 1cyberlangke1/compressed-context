@@ -4,15 +4,14 @@ import { formatTokens } from "../shared/format.ts"
 import { sameLocation } from "../shared/location.ts"
 import { resolveForModel, resolveSummaryLimits, triggerTokens, type SummaryFormat } from "../shared/settings.ts"
 import {
-  charsTokens,
   contentCategories,
-  countChars,
-  DEFAULT_TOKEN_COEFS,
+  DEFAULT_BUCKET_COEFS,
   estimateCategories,
   formatCategoryBreakdown,
+  priceText,
   totalCategories,
+  type BucketCoefs,
   type TokenCategories,
-  type TokenCoefs,
   type ToolDefinitionLike,
 } from "../shared/tokens.ts"
 import { calibrationCoefs } from "./calibration.ts"
@@ -151,7 +150,7 @@ function summaryOverBudget(
   state: State,
   settings: ReturnType<typeof resolveForModel>,
   windowTokens: number | undefined,
-  coefs: TokenCoefs = DEFAULT_TOKEN_COEFS,
+  coefs: BucketCoefs = DEFAULT_BUCKET_COEFS,
 ): boolean {
   if (windowTokens === undefined) return false
   const limits = resolveSummaryLimits(settings, windowTokens)
@@ -161,7 +160,7 @@ function summaryOverBudget(
     showTimeline: settings.showTimeline,
     showBlockTokens: settings.showBlockTokens,
   })
-  return charsTokens(countChars(summary), coefs) > limits.budgetTokens
+  return priceText(summary, coefs) > limits.budgetTokens
 }
 
 /**
@@ -201,7 +200,7 @@ async function clearStalePhaseIfWithinBudget(
   state: State,
   settings: ReturnType<typeof resolveForModel>,
   windowTokens: number | undefined,
-  coefs: TokenCoefs,
+  coefs: BucketCoefs,
 ): Promise<void> {
   if (summaryOverBudget(state, settings, windowTokens, coefs)) return
   await stateStore(ctx.storage).transact(sessionID, (current) => {
@@ -414,7 +413,7 @@ export async function resolveLimit(
 }
 
 /** 输入：system / tools / messages + 系数；输出：估算总 token。 */
-function estimateTotal(input: AutoInput, coefs: TokenCoefs): number {
+function estimateTotal(input: AutoInput, coefs: BucketCoefs): number {
   return totalCategories(
     estimateCategories(
       {
@@ -432,7 +431,7 @@ function estimateTotal(input: AutoInput, coefs: TokenCoefs): number {
  * 输出：按类别的 token 估算。
  * 预期：一次算出全部分类，增长量与提醒里的构成行共用同一份结果，避免重复遍历。
  */
-function categoriesOf(input: AutoInput, coefs: TokenCoefs): TokenCategories {
+function categoriesOf(input: AutoInput, coefs: BucketCoefs): TokenCategories {
   return estimateCategories(
     {
       system: input.system,
@@ -594,7 +593,7 @@ export async function maybeAutoCompressStep(input: {
     // 会话没记录模型时退回默认系数：估算可能不准，但不会因为缺模型而整段跳过压缩判定。
     const coefs =
       session.model === undefined
-        ? DEFAULT_TOKEN_COEFS
+        ? DEFAULT_BUCKET_COEFS
         : await calibrationCoefs(input.ctx.storage, session.model)
     const effective = await effectiveLimit(input.ctx.storage, input.sessionID, session.model)
 
@@ -793,3 +792,4 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
     // 提醒是 best effort，不能影响模型请求。
   }
 }
+

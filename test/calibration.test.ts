@@ -2,15 +2,14 @@ import { describe, expect, it } from "vitest"
 
 import {
   applyObservation,
+  arrayToCoefs,
   calibrationCoefs,
   calibrationKey,
-  clampCoefs,
-  COEF_MAX,
-  COEF_MIN,
+  coefsToArray,
   DEFAULT_CALIBRATION,
-  isCoefInRange,
+  effectiveCoefsOf,
+  isCoefArrayInRange,
   loadCalibration,
-  loadCalibrationLayers,
   loadEffectiveCalibration,
   modelCalibrationKey,
   normalizeModelName,
@@ -19,7 +18,7 @@ import {
   resetCalibration,
   setManualCalibration,
 } from "../src/compression/calibration.ts"
-import { DEFAULT_TOKEN_COEFS } from "../src/shared/tokens.ts"
+import { BUCKET_NAMES, DEFAULT_BUCKET_COEFS, emptyBuckets, priceBuckets } from "../src/shared/tokens.ts"
 import type { StorageLike } from "../src/compression/state.ts"
 
 /** 内存 storage：键值对，行为与插件 ctx.storage 一致。 */
@@ -58,181 +57,197 @@ function providerPair(): readonly [
   ]
 }
 
-const SAMPLE = { chars: { cjk: 0, ascii: 80_000 }, realTokens: 30_000, mediaTokens: 0 }
+/** 构造纯 ASCII 的桶计数（只碰 latin/ws/punct 这些）。 */
+function asciiBuckets(units: number) {
+  const buckets = { ...emptyBuckets(), latin: units }
+  return buckets
+}
 
 describe("calibration 默认值", () => {
-  it("没有记录时等于旧规则（CJK 1 / ASCII 0.25）", async () => {
+  it("没有记录时等于离线先验", async () => {
     const effective = await loadEffectiveCalibration(memoryStorage(), freshModel())
     expect(effective.scope).toBe("default")
-    expect(effective.state).toEqual(DEFAULT_CALIBRATION)
+    expect(effective.source).toBe("prior")
+    expect(effective.coefs).toEqual(DEFAULT_BUCKET_COEFS)
   })
 
-  it("坏记录回落到默认状态", async () => {
+  it("坏记录回落到先验状态", async () => {
     const storage = memoryStorage()
     const model = freshModel()
-    await storage.set(modelCalibrationKey(model), { cjk: "x" })
+    await storage.set(modelCalibrationKey(model), { coefs: "x" })
     expect(await loadCalibration(storage, model)).toEqual(DEFAULT_CALIBRATION)
   })
 
   it("parseCalibration 接受合法状态、拒绝缺字段", () => {
     expect(parseCalibration({ ...DEFAULT_CALIBRATION })).toEqual(DEFAULT_CALIBRATION)
-    expect(parseCalibration({ cjk: 1, ascii: 0.25 })).toBeUndefined()
+    expect(parseCalibration({ coefs: [1] })).toBeUndefined()
     expect(parseCalibration(null)).toBeUndefined()
   })
 
-  it("共享层键做 trim + 小写归一化", () => {
+  it("键名归一化：共享层 trim + 小写，精确层保留原样", () => {
     expect(normalizeModelName("  DeepSeek-V4.1  ")).toBe("deepseek-v4.1")
     expect(modelCalibrationKey({ providerID: "p", id: " ABC " })).toBe("calibration:model:abc")
     expect(calibrationKey({ providerID: "p", id: "ABC" })).toBe("calibration:p/ABC")
   })
+
+  it("系数数组与桶名对象可互转", () => {
+    const arrays = coefsToArray(DEFAULT_BUCKET_COEFS)
+    expect(arrays).toHaveLength(BUCKET_NAMES.length)
+    expect(arrayToCoefs(arrays)).toEqual(DEFAULT_BUCKET_COEFS)
+    // 长度不对时退回先验，避免把坏数据当系数用。
+    expect(arrayToCoefs([1, 2, 3])).toEqual(DEFAULT_BUCKET_COEFS)
+  })
 })
 
 describe("calibration 学习", () => {
-  it("ASCII 被低估时 ascii 系数上升，一次观测走完大部分差距", () => {
-    const next = applyObservation(DEFAULT_CALIBRATION, SAMPLE)
-    // 目标：30000/80000 = 0.375；一次观测后应明显靠近但不超过目标。
-    expect(next.ascii).toBeGreaterThan(0.25)
-    expect(next.ascii).toBeLessThan(0.375)
-    expect(next.samples).toBe(1)
-  })
-
-  it("重复观测会收敛到真实比例", () => {
+  it("先验低估时学习值上升，并在足够样本后取代先验", () => {
+    const buckets = asciiBuckets(80_000)
+    const priorPred = priceBuckets(buckets, DEFAULT_BUCKET_COEFS)
+    const target = Math.round(priorPred * 1.4)
     let state = DEFAULT_CALIBRATION
-    for (let index = 0; index < 200; index += 1) state = applyObservation(state, SAMPLE)
-    // 往默认值收缩会留下一点稳态偏差，收敛到 0.375 附近即可。
-    expect(Math.abs(state.ascii - 0.375)).toBeLessThan(0.01)
+    for (let index = 0; index < 40; index += 1) {
+      state = applyObservation(state, { buckets, realTokens: target, mediaTokens: 0 })
+    }
+    const learned = arrayToCoefs(state.coefs)
+    expect(learned.latin).toBeGreaterThan(DEFAULT_BUCKET_COEFS.latin)
+    const effective = effectiveCoefsOf(state)
+    expect(effective.source).toBe("learned")
+    expect(priceBuckets(buckets, effective.coefs)).toBeGreaterThan(priorPred)
   })
 
-  it("CJK 被高估时 cjk 系数下降", () => {
-    const next = applyObservation(DEFAULT_CALIBRATION, {
-      chars: { cjk: 40_000, ascii: 0 },
-      realTokens: 24_000,
-      mediaTokens: 0,
-    })
-    expect(next.cjk).toBeLessThan(1)
-    expect(next.cjk).toBeGreaterThan(0.4)
+  it("样本不足时仍然使用先验", () => {
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 1.4)
+    let state = DEFAULT_CALIBRATION
+    for (let index = 0; index < 3; index += 1) {
+      state = applyObservation(state, { buckets, realTokens: target, mediaTokens: 0 })
+    }
+    expect(effectiveCoefsOf(state).source).toBe("prior")
   })
 
-  it("字符数太少不采样", () => {
-    const next = applyObservation(DEFAULT_CALIBRATION, {
-      chars: { cjk: 100, ascii: 200 },
-      realTokens: 500,
-      mediaTokens: 0,
-    })
-    expect(next).toBe(DEFAULT_CALIBRATION)
+  it("纯 ASCII 观测不会推动 CJK 系数", () => {
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 1.3)
+    let state = DEFAULT_CALIBRATION
+    for (let index = 0; index < 50; index += 1) {
+      state = applyObservation(state, { buckets, realTokens: target, mediaTokens: 0 })
+    }
+    const index = BUCKET_NAMES.indexOf("cjk")
+    expect(state.coefs[index]).toBeCloseTo(DEFAULT_BUCKET_COEFS.cjk, 6)
+  })
+
+  it("没出现过的桶连收缩都不做", () => {
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 1.3)
+    let state = applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: target, mediaTokens: 0 })
+    // 先手动把某个未出现的桶推离先验，再观测：它必须原地不动。
+    const cjkIndex = BUCKET_NAMES.indexOf("cjk")
+    state = { ...state, coefs: state.coefs.map((value, i) => (i === cjkIndex ? 1.5 : value)) }
+    const next = applyObservation(state, { buckets, realTokens: target, mediaTokens: 0 })
+    expect(next.coefs[cjkIndex]).toBe(1.5)
+  })
+
+  it("桶总数太少不采样", () => {
+    const buckets = { ...emptyBuckets(), latin: 100 }
+    expect(applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: 500, mediaTokens: 0 })).toBe(
+      DEFAULT_CALIBRATION,
+    )
   })
 
   it("真实 token 非正或缺失时跳过", () => {
-    const chars = { cjk: 0, ascii: 80_000 }
-    expect(applyObservation(DEFAULT_CALIBRATION, { chars, realTokens: 0, mediaTokens: 0 })).toBe(
+    const buckets = asciiBuckets(80_000)
+    expect(applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: 0, mediaTokens: 0 })).toBe(
       DEFAULT_CALIBRATION,
     )
-    expect(applyObservation(DEFAULT_CALIBRATION, { chars, realTokens: Number.NaN, mediaTokens: 0 })).toBe(
+    expect(applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: Number.NaN, mediaTokens: 0 })).toBe(
       DEFAULT_CALIBRATION,
     )
   })
 
   it("偏离预测超过 50% 的观测直接丢弃", () => {
-    const next = applyObservation(DEFAULT_CALIBRATION, {
-      chars: { cjk: 0, ascii: 80_000 },
-      realTokens: 80_000,
-      mediaTokens: 0,
-    })
-    expect(next).toBe(DEFAULT_CALIBRATION)
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 2)
+    expect(applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: target, mediaTokens: 0 })).toBe(
+      DEFAULT_CALIBRATION,
+    )
   })
 
   it("媒体 token 从目标值里扣掉", () => {
-    const withoutMedia = applyObservation(DEFAULT_CALIBRATION, SAMPLE)
-    const withMedia = applyObservation(DEFAULT_CALIBRATION, { ...SAMPLE, realTokens: 35_000, mediaTokens: 5_000 })
-    expect(withMedia.ascii).toBeCloseTo(withoutMedia.ascii, 6)
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 1.3)
+    const plain = applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: target, mediaTokens: 0 })
+    const withMedia = applyObservation(DEFAULT_CALIBRATION, {
+      buckets,
+      realTokens: target + 5_000,
+      mediaTokens: 5_000,
+    })
+    expect(withMedia.coefs).toEqual(plain.coefs)
   })
 })
 
 describe("calibration 两层键", () => {
-  it("没设精确层时，学习写共享层，其他提供商同样受益", async () => {
+  it("没设精确层时写共享层，其他提供商同样受益", async () => {
     const storage = memoryStorage()
     const [a, b] = providerPair()
-    await recordCalibration(storage, a, SAMPLE)
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 1.4)
+    await recordCalibration(storage, a, { buckets, realTokens: target, mediaTokens: 0 })
     expect((await loadEffectiveCalibration(storage, a)).scope).toBe("model")
-    const coefsA = await calibrationCoefs(storage, a)
-    const coefsB = await calibrationCoefs(storage, b)
-    expect(coefsA).toEqual(coefsB)
-    expect(coefsA.ascii).toBeGreaterThan(0.25)
+    expect(await calibrationCoefs(storage, a)).toEqual(await calibrationCoefs(storage, b))
   })
 
   it("精确层覆盖共享层，且只影响那一家", async () => {
     const storage = memoryStorage()
     const [a, b] = providerPair()
-    await recordCalibration(storage, a, SAMPLE)
-    expect(await setManualCalibration(storage, a, { cjk: 1.1, ascii: 0.5 }, "exact")).toBe(true)
+    const shared = coefsToArray(DEFAULT_BUCKET_COEFS)
+    const manual = shared.map((value) => value * 1.2)
+    expect(await setManualCalibration(storage, a, manual, "exact")).toBe(true)
 
     const effectiveA = await loadEffectiveCalibration(storage, a)
     expect(effectiveA.scope).toBe("exact")
-    expect(effectiveA.state.ascii).toBe(0.5)
+    expect(coefsToArray(effectiveA.coefs)).toEqual(manual)
 
     const effectiveB = await loadEffectiveCalibration(storage, b)
-    expect(effectiveB.scope).toBe("model")
-    expect(effectiveB.state.ascii).toBeLessThan(0.5)
-  })
-
-  it("有精确层时学习只写精确层，共享层不动", async () => {
-    const storage = memoryStorage()
-    const [a, b] = providerPair()
-    await recordCalibration(storage, a, SAMPLE)
-    const sharedBefore = (await loadCalibrationLayers(storage, a)).model
-    await setManualCalibration(storage, a, { cjk: 1, ascii: 0.6 }, "exact")
-
-    await recordCalibration(storage, a, SAMPLE)
-    const sharedAfter = (await loadCalibrationLayers(storage, a)).model
-    const exactAfter = (await loadCalibrationLayers(storage, a)).exact
-
-    expect(sharedAfter).toEqual(sharedBefore)
-    expect(exactAfter?.ascii).toBeLessThan(0.6)
-    expect(exactAfter?.ascii).toBeGreaterThan(0.25)
-    // 另一家仍用共享层
-    expect((await calibrationCoefs(storage, b)).ascii).toBeCloseTo(sharedAfter.ascii, 6)
+    expect(effectiveB.scope).toBe("default")
   })
 
   it("删掉精确层后回落到共享层", async () => {
     const storage = memoryStorage()
     const [a] = providerPair()
-    await recordCalibration(storage, a, SAMPLE)
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 1.3)
+    await recordCalibration(storage, a, { buckets, realTokens: target, mediaTokens: 0 })
     const shared = await calibrationCoefs(storage, a)
-    await setManualCalibration(storage, a, { cjk: 1.5, ascii: 0.8 }, "exact")
+    await setManualCalibration(storage, a, coefsToArray(DEFAULT_BUCKET_COEFS).map((v) => v * 1.5), "exact")
     await resetCalibration(storage, a, "exact")
-    expect(await loadEffectiveCalibration(storage, a)).toMatchObject({ scope: "model" })
+    expect((await loadEffectiveCalibration(storage, a)).scope).toBe("model")
     expect(await calibrationCoefs(storage, a)).toEqual(shared)
   })
 
-  it("清共享层后两家都回到默认值", async () => {
+  it("清共享层后回到先验", async () => {
     const storage = memoryStorage()
     const [a, b] = providerPair()
-    await recordCalibration(storage, a, SAMPLE)
+    const buckets = asciiBuckets(80_000)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 1.3)
+    await recordCalibration(storage, a, { buckets, realTokens: target, mediaTokens: 0 })
     await resetCalibration(storage, a, "model")
-    expect(await calibrationCoefs(storage, a)).toEqual(DEFAULT_TOKEN_COEFS)
-    expect(await calibrationCoefs(storage, b)).toEqual(DEFAULT_TOKEN_COEFS)
+    expect(await calibrationCoefs(storage, a)).toEqual(DEFAULT_BUCKET_COEFS)
+    expect(await calibrationCoefs(storage, b)).toEqual(DEFAULT_BUCKET_COEFS)
   })
 
   it("越界的手动系数被拒绝、不写入", async () => {
     const storage = memoryStorage()
     const model = freshModel()
-    expect(await setManualCalibration(storage, model, { cjk: 9, ascii: 0.25 }, "model")).toBe(false)
-    expect(await setManualCalibration(storage, model, { cjk: 1, ascii: 0 }, "model")).toBe(false)
-    expect(await calibrationCoefs(storage, model)).toEqual(DEFAULT_TOKEN_COEFS)
+    const tooBig = coefsToArray(DEFAULT_BUCKET_COEFS).map((value) => value * 99)
+    expect(await setManualCalibration(storage, model, tooBig, "model")).toBe(false)
+    expect(await setManualCalibration(storage, model, [1, 2], "model")).toBe(false)
+    expect(await calibrationCoefs(storage, model)).toEqual(DEFAULT_BUCKET_COEFS)
+  })
+
+  it("isCoefArrayInRange 只接受每个桶都在区间内的数组", () => {
+    expect(isCoefArrayInRange(coefsToArray(DEFAULT_BUCKET_COEFS))).toBe(true)
+    expect(isCoefArrayInRange([Number.NaN])).toBe(false)
+    expect(isCoefArrayInRange(coefsToArray(DEFAULT_BUCKET_COEFS).map(() => -1))).toBe(false)
   })
 })
 
-describe("calibration 边界", () => {
-  it("clampCoefs 把系数夹在区间内", () => {
-    expect(clampCoefs({ cjk: 0, ascii: 0 })).toEqual(COEF_MIN)
-    expect(clampCoefs({ cjk: 99, ascii: 99 })).toEqual(COEF_MAX)
-    expect(clampCoefs({ cjk: 1, ascii: 0.25 })).toEqual({ cjk: 1, ascii: 0.25 })
-  })
-
-  it("isCoefInRange 只接受区间内的有限数", () => {
-    expect(isCoefInRange({ cjk: 1, ascii: 0.25 })).toBe(true)
-    expect(isCoefInRange({ cjk: Number.NaN, ascii: 0.25 })).toBe(false)
-    expect(isCoefInRange({ cjk: COEF_MIN.cjk, ascii: COEF_MIN.ascii })).toBe(true)
-    expect(isCoefInRange({ cjk: COEF_MAX.cjk, ascii: COEF_MAX.ascii })).toBe(true)
-  })
-})

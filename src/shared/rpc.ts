@@ -140,26 +140,29 @@ const CalibrationInputJson = {
 const CalibrationLayerJson = {
   type: "object",
   properties: {
-    cjk: { type: "number" },
-    ascii: { type: "number" },
+    coefs: { type: "array", items: { type: "number" } },
     samples: { type: "number" },
+    emaPrior: { type: "number" },
+    emaLearned: { type: "number" },
   },
-  required: ["cjk", "ascii", "samples"],
+  required: ["coefs", "samples", "emaPrior", "emaLearned"],
   additionalProperties: false,
 } as const
 
-/** 校准系数查询：返回生效值、来源层，以及两层各自的原始值。 */
+/** 校准查询：返回生效系数、来源层、两套误差与两层原始值。 */
 const CalibrationOutputJson = {
   type: "object",
   properties: {
     scope: { type: "string", enum: ["exact", "model", "default"] },
-    cjk: { type: "number" },
-    ascii: { type: "number" },
+    source: { type: "string", enum: ["learned", "prior"] },
+    coefs: { type: "array", items: { type: "number" } },
     samples: { type: "number" },
+    emaPrior: { type: "number" },
+    emaLearned: { type: "number" },
     model: CalibrationLayerJson,
     exact: CalibrationLayerJson,
   },
-  required: ["scope", "cjk", "ascii", "samples", "model"],
+  required: ["scope", "source", "coefs", "samples", "emaPrior", "emaLearned", "model"],
   additionalProperties: false,
 } as const
 
@@ -167,11 +170,10 @@ const CalibrationSetInputJson = {
   type: "object",
   properties: {
     model: { type: "string" },
-    cjk: { type: "number" },
-    ascii: { type: "number" },
+    coefs: { type: "array", items: { type: "number" } },
     scope: { type: "string", enum: ["exact", "model"] },
   },
-  required: ["model", "cjk", "ascii", "scope"],
+  required: ["model", "coefs", "scope"],
   additionalProperties: false,
 } as const
 
@@ -330,14 +332,20 @@ export const ContextRpc: Rpc.PortableDefinition = {
 
 /** 单层校准快照。 */
 export interface CalibrationLayer {
-  readonly cjk: number
-  readonly ascii: number
+  readonly coefs: readonly number[]
   readonly samples: number
+  readonly emaPrior: number
+  readonly emaLearned: number
 }
 
-/** 校准查询结果：生效值 + 来源层 + 两层原始值。 */
-export interface CalibrationSnapshot extends CalibrationLayer {
+/** 校准查询结果：生效系数 + 来源层 + 两层原始值。 */
+export interface CalibrationSnapshot {
   readonly scope: "exact" | "model" | "default"
+  readonly source: "learned" | "prior"
+  readonly coefs: readonly number[]
+  readonly samples: number
+  readonly emaPrior: number
+  readonly emaLearned: number
   readonly model: CalibrationLayer
   readonly exact?: CalibrationLayer
 }
@@ -387,8 +395,7 @@ export interface ContextRpcClient {
   calibrationSet(
     input: {
       readonly model: string
-      readonly cjk: number
-      readonly ascii: number
+      readonly coefs: readonly number[]
       readonly scope: "exact" | "model"
     },
     options?: { readonly location?: { readonly directory: string } },

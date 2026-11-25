@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import type { SummaryFormat, SummaryLanguage } from "../shared/settings.ts"
-import { charsTokens, countChars, DEFAULT_TOKEN_COEFS, type TokenCoefs } from "../shared/tokens.ts"
+import { DEFAULT_BUCKET_COEFS, priceText, type BucketCoefs } from "../shared/tokens.ts"
 import { activeBlocks, renderAll, renderBlock } from "./render.ts"
 import {
   MAX_DISTILL_ROUNDS,
@@ -55,7 +55,7 @@ export interface DistillOnceInput {
   readonly pending: Block | undefined
   readonly budgetTokens: number
   /** 预算比较用的每字符 token 系数；缺省为默认规则。 */
-  readonly coefs?: TokenCoefs
+  readonly coefs?: BucketCoefs
   /** 保留区：最新这么多个 T1 块不参与合并；预算压力下会自动让位。 */
   readonly recentT1Blocks: number
   /** 自上次 T1 以来已连续合并的刀数；用于刹车，防止连环压缩跑飞。 */
@@ -181,9 +181,9 @@ export function planT1Phase(
   summary: string,
   active: readonly Block[],
   budgetTokens: number,
-  coefs: TokenCoefs = DEFAULT_TOKEN_COEFS,
+  coefs: BucketCoefs = DEFAULT_BUCKET_COEFS,
 ): CompactionPhase | undefined {
-  return charsTokens(countChars(summary), coefs) > budgetTokens && active.length > 0 ? 2 : undefined
+  return priceText(summary, coefs) > budgetTokens && active.length > 0 ? 2 : undefined
 }
 
 /**
@@ -197,9 +197,9 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     showTimeline: input.showTimeline === true,
     showBlockTokens: input.showBlockTokens === true,
   }
-  const coefs = input.coefs ?? DEFAULT_TOKEN_COEFS
+  const coefs = input.coefs ?? DEFAULT_BUCKET_COEFS
   /** 输入：摘要文本；输出：按当前系数估算的 token。 */
-  const summaryTokens = (text: string): number => charsTokens(countChars(text), coefs)
+  const summaryTokens = (text: string): number => priceText(text, coefs)
   const active = activeBlocks(input.state.blocks, input.pending)
   const currentSummary = renderAll(input.state.blocks, input.pending, renderOptions)
   /** 输入：可选错误原因；输出：未合并的结果。预期：所有「状态没变」分支共用同一形状。 */
@@ -305,4 +305,6 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     distillRounds,
   }
 }
+
+
 

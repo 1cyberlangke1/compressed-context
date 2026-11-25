@@ -102,7 +102,7 @@ const tierBlock = (id: string, tier: number, order: number): Block => ({
 /** 输入：id/tier/order；输出：摘要大到足以超过预算的块。 */
 const longBlock = (id: string, tier: 1 | 2 | 3, order: number): Block => ({
   ...tierBlock(id, tier, order),
-  summary: { ...summary, facts: ["x".repeat(24_000)] },
+  summary: { ...summary, facts: ["x".repeat(40_000)] },
 })
 
 /** 测试 storage 对应的临时 JSONC 目录。 */
@@ -739,7 +739,7 @@ describe("自动压缩", () => {
         ...Array.from({ length: 6 }, () => ({
           type: "tool-result",
           name: "shell",
-          result: "x".repeat(20_000),
+          result: "x".repeat(40_000),
         })),
       ],
     },
@@ -1914,8 +1914,8 @@ describe("T1 phase 决策", () => {
   })
 
   it("超预算且链非空就排合并：最短路径是自己压自己", () => {
-    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1)], 5_000)).toBe(2)
-    expect(planT1Phase("x".repeat(30_000), [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], 5_000)).toBe(2)
+    expect(planT1Phase("x".repeat(40_000), [tierBlock("b1", 1, 1)], 5_000)).toBe(2)
+    expect(planT1Phase("x".repeat(40_000), [tierBlock("b1", 1, 1), tierBlock("b2", 1, 2)], 5_000)).toBe(2)
   })
 
   it("只按 token 预算判断，字符数不再参与比较", () => {

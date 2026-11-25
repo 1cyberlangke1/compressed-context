@@ -16,7 +16,7 @@ import { registerCheckpointTreeTool } from "./compression/checkpoint-tree-tool.t
 import { calibrationCoefs, recordCalibration, type CalibrationSample } from "./compression/calibration.ts"
 import { effectiveDecompressTempMaxAgeHours } from "./shared/settings.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./shared/stats.ts"
-import { estimateCategories, estimateChars } from "./shared/tokens.ts"
+import { estimateBuckets, estimateCategories } from "./shared/tokens.ts"
 
 export default Plugin.define({
   id: "compressed-context",
@@ -71,7 +71,7 @@ export default Plugin.define({
           if (pending !== undefined && Date.now() - pending.at <= SAMPLE_MAX_AGE_MS) {
             pendingSamples.delete(sessionID)
             await recordCalibration(ctx.storage, pending.model, {
-              chars: pending.sample.chars,
+              buckets: pending.sample.buckets,
               mediaTokens: pending.sample.mediaTokens,
               realTokens: tokens.input + tokens.cache.read + tokens.cache.write,
             })
@@ -131,7 +131,7 @@ export default Plugin.define({
         pendingSamples.set(event.sessionID, {
           model: { providerID: event.model.providerID, id: event.model.id },
           sample: {
-            chars: estimateChars({ system: event.system, tools: event.tools, messages: event.messages }),
+            buckets: estimateBuckets({ system: event.system, tools: event.tools, messages: event.messages }),
             mediaTokens: stats.media,
           },
           at: Date.now(),

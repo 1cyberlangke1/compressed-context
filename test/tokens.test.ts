@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  charsTokens,
+  bucketize,
   contentCategories,
-  countChars,
   countText,
+  DEFAULT_BUCKET_COEFS,
+  emptyBuckets,
+  estimateBuckets,
   estimateCategories,
-  estimateChars,
+  priceBuckets,
+  priceText,
 } from "../src/shared/tokens.ts"
 
 describe("countText", () => {
@@ -24,8 +27,8 @@ describe("estimateCategories", () => {
       tools: { read: { description: "abcd", input: {} } },
       messages: [],
     })
-    expect(result.system).toBe(1)
-    expect(result.tools).toBe(3)
+    expect(result.system).toBe(priceText("abcd"))
+    expect(result.tools).toBe(priceText("readabcd{}"))
   })
 
   it("按内容分类：text / reasoning / tool / summaries / media", () => {
@@ -46,9 +49,9 @@ describe("estimateCategories", () => {
         },
       ],
     })
-    expect(result.text).toBe(4)
-    expect(result.tool).toBe(4)
-    expect(result.summaries).toBe(1)
+    expect(result.text).toBe(priceText("abcd") + priceText("```x```") + priceText("efgh"))
+    expect(result.tool).toBe(priceText("tool{}") + priceText("abcdefgh"))
+    expect(result.summaries).toBe(priceText("abcd"))
     expect(result.media).toBe(1_500)
   })
 
@@ -95,7 +98,7 @@ describe("estimateCategories", () => {
         },
       ],
     })
-    expect(result.tool).toBe(2)
+    expect(result.tool).toBe(priceText("abcd") + priceText("efgh"))
   })
 
   it("v2 tool part 的 state.input / state.content 都计入 tool", () => {
@@ -118,8 +121,8 @@ describe("estimateCategories", () => {
         },
       ],
     })
-    expect(result.text).toBe(1)
-    expect(result.tool).toBe(4)
+    expect(result.text).toBe(priceText("abcd"))
+    expect(result.tool).toBe(priceText("shellabcd") + priceText("efgh"))
   })
 
   it("checkpoint 的 summary 与 recent 分开计数", () => {
@@ -137,8 +140,8 @@ describe("estimateCategories", () => {
         },
       ],
     })
-    expect(result.summaries).toBe(1)
-    expect(result.recent).toBe(2)
+    expect(result.summaries).toBe(priceText("abcd"))
+    expect(result.recent).toBe(priceText("abcdefgh"))
   })
 
   it("多个 checkpoint 只取最新 recent，不累加", () => {
@@ -160,8 +163,8 @@ describe("estimateCategories", () => {
         },
       ],
     })
-    expect(result.summaries).toBe(2)
-    expect(result.recent).toBe(2)
+    expect(result.summaries).toBe(priceText("abcd") * 2)
+    expect(result.recent).toBe(priceText("abcdefgh"))
   })
 
   it("未知 part 类型不计入任何分类", () => {
@@ -195,54 +198,60 @@ describe("contentCategories", () => {
     ).toBe(0)
   })
 })
-
-describe("countChars / charsTokens", () => {
-  it("按 CJK 与其它字符分开计数", () => {
-    expect(countChars("")).toEqual({ cjk: 0, ascii: 0 })
-    expect(countChars("你好ab")).toEqual({ cjk: 2, ascii: 2 })
+describe("bucketize / priceBuckets", () => {
+  it("把文本分进 13 个桶", () => {
+    const b = bucketize("你好 world 123 => ok")
+    expect(b.cjk).toBe(2)
+    expect(b.word2 + b.word35).toBeGreaterThan(0)
+    expect(b.num).toBe(1) // "123" 三位数字算一组
+    expect(b.punctRun).toBe(1) // "=>" 是连续标点
+    expect(b.asciiPunct).toBe(2)
+    expect(b.ws).toBeGreaterThan(0)
   })
 
-  it("默认系数下与 countText 完全一致", () => {
-    for (const text of ["", "abcde", "你好abcd", "T=标题|G=目标", "a".repeat(1000)]) {
-      expect(charsTokens(countChars(text))).toBe(countText(text))
+  it("CJK 标点并入 cjk，避免被算成零成本", () => {
+    const b = bucketize("，。：")
+    expect(b.cjk).toBe(3)
+    expect(b.other).toBe(0)
+  })
+
+  it("驼峰边界单独计数", () => {
+    expect(bucketize("parseConfig").camel).toBe(1)
+    expect(bucketize("parseconfig").camel).toBe(0)
+  })
+
+  it("价格 = 桶计数 × 系数（四舍五入）", () => {
+    const counts = { ...emptyBuckets(), cjk: 100, latin: 1000 }
+    expect(priceBuckets(counts, { ...DEFAULT_BUCKET_COEFS, cjk: 1, latin: 0.25 })).toBe(100 + 250)
+    expect(priceBuckets(emptyBuckets())).toBe(0)
+  })
+
+  it("priceText 与 priceBuckets(bucketize) 一致", () => {
+    for (const text of ["", "hello world", "你好，世界", "a".repeat(500)]) {
+      expect(priceText(text)).toBe(priceBuckets(bucketize(text)))
     }
-  })
-
-  it("自定义系数按字符类型分别折算", () => {
-    const chars = { cjk: 100, ascii: 1000 }
-    expect(charsTokens(chars, { cjk: 0.5, ascii: 0.25 })).toBe(50 + 250)
-    expect(charsTokens(chars, { cjk: 2, ascii: 1 })).toBe(1200)
   })
 })
 
-describe("estimateChars", () => {
-  it("汇总 system / 工具定义 / 消息的字符数，不含媒体", () => {
-    const chars = estimateChars({
-      system: [{ type: "text", text: "abcd" }],
-      tools: { read: { description: "abcd", input: {} } },
-      messages: [
-        {
-          content: [
-            { type: "text", text: "你好" },
-            { type: "media", media: { source: { mediaType: "image/png" }, info: { width: 100, height: 100 } } },
-          ],
-        },
-      ],
-    })
-    expect(chars.cjk).toBe(2)
-    // 4(系统) + 4(工具名) + 4(描述) + 2(JSON "{}")；媒体不计入字符数。
-    expect(chars.ascii).toBe(14)
-  })
-
-  it("按系数估算后与 estimateCategories 合计一致（默认系数）", () => {
+describe("estimateBuckets", () => {
+  it("汇总 system / 工具定义 / 消息，可再折成 token 合计", () => {
     const input = {
       system: [{ type: "text", text: "系统提示" }],
       tools: { read: { description: "读文件" } },
       messages: [{ content: [{ type: "text", text: "你好世界" }] }],
     }
-    const chars = estimateChars(input)
+    const buckets = estimateBuckets(input)
     const categories = estimateCategories(input)
-    const total = categories.system + categories.tools + categories.tool + categories.text + categories.recent + categories.summaries + categories.media
-    expect(charsTokens(chars)).toBe(total)
+    const total =
+      categories.system +
+      categories.tools +
+      categories.tool +
+      categories.text +
+      categories.recent +
+      categories.summaries +
+      categories.media
+    // 媒体为 0 时，桶合计应约等于分类合计（分类各自四舍五入，允许个位差）。
+    expect(Math.abs(priceBuckets(buckets) - total)).toBeLessThanOrEqual(7)
   })
 })
+
