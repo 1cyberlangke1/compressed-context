@@ -40,10 +40,10 @@ describe("diffRequests", () => {
   it("system 段变化归为 system 并给出断点", () => {
     const result = diffRequests(chat([{ role: "user", content: "hi" }], { system: "AAA" }), chat([{ role: "user", content: "hi" }], { system: "AAB" }))
     expect(result.cause).toBe("system")
-    expect(result.breakPoint?.segment).toBe("system[0]")
+    expect(result.breakPoint?.segment).toBe("system")
     expect(result.breakPoint?.offset).toBeGreaterThan(0)
-    expect(result.outline.map((segment) => segment.key)).toContain("system[0]")
-    expect(result.request?.segment).toBe("system[0]")
+    expect(result.outline.map((segment) => segment.key)).toContain("system")
+    expect(result.request?.segment).toBe("system")
     expect(result.request?.text).toContain("AAB")
   })
 
@@ -108,7 +108,7 @@ describe("diffRequests", () => {
     const right = chat([{ role: "user", content: "a" }], { temperature: 0.7 })
     const result = diffRequests(left, right)
     expect(result.cause).toBe("params")
-    expect(result.breakPoint?.segment).toBe("options")
+    expect(result.breakPoint?.segment).toBe("temperature")
   })
 
   it("键顺序不同但内容一致时不算断点", () => {

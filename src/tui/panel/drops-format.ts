@@ -1,12 +1,5 @@
 import type { CacheDropBreak } from "../../shared/cache-drops.ts"
 
-/** 输入：跌幅（百分点）+ 条宽；输出：█/░ 组成的竖条。预期：至少一格实心，便于一眼看到有跌幅。 */
-export function dropBar(dropPp: number, width = 8): string {
-  const ratio = Math.min(1, Math.max(0, dropPp / 100))
-  const filled = Math.max(1, Math.min(width, Math.round(ratio * width)))
-  return "█".repeat(filled) + "░".repeat(Math.max(0, width - filled))
-}
-
 /** 输入：断点；输出：`system[0] +41` 这样的定位文本；无断点时为空串。 */
 export function segmentLabel(breakPoint: CacheDropBreak | undefined): string {
   if (breakPoint === undefined) return ""

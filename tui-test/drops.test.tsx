@@ -129,21 +129,38 @@ describe("DropsSection", () => {
     }
   })
 
-  test("没有记录时不渲染分区标题", async () => {
+  test("没有记录时显示空态", async () => {
     const app = await testRender(() => <SectionFixture drops={[]} initial={{ cacheDropsEnabled: true }} />, {
       width: 80,
       height: 20,
     })
     app.renderer.start()
     try {
-      await Bun.sleep(50)
-      expect(app.captureCharFrame()).not.toContain(copy.drops.title)
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.empty))
+      expect(frame).toContain(copy.drops.title)
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("点击记录行会带着 messageID 打开面板", async () => {
+  test("侧栏最多显示最近 10 条，总数仍完整", async () => {
+    const many = Array.from({ length: 12 }, (_, index) => drop(`m${index.toString()}`, index + 1, "AAAA", "AABA"))
+    const app = await testRender(
+      () => <SectionFixture drops={many} initial={{ cacheDropsEnabled: true }} />,
+      { width: 80, height: 20 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.title))
+      expect(frame).toContain("(12)")
+      expect(frame).toContain("-12.0pp")
+      expect(frame).not.toContain("-1.0pp")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("点击记录行会带着 messageID 打开弹窗", async () => {
     const opened: string[] = []
     const app = await testRender(
       () => (

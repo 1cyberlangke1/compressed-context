@@ -25,7 +25,7 @@ export const zh: Messages = {
   drops: {
     title: "缓存突变",
     panelTitle: "缓存突变记录",
-    more: (count) => `还有 ${count.toString()} 条`,
+    more: (count) => `还有 ${count.toString()} 条，点任一条在弹窗里看全部`,
     empty: "没有达到阈值的缓存突变",
     break: "断点",
     prev: "上条",

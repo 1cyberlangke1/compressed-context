@@ -23,7 +23,7 @@ export type CacheDropCause =
 
 /** 首个差异的位置与两侧原文。 */
 export interface CacheDropBreak {
-  /** 段标识，如 `system[0]` / `tools[2]` / `messages[7]` / `options`。 */
+  /** 段标识：顶层标量是字段名（`system`），数组是 `字段名[下标]`（`messages[7]`）。 */
   readonly segment: string
   /** 段内字符偏移（按 Unicode 码点计）。 */
   readonly offset: number
@@ -71,13 +71,14 @@ export interface CacheDrop {
   readonly request?: CacheDropRequest
 }
 
-/** 按上游顺序分组的段：system → tools → messages → options。 */
-interface Groups {
-  readonly system: readonly string[]
-  readonly tools: readonly string[]
-  readonly messages: readonly string[]
-  /** 其余顶层参数（model/temperature/stream…）的规范字符串。 */
-  readonly options?: string
+/**
+ * 请求体的一个顶层字段。
+ * 数组按元素拆成多段（`messages[3]`），其余字段整体一段（`system` / `temperature`）。
+ */
+interface Field {
+  readonly key: string
+  readonly array: boolean
+  readonly items: readonly string[]
 }
 
 /** 一次请求差异的完整结果。 */
@@ -97,9 +98,6 @@ const EXCERPT_LENGTH = 96
 /** 原始请求片段最多存这么多码点，避免 100 条记录撑爆 storage。 */
 export const REQUEST_TEXT_MAX_CHARS = 2_400
 
-const SYSTEM_KEYS = ["system", "instructions", "systemInstruction"] as const
-const MESSAGE_KEYS = ["messages", "input", "contents"] as const
-
 /**
  * 输入：任意 JSON 值。
  * 输出：键按字典序排列的规范字符串。
@@ -114,19 +112,12 @@ function canonicalJson(value: unknown): string {
   return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
 }
 
-/** 输入：单段或数组；输出：逐元素规范字符串。 */
-function itemsOf(value: unknown): readonly string[] {
-  if (value === undefined) return []
-  if (Array.isArray(value)) return value.map(canonicalJson)
-  return [canonicalJson(value)]
-}
-
 /**
  * 输入：原始请求体。
- * 输出：按上游实际顺序分好的组；不是 JSON 对象时返回 undefined。
- * 预期：兼容 Chat Completions / Responses / Anthropic / Gemini 四种顶层字段。
+ * 输出：按 JSON 顶层字段出现顺序拆开的段；不是 JSON 对象时返回 undefined。
+ * 预期：不认任何协议名——数组逐元素、其余字段整体一段，任意厂商的请求形状都能拆。
  */
-function groupsOf(body: string): Groups | undefined {
+function fieldsOf(body: string): readonly Field[] | undefined {
   let value: unknown
   try {
     value = JSON.parse(body)
@@ -135,36 +126,24 @@ function groupsOf(body: string): Groups | undefined {
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  const system = SYSTEM_KEYS.map((key) => record[key]).find((item) => item !== undefined)
-  const messages = MESSAGE_KEYS.map((key) => record[key]).find((item) => item !== undefined)
-  const used = new Set<string>([...SYSTEM_KEYS, ...MESSAGE_KEYS, "tools"])
-  const rest: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(record)) {
-    if (used.has(key)) continue
-    rest[key] = item
-  }
-  return {
-    system: itemsOf(system),
-    tools: itemsOf(record["tools"]),
-    messages: itemsOf(messages),
-    ...(Object.keys(rest).length === 0 ? {} : { options: canonicalJson(rest) }),
-  }
+  return Object.entries(record).map(([key, item]) =>
+    Array.isArray(item)
+      ? { key, array: true, items: item.map(canonicalJson) }
+      : { key, array: false, items: [canonicalJson(item)] },
+  )
 }
 
-/** 输入：分组；输出：请求结构轮廓（段标识 + 字符数）。 */
-function outlineOf(groups: Groups): readonly CacheDropSegment[] {
+/** 输入：顶层字段；输出：请求结构轮廓（段标识 + 字符数）。 */
+function outlineOf(fields: readonly Field[]): readonly CacheDropSegment[] {
   const segments: CacheDropSegment[] = []
-  groups.system.forEach((text, index) => {
-    segments.push({ key: `system[${index.toString()}]`, chars: Array.from(text).length })
-  })
-  groups.tools.forEach((text, index) => {
-    segments.push({ key: `tools[${index.toString()}]`, chars: Array.from(text).length })
-  })
-  groups.messages.forEach((text, index) => {
-    segments.push({ key: `messages[${index.toString()}]`, chars: Array.from(text).length })
-  })
-  if (groups.options !== undefined) {
-    segments.push({ key: "options", chars: Array.from(groups.options).length })
+  for (const field of fields) {
+    if (!field.array) {
+      segments.push({ key: field.key, chars: Array.from(field.items[0] ?? "").length })
+      continue
+    }
+    field.items.forEach((text, index) => {
+      segments.push({ key: `${field.key}[${index.toString()}]`, chars: Array.from(text).length })
+    })
   }
   return segments
 }
@@ -181,8 +160,8 @@ function requestOf(segment: string, text: string): CacheDropRequest {
 
 /** 输入：原始请求体；输出：请求结构轮廓；解析失败时为空数组。 */
 export function outlineFromBody(body: string): readonly CacheDropSegment[] {
-  const groups = groupsOf(body)
-  return groups === undefined ? [] : outlineOf(groups)
+  const fields = fieldsOf(body)
+  return fields === undefined ? [] : outlineOf(fields)
 }
 
 /** 输入：整段原始请求；输出：可直接展示的请求片段；用于没有断点的 unknown 记录。 */
@@ -212,134 +191,120 @@ function excerptOf(segment: string, prevText: string, nextText: string, offset: 
   }
 }
 
-/** 输入：两侧同一位置的段列表；输出：该组是否变化及断点。 */
-function diffGroup(
-  prev: readonly string[],
-  next: readonly string[],
-  kind: "system" | "tools",
-): { readonly breakPoint: CacheDropBreak; readonly text: string } | undefined {
-  const limit = Math.min(prev.length, next.length)
-  for (let index = 0; index < limit; index += 1) {
-    const left = prev[index]
-    const right = next[index]
-    if (left === undefined || right === undefined || left === right) continue
-    return {
-      breakPoint: excerptOf(`${kind}[${index.toString()}]`, left, right, firstDifference(Array.from(left), Array.from(right))),
-      text: right,
-    }
+/** 输入：字段 + 段内下标；输出：段标识（`messages[3]` / `system`）。 */
+function segmentName(field: Field, index: number): string {
+  return field.array ? `${field.key}[${index.toString()}]` : field.key
+}
+
+/**
+ * 输入：变化的字段 + 是否窗口后移。
+ * 输出：缓存突变归类。
+ * 预期：只按字段语义判断，不依赖厂商协议名；未知标量归为请求参数。
+ */
+function causeOf(field: Field, windowShift: boolean): CacheDropCause {
+  const name = field.key.toLowerCase()
+  if (name.includes("tool")) return "tools"
+  if (name.includes("system") || name.includes("instruction") || name.includes("prompt")) return "system"
+  if (field.array) return windowShift ? "window" : "history"
+  return "params"
+}
+
+/** 输入：两侧字段；输出：首条数组字段的首项是否是上一轮更靠后的某项（窗口后移）。 */
+function isWindowShift(prev: readonly Field[], next: readonly Field[]): boolean {
+  const field = next.find((item) => item.array)
+  if (field === undefined) return false
+  const first = field.items[0]
+  if (first === undefined) return false
+  const before = prev.find((item) => item.key === field.key)
+  if (before === undefined) return false
+  return before.items.findIndex((item) => item === first) > 0
+}
+
+/** 输入：段标识 + 两侧原文；输出：新增/删除段的断点（偏移固定为 0）。 */
+function edgeBreak(segment: string, before: string, after: string): CacheDropBreak {
+  return {
+    segment,
+    offset: 0,
+    before: Array.from(before).slice(0, EXCERPT_LENGTH).join(""),
+    after: Array.from(after).slice(0, EXCERPT_LENGTH).join(""),
   }
-  if (prev.length === next.length) return undefined
-  const index = limit
-  const left = prev[index]
-  const right = next[index]
-  if (left !== undefined) {
-    return {
-      breakPoint: {
-        segment: `${kind}[${index.toString()}]`,
-        offset: 0,
-        before: Array.from(left).slice(0, EXCERPT_LENGTH).join(""),
-        after: "",
-      },
-      text: left,
-    }
-  }
-  if (right !== undefined) {
-    return {
-      breakPoint: {
-        segment: `${kind}[${index.toString()}]`,
-        offset: 0,
-        before: "",
-        after: Array.from(right).slice(0, EXCERPT_LENGTH).join(""),
-      },
-      text: right,
-    }
-  }
-  return undefined
 }
 
 /**
  * 输入：上一轮与这一轮的原始请求体。
  * 输出：首个差异归类、断点摘录、当前请求轮廓与断点段原文。
- * 预期：只在消息组判断窗口后移；解析失败时不声称有断点。
+ * 预期：按顶层字段逐段对比（数组逐元素），不认协议名；解析失败时不声称有断点。
  */
 export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
-  const prev = groupsOf(prevBody)
-  const next = groupsOf(nextBody)
+  const prev = fieldsOf(prevBody)
+  const next = fieldsOf(nextBody)
   if (prev === undefined || next === undefined) return { cause: "none", outline: [] }
   const outline = outlineOf(next)
+  const prevByKey = new Map(prev.map((field) => [field.key, field] as const))
+  const nextByKey = new Map(next.map((field) => [field.key, field] as const))
+  const windowShift = isWindowShift(prev, next)
+  let grew = false
 
-  const system = diffGroup(prev.system, next.system, "system")
-  if (system !== undefined) {
-    return {
-      cause: "system",
-      breakPoint: system.breakPoint,
-      outline,
-      request: requestOf(system.breakPoint.segment, system.text),
+  for (const field of next) {
+    const before = prevByKey.get(field.key)
+    if (before === undefined) {
+      const first = field.items[0]
+      if (first === undefined) continue
+      const segment = segmentName(field, 0)
+      return {
+        cause: causeOf(field, windowShift),
+        breakPoint: edgeBreak(segment, "", first),
+        outline,
+        request: requestOf(segment, first),
+      }
     }
+    const limit = Math.min(before.items.length, field.items.length)
+    for (let index = 0; index < limit; index += 1) {
+      const left = before.items[index]
+      const right = field.items[index]
+      if (left === undefined || right === undefined || left === right) continue
+      const segment = segmentName(field, index)
+      return {
+        cause: causeOf(field, windowShift),
+        breakPoint: excerptOf(segment, left, right, firstDifference(Array.from(left), Array.from(right))),
+        outline,
+        request: requestOf(segment, right),
+      }
+    }
+    if (field.items.length > before.items.length) grew = true
   }
 
-  const tools = diffGroup(prev.tools, next.tools, "tools")
-  if (tools !== undefined) {
+  // 整段字段消失：按请求顺序报第一个缺失字段。
+  for (const field of prev) {
+    if (nextByKey.has(field.key)) continue
+    const removed = field.items[0]
+    if (removed === undefined) continue
+    const segment = segmentName(field, 0)
     return {
-      cause: "tools",
-      breakPoint: tools.breakPoint,
-      outline,
-      request: requestOf(tools.breakPoint.segment, tools.text),
-    }
-  }
-
-  const windowShift = isWindowShift(prev.messages, next.messages)
-  const limit = Math.min(prev.messages.length, next.messages.length)
-  for (let index = 0; index < limit; index += 1) {
-    const left = prev.messages[index]
-    const right = next.messages[index]
-    if (left === undefined || right === undefined || left === right) continue
-    const segment = `messages[${index.toString()}]`
-    return {
-      cause: windowShift ? "window" : "history",
-      breakPoint: excerptOf(segment, left, right, firstDifference(Array.from(left), Array.from(right))),
-      outline,
-      request: requestOf(segment, right),
-    }
-  }
-
-  if (prev.messages.length < next.messages.length) return { cause: "append", outline }
-  if (prev.messages.length > next.messages.length) {
-    const index = next.messages.length
-    const removed = prev.messages[index]
-    if (removed === undefined) return { cause: "history", outline }
-    const segment = `messages[${index.toString()}]`
-    return {
-      cause: "history",
-      breakPoint: {
-        segment,
-        offset: 0,
-        before: Array.from(removed).slice(0, EXCERPT_LENGTH).join(""),
-        after: "",
-      },
+      cause: causeOf(field, false),
+      breakPoint: edgeBreak(segment, removed, ""),
       outline,
       request: requestOf(segment, removed),
     }
   }
 
-  if (prev.options !== next.options) {
-    const before = prev.options ?? ""
-    const after = next.options ?? ""
+  // 同一字段尾部被截断。
+  for (const field of next) {
+    const before = prevByKey.get(field.key)
+    if (before === undefined || before.items.length <= field.items.length) continue
+    const removed = before.items[field.items.length]
+    if (removed === undefined) continue
+    const segment = segmentName(field, field.items.length)
     return {
-      cause: "params",
-      breakPoint: excerptOf("options", before, after, firstDifference(Array.from(before), Array.from(after))),
+      cause: causeOf(field, windowShift),
+      breakPoint: edgeBreak(segment, removed, ""),
       outline,
-      request: requestOf("options", after),
+      request: requestOf(segment, removed),
     }
   }
-  return { cause: "none", outline }
-}
 
-/** 输入：两轮消息组；输出：这一轮的首条消息是否是上一轮更靠后的某条（窗口后移）。 */
-function isWindowShift(prev: readonly string[], next: readonly string[]): boolean {
-  const first = next[0]
-  if (first === undefined) return false
-  return prev.findIndex((item) => item === first) > 0
+  if (grew) return { cause: "append", outline }
+  return { cause: "none", outline }
 }
 
 /** 输入：上一轮与这一轮的命中率（0..100）；输出：跌幅（百分点），保留两位小数。 */

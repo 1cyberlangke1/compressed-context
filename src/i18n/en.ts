@@ -25,7 +25,7 @@ export const en: Messages = {
   drops: {
     title: "Cache drops",
     panelTitle: "Cache drop records",
-    more: (count) => `${count.toString()} more`,
+    more: (count) => `${count.toString()} more, click any row to see all`,
     empty: "No cache drop reached the threshold",
     break: "Break",
     prev: "Prev",

@@ -96,7 +96,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
       cause: "system",
       dropPp: 50,
     })
-    expect(history.drops[0]?.breakPoint?.segment).toBe("system[0]")
+    expect(history.drops[0]?.breakPoint?.segment).toBe("system")
   })
 
   it("开关关闭时不抓报文、不写突变记录，但样本照常记录", async () => {
@@ -161,7 +161,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     const history = await loadCacheHistory(storage, "ses_a")
     expect(history.drops).toHaveLength(1)
     expect(history.drops[0]).toMatchObject({ messageID: "m3", prevMessageID: "m2", cause: "system" })
-    expect(history.drops[0]?.breakPoint?.segment).toBe("system[0]")
+    expect(history.drops[0]?.breakPoint?.segment).toBe("system")
   })
 
   it("同目录父会话与子代理会话的记录完全隔离", async () => {
@@ -254,8 +254,8 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
       cause: "system",
       model: "fake/model",
     })
-    expect(history.drops[0]?.outline?.some((segment) => segment.key === "system[0]")).toBe(true)
-    expect(history.drops[0]?.request?.segment).toBe("system[0]")
+    expect(history.drops[0]?.outline?.some((segment) => segment.key === "system")).toBe(true)
+    expect(history.drops[0]?.request?.segment).toBe("system")
     expect(history.drops[1]).toMatchObject({
       messageID: "generate:2",
       kind: "generate",
@@ -263,7 +263,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
       model: "fake/model",
       dropPp: 40,
     })
-    expect(history.drops[1]?.request?.segment).toBe("system[0]")
+    expect(history.drops[1]?.request?.segment).toBe("system")
   })
 
   it("跨请求类型也强制对比上一份报文，仍然落盘", async () => {
@@ -288,6 +288,6 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     const history = await loadCacheHistory(storage, "ses_a")
     expect(history.drops).toHaveLength(1)
     expect(history.drops[0]).toMatchObject({ kind: "compaction", cause: "system" })
-    expect(history.drops[0]?.breakPoint?.segment).toBe("system[0]")
+    expect(history.drops[0]?.breakPoint?.segment).toBe("system")
   })
 })

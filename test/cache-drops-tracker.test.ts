@@ -131,7 +131,7 @@ describe("planCacheDrop 的对比判定", () => {
     expect(result?.cause).toBe("system")
     expect(result?.dropPp).toBe(50)
     expect(result?.prevMessageID).toBe("msg_1")
-    expect(result?.breakPoint?.segment).toBe("system[0]")
+    expect(result?.breakPoint?.segment).toBe("system")
   })
 
   it("上一轮报文与样本 ID 对不上时仍强制对比上一份报文", () => {
@@ -145,7 +145,7 @@ describe("planCacheDrop 的对比判定", () => {
       threshold: 10,
     })
     expect(result?.cause).toBe("system")
-    expect(result?.breakPoint?.segment).toBe("system[0]")
+    expect(result?.breakPoint?.segment).toBe("system")
     expect(result?.prevMessageID).toBe("msg_1")
   })
 
