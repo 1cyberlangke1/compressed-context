@@ -42,11 +42,6 @@ export function isExactKey(key: string): boolean {
   return key.includes("/")
 }
 
-/** 输入：一条覆盖；输出：覆盖了几个字段。 */
-export function overrideCount(override: ModelOverride | undefined): number {
-  return override === undefined ? 0 : Object.keys(override).length
-}
-
 /** 输入：模型列表；输出：去重后的条目，保持原顺序。 */
 export function toEntries(models: readonly ModelEntry[]): readonly ModelEntry[] {
   const seen = new Set<string>()

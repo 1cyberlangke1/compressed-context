@@ -161,25 +161,6 @@ export function emptyBuckets(): Record<BucketName, number> {
   }
 }
 
-/** 输入：桶计数（可能来自存储）；输出：补齐缺失键的计数；预期：非法值按 0 处理。 */
-export function normalizeBuckets(value: unknown): Record<BucketName, number> {
-  const result = emptyBuckets()
-  if (typeof value !== "object" || value === null) return result
-  const record = value as Record<string, unknown>
-  for (const name of BUCKET_NAMES) {
-    const raw = record[name]
-    if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) result[name] = raw
-  }
-  return result
-}
-
-/** 输入：两个桶计数；输出：逐项相加的结果。 */
-export function addBuckets(a: BucketCounts, b: BucketCounts): Record<BucketName, number> {
-  const result = emptyBuckets()
-  for (const name of BUCKET_NAMES) result[name] = a[name] + b[name]
-  return result
-}
-
 /** 输入：桶名；输出：该维系数的合法区间（相对先验的一半到两倍）。 */
 export function bucketBand(name: BucketName): { readonly lo: number; readonly hi: number } {
   const prior = DEFAULT_BUCKET_COEFS[name]

@@ -135,9 +135,6 @@ export interface Messages {
     readonly overrideResetAll: string
     readonly overrideDelete: string
     readonly calibration: string
-    readonly calibrationCjk: string
-    readonly calibrationAscii: string
-    readonly calibrationReset: string
     readonly calibrationHint: string
     readonly calibrationInvalid: string
     readonly calibrationUnset: string
@@ -146,6 +143,21 @@ export interface Messages {
     readonly calibrationScopeUnset: string
     readonly calibrationResetExact: string
     readonly calibrationResetModel: string
+    readonly calibrationBuckets: {
+      readonly cjk: string
+      readonly latin: string
+      readonly other: string
+      readonly num: string
+      readonly ws: string
+      readonly asciiPunct: string
+      readonly punctRun: string
+      readonly word2: string
+      readonly word35: string
+      readonly word68: string
+      readonly longChars: string
+      readonly camel: string
+      readonly caps: string
+    }
     readonly modelConfigured: string
     readonly overrideInheritAction: string
     readonly overrideCustom: string

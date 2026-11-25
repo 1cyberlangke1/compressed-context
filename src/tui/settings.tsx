@@ -841,7 +841,7 @@ export function SettingsCommand(props: {
         scope === "exact" ? copy().settings.calibrationExactScope : copy().settings.calibrationModelScope
       }`,
       options: BUCKET_NAMES.map((name, index) => ({
-        title: name,
+        title: copy().settings.calibrationBuckets[name],
         value: name,
         footer: (values[index] ?? 0).toFixed(3),
       })),
@@ -853,7 +853,7 @@ export function SettingsCommand(props: {
       <CoefDialog
         context={props.context}
         copy={copy()}
-        title={bucket}
+        title={copy().settings.calibrationBuckets[bucket]}
         hint={copy().settings.calibrationHint}
         invalid={copy().settings.calibrationInvalid}
         initial={(values[index] ?? 0).toFixed(3)}
