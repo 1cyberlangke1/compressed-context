@@ -30,9 +30,11 @@ export const en: Messages = {
     break: "Break",
     prev: "Prev",
     cur: "Now",
-    was: "Was",
-    now: "Now",
     hint: (threshold, max) => `Same-session hit rate drop ≥${threshold.toString()}pp · up to ${max.toString()} records`,
+    spark: "old → new",
+    footer: "Click a record to switch · esc closes",
+    closeLabel: "esc",
+    noSession: "Not in a session, cannot inspect cache drops",
     command: {
       title: "Cache drop records",
       description: "Inspect this session's hit-rate drops and prefix breakpoints",

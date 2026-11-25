@@ -43,7 +43,13 @@ export default Plugin.define({
       maxAgeMs: effectiveDecompressTempMaxAgeHours(initialSettings) * 60 * 60 * 1000,
     })
 
-    /** 输入：sessionID；输出：无；预期：会话空闲/删除时清掉进程内统计缓存与请求追踪。 */
+    /** 输入：sessionID；输出：无；预期：会话空闲时丢掉没等到 usage 的 pending，保留上一份报文。 */
+    const clearSessionMemory = (sessionID: string): void => {
+      published.delete(sessionID)
+      dropTracker().clearPending(sessionID)
+    }
+
+    /** 输入：sessionID；输出：无；预期：会话删除时清掉进程内全部状态。 */
     const forgetMemory = (sessionID: string): void => {
       published.delete(sessionID)
       dropTracker().forget(sessionID)
@@ -65,7 +71,7 @@ export default Plugin.define({
       }),
     )
     const stopEvents = startSessionEvents(ctx, {
-      onSessionIdle: forgetMemory,
+      onSessionIdle: clearSessionMemory,
       onSessionDeleted: forgetMemory,
       onStepEnded: ({ sessionID, messageID, tokens }) =>
         void (async () => {
@@ -184,7 +190,12 @@ export default Plugin.define({
         if (await isSubagentSession(ctx, event.sessionID)) return
         try {
           const body = await event.request.clone().text()
-          dropTracker().capture(event.sessionID, { body, at: Date.now(), kind: event.kind })
+          dropTracker().capture(event.sessionID, {
+            body,
+            at: Date.now(),
+            kind: event.kind,
+            model: `${event.model.providerID}/${event.model.id}`,
+          })
         } catch {
           // 请求体读失败只影响这条记录，不影响真正发出去的请求。
         }

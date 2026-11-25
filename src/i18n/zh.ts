@@ -30,9 +30,11 @@ export const zh: Messages = {
     break: "断点",
     prev: "上条",
     cur: "本条",
-    was: "原来",
-    now: "现在",
     hint: (threshold, max) => `同会话命中率下降 ≥${threshold.toString()}pp 才记录 · 最多 ${max.toString()} 条`,
+    spark: "旧 → 新",
+    footer: "点列表切换记录 · esc 关闭",
+    closeLabel: "esc",
+    noSession: "当前不在会话里，无法查看缓存突变",
     command: {
       title: "缓存突变记录",
       description: "查看本会话的缓存命中率跌幅与断点",

@@ -1,13 +1,13 @@
 /**
  * 缓存突变的进程内状态：保存每个会话最近一次「发给上游的原始请求」。
  *
- * 「上一个请求」的判定必须按 assistant messageID 对齐，不能按时间、也不能按
- * 缓存历史数组里的相邻位置：重试、失败、原生压缩都会让时间顺序和 step 顺序错位。
+ * 「上一个请求」的判定：只要有上一份抓到的报文就直接对比，不要求 messageID
+ * 对齐、也不要求请求类型相同——总有一次请求可以对照，面板要能指出到底哪一段变了。
  * 规则：
- * 1. `http.request` 只抓 `kind=primary` 的请求体；同一 step 重试时后一次覆盖前一次。
- * 2. `step.ended` 时把抓到的请求消费掉，并记下它对应的 messageID。
- * 3. 只有「上一条样本的 messageID == 上一次消费的 messageID」时才做前缀对比；
- *    对不上就记 `unknown`，绝不拿两条不相邻的报文硬比。
+ * 1. `http.request` 抓所有非子代理请求的请求体；同一 step 重试时后一次覆盖前一次。
+ * 2. `step.ended` / usage 已知时把抓到的请求消费掉，并记下它对应的 ID。
+ * 3. 对比对象是「上一次消费的那份报文」，而不是缓存样本数组里的相邻位置。
+ *    没有上一份报文时才记 `unknown`，但仍保存当前请求的结构与原文。
  */
 
 import type { CacheSample } from "../shared/cache.ts"
@@ -26,6 +26,8 @@ export interface CapturedRequest {
   readonly body: string
   readonly at: number
   readonly kind: CacheRequestKind
+  /** `providerID/modelID`；用于面板显示这次请求是哪个模型发的。 */
+  readonly model?: string
 }
 
 /** 已消费的请求：补上它对应的 assistant messageID。 */
@@ -41,18 +43,22 @@ export interface RequestPair {
 
 /** 会话级请求追踪器；生产环境挂 globalThis，测试可独立创建。 */
 export interface DropTracker {
-  /** 输入：sessionID + 原始请求；输出：无；预期：同会话覆盖，超过上限直接丢弃。 */
+  /** 输入：sessionID + 原始请求；输出：无；预期：同会话覆盖，超过上限只留开头预览。 */
   capture(sessionID: string, request: CapturedRequest): void
   /** 输入：sessionID + 本条 messageID；输出：本轮与上一轮报文，并推进内部状态。 */
   consume(sessionID: string, messageID: string): RequestPair
+  /** 输入：sessionID；输出：无；预期：丢弃没等到 usage 的 pending，保留上一份报文继续跨回合对比。 */
+  clearPending(sessionID: string): void
   /** 输入：sessionID；输出：无；预期：删会话或关闭功能时清掉全部状态。 */
   forget(sessionID: string): void
   /** 输出：当前持有状态的会话数；用于测试与排障。 */
   size(): number
 }
 
-/** 单份请求体上限；超过就不留了，避免 1M 上下文把内存吃穿。 */
-export const MAX_BODY_CHARS = 8 * 1024 * 1024
+/** 单份请求体上限；超过就只留开头一段用于展示，避免 1M 上下文把内存吃穿。 */
+export const MAX_BODY_CHARS = 2 * 1024 * 1024
+/** 超限报文保留的开头长度；与面板断点原文上限一致，够看清是哪段。 */
+const OVERSIZE_PREVIEW_CHARS = 2_400
 
 /** 输入：无；输出：新的独立追踪器。预期：测试用，生产走 `dropTracker()`。 */
 export function createDropTracker(): DropTracker {
@@ -60,22 +66,24 @@ export function createDropTracker(): DropTracker {
   const previous = new Map<string, ConsumedRequest>()
   return {
     capture(sessionID, request) {
-      if (request.body.length > MAX_BODY_CHARS) {
-        pending.delete(sessionID)
-        return
-      }
-      pending.set(sessionID, request)
+      // 超出上限时不整份丢：只保留开头，至少能让面板显示「这次的请求长什么样」。
+      const body =
+        request.body.length > MAX_BODY_CHARS ? request.body.slice(0, OVERSIZE_PREVIEW_CHARS) : request.body
+      pending.set(sessionID, { ...request, body })
     },
     consume(sessionID, messageID) {
       const current = pending.get(sessionID)
       pending.delete(sessionID)
       const prev = previous.get(sessionID)
-      // 即使本轮没抓到报文，也只在抓到时才推进 previous，避免用两条不相邻的报文对比。
+      // 只在抓到报文时推进 previous，避免把「没抓到的空轮」当成新基准。
       if (current !== undefined) previous.set(sessionID, { ...current, messageID })
       return {
         ...(current === undefined ? {} : { current }),
         ...(prev === undefined ? {} : { previous: prev }),
       }
+    },
+    clearPending(sessionID) {
+      pending.delete(sessionID)
     },
     forget(sessionID) {
       pending.delete(sessionID)
@@ -103,7 +111,7 @@ export function dropTracker(): DropTracker {
 /**
  * 输入：上一条样本 + 本条样本 + 报文对 + 阈值 + 本次请求类型。
  * 输出：达到阈值时返回记录；否则 undefined。
- * 预期：跌幅按百分点比较，只记下降；报文对不上时记 `unknown`，不猜断点。
+ * 预期：跌幅按百分点比较，只记下降；有上一份报文就强制对比，没有才记 `unknown`。
  */
 export function planCacheDrop(input: {
   readonly previousSample: CacheSample
@@ -115,12 +123,14 @@ export function planCacheDrop(input: {
 }): CacheDrop | undefined {
   const dropPp = dropPercent(input.previousSample.hitRate, input.sample.hitRate)
   if (dropPp < input.threshold) return undefined
-  const diff = comparePair(input.pair, input.previousSample.messageID)
+  const diff = comparePair(input.pair)
+  // primary 请求没有单独的模型参数：从抓到的报文元数据里取。
+  const model = input.model ?? input.pair.current?.model
   return {
     messageID: input.sample.messageID,
     at: input.sample.at,
     kind: input.kind,
-    ...(input.model === undefined ? {} : { model: input.model }),
+    ...(model === undefined ? {} : { model }),
     prevMessageID: input.previousSample.messageID,
     prompt: input.sample.input,
     hit: input.sample.cached,
@@ -137,19 +147,24 @@ export function planCacheDrop(input: {
 }
 
 /**
- * 输入：报文对 + 上一条样本的 messageID。
- * 输出：同一种请求类型的相邻两轮才做前缀对比；否则记 unknown。
- * 预期：unknown 时仍保留当前请求的结构轮廓与原文预览，便于面板展示「原始请求」。
+ * 输入：报文对。
+ * 输出：与上一份抓到的报文的差异；没有上一份报文时记 unknown。
+ * 预期：两份报文总是强制对比（不检查 messageID / 请求类型）；
+ *       只要当前报文存在，就一定带上原始请求原文，面板不会有「没有可展示的请求」。
  */
-function comparePair(pair: RequestPair, previousMessageID: string): RequestDiff {
+function comparePair(pair: RequestPair): RequestDiff {
   const current = pair.current
   if (current === undefined) return { cause: "unknown", outline: [] }
+  const outline = outlineFromBody(current.body)
   const previous = pair.previous
   if (previous === undefined) {
-    return { cause: "unknown", outline: outlineFromBody(current.body), request: requestPreview(current.body) }
+    return { cause: "unknown", outline, request: requestPreview(current.body) }
   }
-  if (previous.kind !== current.kind || previous.messageID !== previousMessageID) {
-    return { cause: "unknown", outline: outlineFromBody(current.body), request: requestPreview(current.body) }
+  const diff = diffRequests(previous.body, current.body)
+  return {
+    cause: diff.cause,
+    ...(diff.breakPoint === undefined ? {} : { breakPoint: diff.breakPoint }),
+    outline: diff.outline.length === 0 ? outline : diff.outline,
+    request: diff.request ?? requestPreview(current.body),
   }
-  return diffRequests(previous.body, current.body)
 }

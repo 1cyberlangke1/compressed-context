@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
-import { createSignal, Show, type Component } from "solid-js"
+import { type Component } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 
 import { errorText } from "../shared/error-text.ts"
@@ -11,7 +11,7 @@ import { applySettingsMutation, snapshotSettings } from "./settings-draft.ts"
 import { maybePromptNativeCompaction } from "./native-compaction-dialog.ts"
 import { CachePanel, ModelPanel, Panel, SummaryPanel } from "./panel/panels.tsx"
 import { DropsCommand } from "./drops-command.tsx"
-import { DropsView } from "./panel/drops-panel.tsx"
+import { DropsDialog } from "./panel/drops-dialog.tsx"
 import { DropsSection } from "./panel/drops.tsx"
 import { SettingsCommand } from "./settings.tsx"
 import type { UpdateSettings } from "./types.ts"
@@ -84,11 +84,17 @@ export default Plugin.define({
       }),
     )
 
-    // 缓存突变分区需要额外的「点行打开面板」回调，单独注册。
-    const [selectedDrop, setSelectedDrop] = createSignal<string | undefined>(undefined)
-    const openDrops = (messageID?: string): void => {
-      setSelectedDrop(messageID)
-      context.ui.panel.open("cache-drops")
+    // 缓存突变走阅读弹窗：点侧栏行预选该条，/cache-drops 打开最新一条。
+    const openDrops = (sessionID: string, messageID?: string): void => {
+      context.ui.dialog.show(() => (
+        <DropsDialog
+          context={context}
+          sessionID={sessionID}
+          settings={settings}
+          {...(messageID === undefined ? {} : { initial: messageID })}
+        />
+      ))
+      context.ui.dialog.set({ size: "xlarge", centered: true })
     }
     disposePanels.push(
       context.ui.slot({
@@ -100,28 +106,12 @@ export default Plugin.define({
             settings={settings}
             updateSettings={updateSettings}
             onOpen={(messageID) => {
-              openDrops(messageID)
+              openDrops(input.sessionID, messageID)
             }}
           />
         ),
       }),
     )
-
-    // 全宽面板：点侧栏某条记录时预选该条；/cache-drops 直接打开最新一条。
-    const disposeDropPanel = context.ui.slot({
-      append: "session.panel",
-      render: (input) => (
-        <Show when={input.name === "cache-drops"}>
-          <DropsView
-            context={context}
-            sessionID={input.sessionID}
-            settings={settings}
-            selected={selectedDrop()}
-            onSelect={setSelectedDrop}
-          />
-        </Show>
-      ),
-    })
 
     const disposeCommand = context.ui.slot({
       append: "app",
@@ -133,8 +123,8 @@ export default Plugin.define({
         <DropsCommand
           context={context}
           settings={settings}
-          onOpen={() => {
-            openDrops()
+          onOpen={(sessionID) => {
+            openDrops(sessionID)
           }}
         />
       ),
@@ -148,7 +138,6 @@ export default Plugin.define({
     return () => {
       offSettingsUpdated()
       for (const dispose of disposePanels) dispose()
-      disposeDropPanel()
       disposeCommand()
       disposeDropsCommand()
     }

@@ -48,11 +48,22 @@ describe("DropTracker", () => {
     expect(empty.previous?.messageID).toBe("msg_1")
   })
 
-  it("超过单份报文上限时直接丢弃 pending，避免吃满内存", () => {
+  it("超过单份报文上限时只保留开头预览，不整份丢", () => {
     const tracker = createDropTracker()
     tracker.capture("s1", { body: request("a"), at: 1, kind: "primary" })
     tracker.capture("s1", { body: "x".repeat(8 * 1024 * 1024 + 1), at: 2, kind: "primary" })
-    expect(tracker.consume("s1", "msg_1").current).toBeUndefined()
+    expect(tracker.consume("s1", "msg_1").current?.body.length).toBeLessThanOrEqual(2_400)
+  })
+
+  it("clearPending 只丢弃没等到 usage 的报文，保留上一份用于跨回合对比", () => {
+    const tracker = createDropTracker()
+    tracker.capture("s1", { body: request("a"), at: 1, kind: "primary" })
+    tracker.consume("s1", "msg_1")
+    tracker.capture("s1", { body: request("b"), at: 2, kind: "primary" })
+    tracker.clearPending("s1")
+    const pair = tracker.consume("s1", "msg_2")
+    expect(pair.current).toBeUndefined()
+    expect(pair.previous?.messageID).toBe("msg_1")
   })
 
   it("forget 清掉某会话全部状态，不影响其它会话", () => {
@@ -98,7 +109,7 @@ describe("DropTracker", () => {
   })
 })
 
-describe("planCacheDrop 的相邻判定", () => {
+describe("planCacheDrop 的对比判定", () => {
   /** 输入：tracker + 两轮报文；输出：可直接交给 planCacheDrop 的报文对。 */
   function pairOf(previousBody: string, currentBody: string, firstID = "msg_1", secondID = "msg_2") {
     const tracker = createDropTracker()
@@ -123,7 +134,7 @@ describe("planCacheDrop 的相邻判定", () => {
     expect(result?.breakPoint?.segment).toBe("system[0]")
   })
 
-  it("上一轮报文对应的不是上一条样本时记为 unknown，绝不硬比", () => {
+  it("上一轮报文与样本 ID 对不上时仍强制对比上一份报文", () => {
     // previous 报文属于 msg_retry，但缓存样本的上一条是 msg_1（中间有失败/重试）。
     const pair = pairOf(request("AAA"), request("AAB"), "msg_retry")
     const result = planCacheDrop({
@@ -133,11 +144,12 @@ describe("planCacheDrop 的相邻判定", () => {
       kind: "primary",
       threshold: 10,
     })
-    expect(result?.cause).toBe("unknown")
-    expect(result?.breakPoint).toBeUndefined()
+    expect(result?.cause).toBe("system")
+    expect(result?.breakPoint?.segment).toBe("system[0]")
+    expect(result?.prevMessageID).toBe("msg_1")
   })
 
-  it("没有上一轮报文时记 unknown", () => {
+  it("没有上一轮报文时记 unknown，但仍保存当前请求原文", () => {
     const tracker = createDropTracker()
     tracker.capture("s1", { body: request("AAB"), at: 2, kind: "primary" })
     const pair = tracker.consume("s1", "msg_2")
@@ -149,6 +161,9 @@ describe("planCacheDrop 的相邻判定", () => {
       threshold: 10,
     })
     expect(result?.cause).toBe("unknown")
+    expect(result?.breakPoint).toBeUndefined()
+    expect(result?.outline?.length).toBeGreaterThan(0)
+    expect(result?.request?.text).toContain("AAB")
   })
 
   it("跌幅未达阈值时不记录", () => {
@@ -194,5 +209,6 @@ describe("planCacheDrop 的相邻判定", () => {
     })
     expect(result?.cause).toBe("append")
     expect(result?.breakPoint).toBeUndefined()
+    expect(result?.request?.segment).toBe("request")
   })
 })

@@ -73,7 +73,7 @@ afterEach(() => {
 })
 
 describe("recordCacheHistoryStep 的缓存突变记录", () => {
-  it("命中率跌幅达到阈值时记录断点，并按 messageID 对齐上一轮", async () => {
+  it("命中率跌幅达到阈值时记录断点，并与上一份报文对比", async () => {
     const directory = tempProject()
     const storage = createStorage()
     const ctx = createContext(directory, storage)
@@ -142,7 +142,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     expect(history.drops[0]?.prevMessageID).toBe("m2")
   })
 
-  it("上一轮报文与上一条样本对不上时记 unknown，不硬比", async () => {
+  it("中间漏抓报文时仍与上一次抓到的报文对比", async () => {
     const directory = tempProject()
     const storage = createStorage()
     const ctx = createContext(directory, storage)
@@ -160,8 +160,8 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
 
     const history = await loadCacheHistory(storage, "ses_a")
     expect(history.drops).toHaveLength(1)
-    expect(history.drops[0]?.cause).toBe("unknown")
-    expect(history.drops[0]?.breakPoint).toBeUndefined()
+    expect(history.drops[0]).toMatchObject({ messageID: "m3", prevMessageID: "m2", cause: "system" })
+    expect(history.drops[0]?.breakPoint?.segment).toBe("system[0]")
   })
 
   it("同目录父会话与子代理会话的记录完全隔离", async () => {
@@ -227,7 +227,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     tracker.capture("ses_a", { body: body("primary-A"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
 
-    // 第一次摘要请求：跨类型没有同类型上一轮，只能记 unknown。
+    // 第一次摘要请求：跨类型也强制与上一份报文对比。
     tracker.capture("ses_a", { body: body("summary-A"), at: 2, kind: "generate" })
     await recordCacheHistoryUsage(ctx, "ses_a", {
       sampleID: "generate:1",
@@ -248,8 +248,14 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     const history = await loadCacheHistory(storage, "ses_a")
     expect(history.samples.map((sample) => sample.messageID)).toEqual(["m1", "generate:1", "generate:2"])
     expect(history.drops).toHaveLength(2)
-    expect(history.drops[0]).toMatchObject({ messageID: "generate:1", kind: "generate", cause: "unknown" })
+    expect(history.drops[0]).toMatchObject({
+      messageID: "generate:1",
+      kind: "generate",
+      cause: "system",
+      model: "fake/model",
+    })
     expect(history.drops[0]?.outline?.some((segment) => segment.key === "system[0]")).toBe(true)
+    expect(history.drops[0]?.request?.segment).toBe("system[0]")
     expect(history.drops[1]).toMatchObject({
       messageID: "generate:2",
       kind: "generate",
@@ -260,7 +266,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     expect(history.drops[1]?.request?.segment).toBe("system[0]")
   })
 
-  it("有跌幅但没有上一轮报文时记 unknown，仍然落盘", async () => {
+  it("跨请求类型也强制对比上一份报文，仍然落盘", async () => {
     const directory = tempProject()
     const storage = createStorage()
     const ctx = createContext(directory, storage)
@@ -271,7 +277,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     tracker.capture("ses_a", { body: body("primary-A"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
 
-    // 只抓到这一轮，没有上一轮可对照。
+    // 上一份抓到的报文是主对话请求，压缩请求仍与它对比。
     tracker.capture("ses_a", { body: body("compaction-A"), at: 2, kind: "compaction" })
     await recordCacheHistoryUsage(ctx, "ses_a", {
       sampleID: "compaction:1",
@@ -281,7 +287,7 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
 
     const history = await loadCacheHistory(storage, "ses_a")
     expect(history.drops).toHaveLength(1)
-    expect(history.drops[0]).toMatchObject({ kind: "compaction", cause: "unknown" })
-    expect(history.drops[0]?.breakPoint).toBeUndefined()
+    expect(history.drops[0]).toMatchObject({ kind: "compaction", cause: "system" })
+    expect(history.drops[0]?.breakPoint?.segment).toBe("system[0]")
   })
 })

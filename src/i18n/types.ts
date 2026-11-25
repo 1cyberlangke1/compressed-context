@@ -28,9 +28,15 @@ export interface Messages {
     readonly break: string
     readonly prev: string
     readonly cur: string
-    readonly was: string
-    readonly now: string
     readonly hint: (threshold: number, max: number) => string
+    /** 火花线右侧的时序说明。 */
+    readonly spark: string
+    /** 弹窗底部操作提示。 */
+    readonly footer: string
+    /** 右上角关闭按钮文案。 */
+    readonly closeLabel: string
+    /** 不在会话里时命令的提示。 */
+    readonly noSession: string
     readonly command: {
       readonly title: string
       readonly description: string

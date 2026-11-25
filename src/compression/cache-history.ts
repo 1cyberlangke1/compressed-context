@@ -57,7 +57,8 @@ export interface CacheUsageInput {
  * 输入：插件上下文 + sessionID + 一次请求的 usage。
  * 输出：无。
  * 预期：同一会话的缓存历史读改写串行；primary / compaction / generate / title
- *       都走这里。命中率跌幅达到阈值时记录突变；没有可对照的报文时 cause=unknown。
+ *       都走这里。命中率跌幅达到阈值时记录突变，并与上一份抓到的报文对比；
+ *       连上一份报文都没有时才记 cause=unknown。
  */
 export async function recordCacheHistoryUsage(
   ctx: Plugin.Context,

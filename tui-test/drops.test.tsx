@@ -7,8 +7,8 @@ import type { JSX } from "solid-js"
 import { resolveMessages } from "../src/i18n/index.ts"
 import type { CacheDrop } from "../src/shared/cache-drops.ts"
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
+import { DropsDialog } from "../src/tui/panel/drops-dialog.tsx"
 import { DropsSection } from "../src/tui/panel/drops.tsx"
-import { DropsView } from "../src/tui/panel/drops-panel.tsx"
 
 const copy = resolveMessages("zh")
 
@@ -96,11 +96,6 @@ function SectionFixture(props: {
   )
 }
 
-/** 输入：app + 文本；输出：该文本所在行号；找不到返回 -1。 */
-function rowOf(app: Awaited<ReturnType<typeof testRender>>, text: string): number {
-  return app.captureCharFrame().split("\n").findIndex((line) => line.includes(text))
-}
-
 describe("DropsSection", () => {
   test("有记录时渲染跌幅、原因与断点", async () => {
     const app = await testRender(
@@ -174,34 +169,33 @@ describe("DropsSection", () => {
   })
 })
 
-/** 输入：记录 + 选中 id + 回调；输出：全宽面板 fixture。 */
-function PanelFixture(props: {
+/** 输入：记录 + 初始选中 id；输出：阅读弹窗内容 fixture。 */
+function DialogFixture(props: {
   readonly drops: readonly CacheDrop[]
-  readonly selected?: string
-  readonly onSelect?: (messageID: string) => void
+  readonly initial?: string
 }) {
   const [settings] = createSignal<Settings>({
     ...DEFAULT_SETTINGS,
     locale: "zh",
     cacheDropsEnabled: true,
+    showCacheDrops: true,
   })
   const context = fakeContext(props.drops, settings)
   return (
-    <DropsView
+    <DropsDialog
       context={context}
       sessionID="ses_a"
       settings={settings()}
-      selected={props.selected}
-      onSelect={props.onSelect ?? (() => undefined)}
+      {...(props.initial === undefined ? {} : { initial: props.initial })}
     />
   )
 }
 
-describe("DropsView", () => {
-  test("渲染列表与 was/now 差异", async () => {
+describe("DropsDialog", () => {
+  test("渲染列表、断点差异与原始请求", async () => {
     const app = await testRender(
-      () => <PanelFixture drops={[drop("m2", 50, "AAAA", "AABA")]} selected="m2" />,
-      { width: 100, height: 30 },
+      () => <DialogFixture drops={[drop("m2", 50, "AAAA", "AABA")]} initial="m2" />,
+      { width: 120, height: 32 },
     )
     app.renderer.start()
     try {
@@ -211,15 +205,16 @@ describe("DropsView", () => {
       expect(frame).toContain(copy.drops.structure)
       expect(frame).toContain(copy.drops.request)
       expect(frame).toContain("AABA")
-      expect(frame).toContain(copy.drops.was)
-      expect(frame).toContain(copy.drops.now)
+      expect(frame).toContain(copy.drops.break)
+      expect(frame).toContain(copy.drops.footer)
+      expect(frame).toContain("esc")
     } finally {
       app.renderer.destroy()
     }
   })
 
   test("空态给出明确提示", async () => {
-    const app = await testRender(() => <PanelFixture drops={[]} />, { width: 100, height: 30 })
+    const app = await testRender(() => <DialogFixture drops={[]} />, { width: 120, height: 32 })
     app.renderer.start()
     try {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.empty))
@@ -229,27 +224,20 @@ describe("DropsView", () => {
     }
   })
 
-  test("点击列表项会切换选中记录", async () => {
-    const selected: string[] = []
+  test("点击列表项会切换详情", async () => {
     const drops = [drop("m1", 20, "AAAA", "AAAB"), drop("m2", 50, "CCCC", "CCCD")]
-    const app = await testRender(
-      () => (
-        <PanelFixture
-          drops={drops}
-          selected="m2"
-          onSelect={(messageID) => {
-            selected.push(messageID)
-          }}
-        />
-      ),
-      { width: 100, height: 30 },
-    )
+    const app = await testRender(() => <DialogFixture drops={drops} initial="m2" />, {
+      width: 120,
+      height: 32,
+    })
     app.renderer.start()
     try {
       const frame = await app.waitForFrame((value) => value.includes("CCCD"))
+      expect(frame).toContain("CCCD")
       const row = frame.split("\n").findIndex((line) => line.includes("-20.0pp"))
-      await app.mockMouse.click(2, row)
-      expect(selected).toEqual(["m1"])
+      await app.mockMouse.click(4, row)
+      const after = await app.waitForFrame((value) => value.includes("AAAB"))
+      expect(after).toContain("AAAB")
     } finally {
       app.renderer.destroy()
     }
