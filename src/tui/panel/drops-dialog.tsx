@@ -171,8 +171,8 @@ export function DropsDialog(props: {
                   <text fg={theme.text.muted} width={11} flexShrink={0}>
                     {copy().drops.kind[drop.kind ?? "unknown"]}
                   </text>
-                  <text fg={theme.text.muted} width={15} flexShrink={0}>
-                    {copy().drops.cause[drop.cause]}
+                  <text fg={theme.text.muted} width={3} flexShrink={0} textAlign="center">
+                    {copy().drops.causeIcon[drop.cause]}
                   </text>
                   <text fg={theme.text.base} flexGrow={1} wrapMode="none">
                     {segmentLabel(drop.breakPoint)}
@@ -221,7 +221,7 @@ function DropDetail(props: {
         <text fg={props.theme.text.base}>
           <b>{props.copy.drops.kind[props.drop.kind ?? "unknown"]}</b>
         </text>
-        <text fg={props.theme.text.muted}>{props.copy.drops.cause[props.drop.cause]}</text>
+        <text fg={props.theme.text.muted}>{`${props.copy.drops.causeIcon[props.drop.cause]} ${props.copy.drops.cause[props.drop.cause]}`}</text>
         <text fg={props.theme.text.muted}>{segmentLabel(props.drop.breakPoint)}</text>
         <Show when={props.drop.model}>
           {(model) => <text fg={props.theme.text.muted}>{model()}</text>}

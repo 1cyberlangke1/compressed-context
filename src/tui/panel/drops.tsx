@@ -105,8 +105,8 @@ export function DropsSection(props: {
                       <text fg={theme.text.muted} width={11} flexShrink={0}>
                         {copy().drops.kind[drop.kind ?? "unknown"]}
                       </text>
-                      <text fg={theme.text.muted} flexShrink={0}>
-                        {copy().drops.cause[drop.cause]}
+                      <text fg={theme.text.muted} width={3} flexShrink={0} textAlign="center">
+                        {copy().drops.causeIcon[drop.cause]}
                       </text>
                       <text fg={theme.text.base} flexGrow={1} wrapMode="none">
                         {segmentLabel(drop.breakPoint)}

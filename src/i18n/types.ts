@@ -64,6 +64,17 @@ export interface Messages {
       readonly none: string
       readonly unknown: string
     }
+    /** 侧栏与列表用的紧凑图标；正文描述仍走 cause。 */
+    readonly causeIcon: {
+      readonly system: string
+      readonly tools: string
+      readonly params: string
+      readonly history: string
+      readonly window: string
+      readonly append: string
+      readonly none: string
+      readonly unknown: string
+    }
   }
   readonly noData: string
   readonly command: {

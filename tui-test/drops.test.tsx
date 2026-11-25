@@ -107,7 +107,7 @@ describe("DropsSection", () => {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.title))
       expect(frame).toContain("(1)")
       expect(frame).toContain("-50.0pp")
-      expect(frame).toContain(copy.drops.cause.system)
+      expect(frame).toContain(copy.drops.causeIcon.system)
       expect(frame).toContain("system[0] +3")
     } finally {
       app.renderer.destroy()
