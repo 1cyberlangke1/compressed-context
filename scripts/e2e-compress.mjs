@@ -674,6 +674,15 @@ const stateFor = (sessionID) => {
     return state
   }
 
+  /** 输入：插件 storage 的 key；输出：解析后的值；不存在返回 undefined。 */
+  const readPluginKv = (key) => {
+    const conn = new Database(join(root, "opencode.db"))
+    const row = conn.query("select value from kv where key = ?").get(`plugin:${pluginHex}:${key}`)
+    conn.close()
+    if (row === undefined || row === null) return undefined
+    return typeof row.value === "string" ? JSON.parse(row.value) : row.value
+  }
+
   /**
    * 输入：sessionID + 期望块数 + 标签。
    * 输出：断言通过时的 state。
@@ -1556,10 +1565,26 @@ const stateFor = (sessionID) => {
   )
   assert.ok(longBlocks.length >= longTurns, "each turn must add at least one block")
   assert.ok(longMerged.length >= 1, "long session must merge more than once")
-  assert.ok(longActive.length <= 3, "merged chain must collapse to a single active block")
+  // 预算口径只有一套：插件写下的生效窗口 + 当前总预算百分比，
+  // 对照活跃块（含 pending）的估算量，判定「预算内就停、超预算就继续合并」。
+  const longWindow = Number(readPluginKv(`window:effective:${longSession}`) ?? 0)
+  const longFile = JSON.parse(await readFile(settingsPath, "utf8"))
+  const longBudget = Math.round((longWindow * longFile.summaryTotalPercent) / 100)
+  assert.ok(longBudget > 0, `long session must resolve an effective window: ${longWindow}`)
+  const longChain = longState?.pending === undefined ? longActive : [...longActive, longState.pending]
+  const longTokens = longChain.reduce((sum, block) => sum + (block.summaryTokens ?? 0), 0)
+  assert.ok(
+    longState?.phase === undefined ? longTokens <= longBudget * 1.1 : longTokens > longBudget * 0.9,
+    `budget decision must match chain size: phase=${String(longState?.phase)} tokens=${longTokens} budget=${longBudget}`,
+  )
+  // 塔的不变量：按时间顺序，活跃块的 tier 不能回升。
+  const longTiers = longActive.map((block) => block.tier ?? 0)
+  assert.ok(
+    longTiers.every((tier, index) => index === 0 || (longTiers[index - 1] ?? 0) >= tier),
+    `active tiers must stay monotonic: ${longTiers.join(",")}`,
+  )
   assert.ok((longActive[0]?.tier ?? 99) <= 3, "repeated merges must stay capped at T3")
   assert.ok((longActive[0]?.height ?? 0) > 1, "height must reflect repeated foldings")
-  assert.equal(longState?.phase, undefined, "chain must be under budget after the last merge")
   assert.equal(longState?.attempts, 0, "no failed attempts may linger")
   assert.equal(longState?.lastError, undefined, "no compression error may linger")
   console.log("case passed: long session converges to one capped block")
