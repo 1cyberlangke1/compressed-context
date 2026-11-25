@@ -1587,7 +1587,7 @@ const stateFor = (sessionID) => {
   assert.ok((longActive[0]?.height ?? 0) > 1, "height must reflect repeated foldings")
   assert.equal(longState?.attempts, 0, "no failed attempts may linger")
   assert.equal(longState?.lastError, undefined, "no compression error may linger")
-  console.log("case passed: long session converges to one capped block")
+  console.log("case passed: long session converges within the summary budget")
 
   // case: 缓存命中历史按会话持久化，最多 10 条
   const mainHistory = await waitForCacheHistory(
