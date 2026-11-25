@@ -20,7 +20,7 @@ export function DropsSection(props: {
   readonly sessionID: string
   readonly settings: Settings
   readonly updateSettings: UpdateSettings
-  readonly onOpen: (messageID: string) => void
+  readonly onOpen: (messageID?: string) => void
 }) {
   const theme = props.context.theme
   const copy = createMemo(() => resolveMessages(localeArgument(props.settings.locale)))
@@ -31,6 +31,7 @@ export function DropsSection(props: {
     scope: "drops",
   })
   const [hovered, setHovered] = createSignal<string | undefined>(undefined)
+  const [moreHovered, setMoreHovered] = createSignal(false)
   const [frame, setFrame] = createSignal(0)
   /** 最新在上，侧栏只取最近 10 条；总数仍在标题里。 */
   const rows = createMemo(() => data.drops().toReversed().slice(0, SIDEBAR_ROWS))
@@ -116,9 +117,23 @@ export function DropsSection(props: {
               </box>
             </scrollbox>
             <Show when={data.drops().length > SIDEBAR_ROWS}>
-              <text fg={theme.text.muted} wrapMode="word">
-                {copy().drops.more(data.drops().length - SIDEBAR_ROWS)}
-              </text>
+              <box
+                height={1}
+                paddingLeft={2}
+                onMouseOver={() => {
+                  setMoreHovered(true)
+                }}
+                onMouseOut={() => {
+                  setMoreHovered(false)
+                }}
+                onMouseUp={() => {
+                  props.onOpen()
+                }}
+              >
+                <text fg={moreHovered() ? theme.text.base : theme.text.muted}>
+                  {copy().drops.more(data.drops().length - SIDEBAR_ROWS)}
+                </text>
+              </box>
             </Show>
           </Show>
         </Show>

@@ -74,7 +74,7 @@ function fakeContext(drops: readonly CacheDrop[], settings: () => Settings): Con
 function SectionFixture(props: {
   readonly initial?: Partial<Settings>
   readonly drops: readonly CacheDrop[]
-  readonly onOpen?: (messageID: string) => void
+  readonly onOpen?: (messageID?: string) => void
 }) {
   const [settings, setSettings] = createSignal<Settings>({ ...DEFAULT_SETTINGS, locale: "zh", ...props.initial })
   const context = fakeContext(props.drops, settings)
@@ -155,6 +155,34 @@ describe("DropsSection", () => {
       expect(frame).toContain("(12)")
       expect(frame).toContain("-12.0pp")
       expect(frame).not.toContain("-1.0pp")
+      // 「还有 2 条」与记录行一样缩进两格。
+      expect(frame.split("\n").some((line) => line.startsWith("  还有 2 条"))).toBe(true)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("点击「还有 N 条」也会打开弹窗", async () => {
+    const many = Array.from({ length: 12 }, (_, index) => drop(`m${index.toString()}`, index + 1, "AAAA", "AABA"))
+    let opened = 0
+    const app = await testRender(
+      () => (
+        <SectionFixture
+          drops={many}
+          initial={{ cacheDropsEnabled: true }}
+          onOpen={() => {
+            opened += 1
+          }}
+        />
+      ),
+      { width: 80, height: 20 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes("还有 2 条"))
+      const row = frame.split("\n").findIndex((line) => line.includes("还有 2 条"))
+      await app.mockMouse.click(3, row)
+      expect(opened).toBe(1)
     } finally {
       app.renderer.destroy()
     }
@@ -168,7 +196,7 @@ describe("DropsSection", () => {
           drops={[drop("m2", 50, "AAAA", "AABA")]}
           initial={{ cacheDropsEnabled: true }}
           onOpen={(messageID) => {
-            opened.push(messageID)
+            if (messageID !== undefined) opened.push(messageID)
           }}
         />
       ),
