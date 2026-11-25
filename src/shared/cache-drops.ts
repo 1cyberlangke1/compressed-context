@@ -69,6 +69,8 @@ export interface CacheDrop {
   readonly appended?: CacheDropBreak
   /** 当前请求的结构轮廓。 */
   readonly outline?: readonly CacheDropSegment[]
+  /** 当前请求的 JSON 层级结构树；旧记录没有。 */
+  readonly tree?: readonly CacheDropNode[]
   /** 断点段的原始文本（截断）。 */
   readonly request?: CacheDropRequest
 }
@@ -83,6 +85,61 @@ interface Field {
   readonly items: readonly string[]
 }
 
+/** 请求结构树的一个节点；只存键名、字符数和子节点，不存内容。 */
+export interface CacheDropNode {
+  readonly key: string
+  readonly chars: number
+  readonly children?: readonly CacheDropNode[]
+}
+
+/** 树最多保留的节点数，防止超大请求把记录撑爆。 */
+export const TREE_MAX_NODES = 200
+/** 树最多展开的 JSON 层级。 */
+export const TREE_MAX_DEPTH = 4
+
+/**
+ * 输入：任意 JSON 值 + 当前层级 + 剩余节点预算。
+ * 输出：这一层的子节点；没有子节点时返回 undefined。
+ * 预期：按 JSON 实际嵌套层级生成，数组元素键是 `[i]`，对象用字段名。
+ */
+function childNodes(
+  value: unknown,
+  depth: number,
+  budget: { left: number },
+): readonly CacheDropNode[] | undefined {
+  if (depth >= TREE_MAX_DEPTH || budget.left <= 0) return undefined
+  const entries: readonly (readonly [string, unknown])[] = Array.isArray(value)
+    ? value.map((item, index) => [`[${index.toString()}]`, item] as const)
+    : typeof value === "object" && value !== null
+      ? Object.entries(value as Record<string, unknown>)
+      : []
+  if (entries.length === 0) return undefined
+  const nodes: CacheDropNode[] = []
+  for (const [key, item] of entries) {
+    if (budget.left <= 0) break
+    budget.left -= 1
+    const children = childNodes(item, depth + 1, budget)
+    nodes.push({
+      key,
+      chars: Array.from(canonicalJson(item)).length,
+      ...(children === undefined ? {} : { children }),
+    })
+  }
+  return nodes.length === 0 ? undefined : nodes
+}
+
+/** 输入：原始请求体；输出：按 JSON 层级展开的结构树；解析失败时为空数组。 */
+export function treeFromBody(body: string): readonly CacheDropNode[] {
+  let value: unknown
+  try {
+    value = JSON.parse(body)
+  } catch {
+    return []
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return []
+  return childNodes(value, 0, { left: TREE_MAX_NODES }) ?? []
+}
+
 /** 一次请求差异的完整结果。 */
 export interface RequestDiff {
   readonly cause: CacheDropCause
@@ -91,6 +148,8 @@ export interface RequestDiff {
   readonly appended?: CacheDropBreak
   /** 当前请求的段轮廓；解析失败时为空数组。 */
   readonly outline: readonly CacheDropSegment[]
+  /** 当前请求的 JSON 层级结构树。 */
+  readonly tree: readonly CacheDropNode[]
   /** 断点段原文；没有断点时缺省。 */
   readonly request?: CacheDropRequest
 }
@@ -242,8 +301,9 @@ function edgeBreak(segment: string, before: string, after: string): CacheDropBre
 export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
   const prev = fieldsOf(prevBody)
   const next = fieldsOf(nextBody)
-  if (prev === undefined || next === undefined) return { cause: "none", outline: [] }
+  if (prev === undefined || next === undefined) return { cause: "none", outline: [], tree: [] }
   const outline = outlineOf(next)
+  const tree = treeFromBody(nextBody)
   const prevByKey = new Map(prev.map((field) => [field.key, field] as const))
   const nextByKey = new Map(next.map((field) => [field.key, field] as const))
   const windowShift = isWindowShift(prev, next)
@@ -259,6 +319,7 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
         cause: causeOf(field, windowShift),
         breakPoint: edgeBreak(segment, "", first),
         outline,
+        tree,
         request: requestOf(segment, first),
       }
     }
@@ -272,6 +333,7 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
         cause: causeOf(field, windowShift),
         breakPoint: excerptOf(segment, left, right, firstDifference(Array.from(left), Array.from(right))),
         outline,
+        tree,
         request: requestOf(segment, right),
       }
     }
@@ -290,6 +352,7 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
       cause: causeOf(field, false),
       breakPoint: edgeBreak(segment, removed, ""),
       outline,
+      tree,
       request: requestOf(segment, removed),
     }
   }
@@ -305,16 +368,18 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
       cause: causeOf(field, windowShift),
       breakPoint: edgeBreak(segment, removed, ""),
       outline,
+      tree,
       request: requestOf(segment, removed),
     }
   }
 
   if (grown !== undefined) {
     const added = grown.field.items[grown.index]
-    if (added === undefined) return { cause: "append", outline }
+    if (added === undefined) return { cause: "append", outline, tree }
     return {
       cause: "append",
       outline,
+      tree,
       appended: {
         segment: segmentName(grown.field, grown.index),
         offset: 0,
@@ -323,7 +388,7 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
       },
     }
   }
-  return { cause: "none", outline }
+  return { cause: "none", outline, tree }
 }
 
 /** 输入：上一轮与这一轮的命中率（0..100）；输出：跌幅（百分点），保留两位小数。 */
@@ -362,6 +427,7 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
   const breakPoint = parseBreak(record["breakPoint"])
   const appended = parseBreak(record["appended"])
   const outline = parseOutline(record["outline"])
+  const tree = parseTree(record["tree"])
   const request = parseRequest(record["request"])
   return {
     messageID,
@@ -380,6 +446,7 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
     ...(breakPoint === undefined ? {} : { breakPoint }),
     ...(appended === undefined ? {} : { appended }),
     ...(outline === undefined ? {} : { outline }),
+    ...(tree === undefined ? {} : { tree }),
     ...(request === undefined ? {} : { request }),
   }
 }
@@ -437,6 +504,23 @@ function parseOutline(value: unknown): readonly CacheDropSegment[] | undefined {
     segments.push({ key, chars })
   }
   return segments.length === 0 ? undefined : segments
+}
+
+/** 输入：任意值；输出：合法结构树或 undefined；非法节点直接丢弃该分支。 */
+function parseTree(value: unknown, depth = 0): readonly CacheDropNode[] | undefined {
+  if (depth > 8 || !Array.isArray(value)) return undefined
+  const nodes: CacheDropNode[] = []
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue
+    const record = item as Record<string, unknown>
+    const key = record["key"]
+    const chars = record["chars"]
+    if (typeof key !== "string" || key.length === 0) continue
+    if (typeof chars !== "number" || !Number.isFinite(chars) || chars < 0) continue
+    const children = parseTree(record["children"], depth + 1)
+    nodes.push({ key, chars, ...(children === undefined ? {} : { children }) })
+  }
+  return nodes.length === 0 ? undefined : nodes
 }
 
 /** 输入：任意值；输出：合法原始请求片段或 undefined。 */

@@ -16,6 +16,7 @@ import {
   dropPercent,
   outlineFromBody,
   requestPreview,
+  treeFromBody,
   type CacheDrop,
   type CacheRequestKind,
   type RequestDiff,
@@ -143,6 +144,7 @@ export function planCacheDrop(input: {
     ...(diff.breakPoint === undefined ? {} : { breakPoint: diff.breakPoint }),
     ...(diff.appended === undefined ? {} : { appended: diff.appended }),
     ...(diff.outline.length === 0 ? {} : { outline: diff.outline }),
+    ...(diff.tree.length === 0 ? {} : { tree: diff.tree }),
     ...(diff.request === undefined ? {} : { request: diff.request }),
   }
 }
@@ -155,17 +157,19 @@ export function planCacheDrop(input: {
  */
 function comparePair(pair: RequestPair): RequestDiff {
   const current = pair.current
-  if (current === undefined) return { cause: "unknown", outline: [] }
+  if (current === undefined) return { cause: "unknown", outline: [], tree: [] }
   const outline = outlineFromBody(current.body)
   const previous = pair.previous
   if (previous === undefined) {
-    return { cause: "unknown", outline, request: requestPreview(current.body) }
+    return { cause: "unknown", outline, tree: treeFromBody(current.body), request: requestPreview(current.body) }
   }
   const diff = diffRequests(previous.body, current.body)
   return {
     cause: diff.cause,
     ...(diff.breakPoint === undefined ? {} : { breakPoint: diff.breakPoint }),
+    ...(diff.appended === undefined ? {} : { appended: diff.appended }),
     outline: diff.outline.length === 0 ? outline : diff.outline,
+    tree: diff.tree.length === 0 ? treeFromBody(current.body) : diff.tree,
     request: diff.request ?? requestPreview(current.body),
   }
 }

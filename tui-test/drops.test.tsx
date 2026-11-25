@@ -338,9 +338,56 @@ describe("DropsDialog", () => {
       expect(opened).toContain("system")
       expect(opened).not.toContain("[0] 10 字符")
       const groupRow = opened.split("\n").findIndex((line) => line.includes("messages (1)"))
-      await app.mockMouse.click(4, groupRow)
+      await app.mockMouse.click(6, groupRow)
       const expanded = await app.waitForFrame((value) => value.includes("[0] 10 字符"))
       expect(expanded).toContain("[0] 10 字符")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("结构树按 JSON 层级逐层缩进展开", async () => {
+    const nested: CacheDrop = {
+      ...drop("m4", 50, "AAAA", "AABA"),
+      tree: [
+        {
+          key: "messages",
+          chars: 120,
+          children: [
+            {
+              key: "[0]",
+              chars: 60,
+              children: [
+                { key: "role", chars: 6 },
+                { key: "content", chars: 20 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const app = await testRender(() => <DialogFixture drops={[nested]} initial="m4" />, {
+      width: 120,
+      height: 32,
+    })
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.structure))
+      const rootRow = frame.split("\n").findIndex((line) => line.includes(copy.drops.structure))
+      await app.mockMouse.click(4, rootRow)
+      const level1 = await app.waitForFrame((value) => value.includes("messages (1)"))
+      expect(level1).not.toContain("[0] (2)")
+      const messagesRow = level1.split("\n").findIndex((line) => line.includes("messages (1)"))
+      await app.mockMouse.click(6, messagesRow)
+      const level2 = await app.waitForFrame((value) => value.includes("[0] (2)"))
+      const indexRow = level2.split("\n").findIndex((line) => line.includes("[0] (2)"))
+      await app.mockMouse.click(8, indexRow)
+      const level3 = await app.waitForFrame((value) => value.includes("content"))
+      const messagesLine = level3.split("\n").find((line) => line.includes("messages (1)")) ?? ""
+      const indexLine = level3.split("\n").find((line) => line.includes("[0] (2)")) ?? ""
+      const roleLine = level3.split("\n").find((line) => line.includes("role")) ?? ""
+      expect(indexLine.indexOf("[0]")).toBeGreaterThan(messagesLine.indexOf("messages"))
+      expect(roleLine.indexOf("role")).toBeGreaterThan(indexLine.indexOf("[0]"))
     } finally {
       app.renderer.destroy()
     }

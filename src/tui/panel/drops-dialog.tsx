@@ -1,9 +1,9 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createMemo, createSignal, For, Show, type Accessor } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
 import { formatHitRate } from "../../shared/cache.ts"
-import type { CacheDrop } from "../../shared/cache-drops.ts"
+import type { CacheDrop, CacheDropNode } from "../../shared/cache-drops.ts"
 import { formatTokens } from "../../shared/format.ts"
 import { localeArgument, type Settings } from "../../shared/settings.ts"
 import { usePanelData } from "./data-scoped.ts"
@@ -194,10 +194,22 @@ function DropDetail(props: {
   const lines = createMemo(() => (props.drop.request === undefined ? [] : prettyRequest(props.drop.request.text)))
   const outline = createMemo(() => props.drop.outline ?? [])
   const groups = createMemo(() => groupOutline(outline()))
+  const tree = createMemo(() => props.drop.tree ?? [])
   const [treeOpen, setTreeOpen] = createSignal(false)
+  const [openPaths, setOpenPaths] = createSignal<ReadonlySet<string>>(new Set())
   const [openGroups, setOpenGroups] = createSignal<ReadonlySet<string>>(new Set())
 
-  /** 输入：字段名；输出：无；预期：单独展开/收起这一层的数组。 */
+  /** 输入：节点路径；输出：无；预期：单独展开/收起这一节点。 */
+  const togglePath = (path: string): void => {
+    setOpenPaths((current) => {
+      const next = new Set(current)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  /** 输入：字段名；输出：无；预期：旧记录回退树里单独展开/收起这一层。 */
   const toggleGroup = (name: string): void => {
     setOpenGroups((current) => {
       const next = new Set(current)
@@ -206,6 +218,7 @@ function DropDetail(props: {
       return next
     })
   }
+
   const excerpt = createMemo(() => {
     const point = props.drop.breakPoint
     if (point === undefined) return undefined
@@ -266,7 +279,7 @@ function DropDetail(props: {
         <text fg={props.theme.text.muted}>{props.copy.drops.noBreak}</text>
       </Show>
 
-      <Show when={groups().length > 0}>
+      <Show when={groups().length > 0 || tree().length > 0}>
         <box flexDirection="column" width="100%">
           <box
             flexDirection="row"
@@ -280,43 +293,64 @@ function DropDetail(props: {
             <text fg={props.theme.text.muted}>{props.copy.drops.structure}</text>
           </box>
           <Show when={treeOpen()}>
-            <For each={groups()}>
-              {(group) => (
-                <box flexDirection="column" width="100%">
-                  <Show
-                    when={group.array}
-                    fallback={
-                      <text fg={props.theme.text.base} wrapMode="word">
-                        {`${group.name} ${props.copy.drops.chars((group.leaves[0]?.chars ?? 0).toLocaleString())}`}
-                      </text>
-                    }
-                  >
-                    <box
-                      flexDirection="row"
-                      height={1}
-                      gap={1}
-                      onMouseDown={() => {
-                        toggleGroup(group.name)
-                      }}
-                    >
-                      <text fg={props.theme.text.base}>
-                        {openGroups().has(group.name) ? "▼" : "▶"}
-                      </text>
-                      <text fg={props.theme.text.base}>{`${group.name} (${group.leaves.length.toString()})`}</text>
-                    </box>
-                    <Show when={openGroups().has(group.name)}>
-                      <For each={group.leaves}>
-                        {(leaf) => (
-                          <text fg={props.theme.text.muted} wrapMode="word">
-                            {`  ${leaf.label} ${props.copy.drops.chars(leaf.chars.toLocaleString())}`}
+            <Show
+              when={tree().length > 0}
+              fallback={
+                <For each={groups()}>
+                  {(group) => (
+                    <box flexDirection="column" width="100%" paddingLeft={2}>
+                      <Show
+                        when={group.array}
+                        fallback={
+                          <text fg={props.theme.text.base} wrapMode="word">
+                            {`${group.name} ${props.copy.drops.chars((group.leaves[0]?.chars ?? 0).toLocaleString())}`}
                           </text>
-                        )}
-                      </For>
-                    </Show>
-                  </Show>
-                </box>
-              )}
-            </For>
+                        }
+                      >
+                        <box
+                          flexDirection="row"
+                          height={1}
+                          gap={1}
+                          onMouseDown={() => {
+                            toggleGroup(group.name)
+                          }}
+                        >
+                          <text fg={props.theme.text.base}>
+                            {openGroups().has(group.name) ? "▼" : "▶"}
+                          </text>
+                          <text fg={props.theme.text.base}>{`${group.name} (${group.leaves.length.toString()})`}</text>
+                        </box>
+                        <Show when={openGroups().has(group.name)}>
+                          <For each={group.leaves}>
+                            {(leaf) => (
+                              <box paddingLeft={2} width="100%">
+                                <text fg={props.theme.text.muted} wrapMode="word">
+                                  {`${leaf.label} ${props.copy.drops.chars(leaf.chars.toLocaleString())}`}
+                                </text>
+                              </box>
+                            )}
+                          </For>
+                        </Show>
+                      </Show>
+                    </box>
+                  )}
+                </For>
+              }
+            >
+              <For each={tree()}>
+                {(node, index) => (
+                  <TreeNode
+                    node={node}
+                    path={index().toString()}
+                    depth={1}
+                    open={openPaths}
+                    toggle={togglePath}
+                    theme={props.theme}
+                    copy={props.copy}
+                  />
+                )}
+              </For>
+            </Show>
           </Show>
         </box>
       </Show>
@@ -343,6 +377,66 @@ function DropDetail(props: {
             </For>
           </box>
         )}
+      </Show>
+    </box>
+  )
+}
+
+/**
+ * 输入：结构节点 + 深度 + 路径 + 展开集合。
+ * 输出：按 JSON 层级缩进的一行；有子节点的行可点击逐层展开。
+ * 预期：默认全部收起；子节点比父节点多缩进两格。
+ */
+function TreeNode(props: {
+  readonly node: CacheDropNode
+  readonly path: string
+  readonly depth: number
+  readonly open: Accessor<ReadonlySet<string>>
+  readonly toggle: (path: string) => void
+  readonly theme: Context["theme"]
+  readonly copy: ReturnType<typeof resolveMessages>
+}) {
+  const children = () => props.node.children ?? []
+  const opened = () => props.open().has(props.path)
+  const hasChildren = () => children().length > 0
+  return (
+    <box flexDirection="column" width="100%">
+      <box
+        flexDirection="row"
+        height={1}
+        gap={1}
+        paddingLeft={props.depth * 2}
+        onMouseDown={() => {
+          if (hasChildren()) props.toggle(props.path)
+        }}
+      >
+        <text fg={props.theme.text.base}>{hasChildren() ? (opened() ? "▼" : "▶") : " "}</text>
+        <text fg={props.theme.text.base} wrapMode="none">
+          {props.node.key}
+        </text>
+        <Show
+          when={hasChildren()}
+          fallback={
+            <text fg={props.theme.text.muted}>{props.copy.drops.chars(props.node.chars.toLocaleString())}</text>
+          }
+        >
+          <text fg={props.theme.text.muted}>{`(${children().length.toString()})`}</text>
+        </Show>
+      </box>
+      <Show when={opened()}>
+        <For each={children()}>
+          {(child, index) => (
+            <TreeNode
+              node={child}
+              path={`${props.path}/${index().toString()}`}
+              depth={props.depth + 1}
+              open={props.open}
+              toggle={props.toggle}
+              theme={props.theme}
+              copy={props.copy}
+            />
+          )}
+        </For>
       </Show>
     </box>
   )

@@ -6,6 +6,7 @@ import {
   diffRequests,
   dropPercent,
   parseCacheDrops,
+  treeFromBody,
   type CacheDrop,
 } from "../src/shared/cache-drops.ts"
 
@@ -133,6 +134,21 @@ describe("diffRequests", () => {
     // 摘录里不能出现孤立代理项：逐码点比较长度一致即说明没有截断半个字符。
     expect(Array.from(before).length).toBe(Array.from(after).length)
     expect(before).not.toContain("\uFFFD")
+  })
+})
+
+describe("treeFromBody", () => {
+  it("按 JSON 实际层级生成节点，数组元素用 [i]", () => {
+    const tree = treeFromBody(chat([{ role: "user", content: "a" }], { tools: [{ name: "t" }] }))
+    const messages = tree.find((node) => node.key === "messages")
+    expect(messages?.children?.[0]?.key).toBe("[0]")
+    expect(messages?.children?.[0]?.children?.map((node) => node.key)).toEqual(["role", "content"])
+    const tools = tree.find((node) => node.key === "tools")
+    expect(tools?.children?.[0]?.children?.map((node) => node.key)).toEqual(["name"])
+  })
+
+  it("非 JSON 请求体返回空树", () => {
+    expect(treeFromBody("not-json")).toEqual([])
   })
 })
 
