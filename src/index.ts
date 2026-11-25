@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 
 import { maybeAutoCompress, maybeAutoCompressStep, maybeNudge } from "./compression/auto.ts"
-import { recordCacheHistoryStep } from "./compression/cache-history.ts"
+import { recordCacheHistoryStep, recordCacheHistoryUsage } from "./compression/cache-history.ts"
 import { dropTracker } from "./compression/cache-drops.ts"
 import { adoptNativeCheckpoint } from "./compression/adopt.ts"
 import { handleCompaction } from "./compression/compaction.ts"
@@ -16,6 +16,7 @@ import { registerDecompressTool } from "./compression/decompress-tool.ts"
 import { registerCheckpointTreeTool } from "./compression/checkpoint-tree-tool.ts"
 import { calibrationCoefs, recordCalibration, type CalibrationSample } from "./compression/calibration.ts"
 import { effectiveDecompressTempMaxAgeHours } from "./shared/settings.ts"
+import { usageFromWireBody } from "./shared/wire-usage.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./shared/stats.ts"
 import { estimateBuckets, estimateCategories } from "./shared/tokens.ts"
 
@@ -170,11 +171,10 @@ export default Plugin.define({
       }),
     )
 
-    // 缓存突变记录：只在开关打开、且是主请求时抓原始报文。
-    // 克隆请求体不会消费宿主稍后要读的那一份，属于官方支持的只读观察方式。
+    // 缓存突变记录：开关打开时抓所有用途的原始报文（primary / compaction /
+    // generate / title）。克隆请求体不会消费宿主稍后要读的那一份。
     disposables.push(
       await ctx.session.hook("http.request", async (event) => {
-        if (event.kind !== "primary") return
         const settings = await loadServerSettings(ctx)
         if (!settings.cacheDropsEnabled) {
           dropTracker().forget(event.sessionID)
@@ -184,10 +184,34 @@ export default Plugin.define({
         if (await isSubagentSession(ctx, event.sessionID)) return
         try {
           const body = await event.request.clone().text()
-          dropTracker().capture(event.sessionID, { body, at: Date.now() })
+          dropTracker().capture(event.sessionID, { body, at: Date.now(), kind: event.kind })
         } catch {
           // 请求体读失败只影响这条记录，不影响真正发出去的请求。
         }
+      }),
+    )
+
+    // 压缩 / 标题 / generate 没有统一 usage 事件：从响应报文里解析。
+    // 必须 fire-and-forget：await 读 body 会卡住宿主流式输出。
+    disposables.push(
+      await ctx.session.hook("http.response", async (event) => {
+        if (event.kind === "primary") return
+        const settings = await loadServerSettings(ctx)
+        if (!settings.cacheDropsEnabled) return
+        if (await isSubagentSession(ctx, event.sessionID)) return
+        const sessionID = event.sessionID
+        const kind = event.kind
+        const model = `${event.model.providerID}/${event.model.id}`
+        const sampleID = `${kind}:${Date.now().toString(36)}`
+        void event.response
+          .clone()
+          .text()
+          .then((text) => {
+            const tokens = usageFromWireBody(text)
+            if (tokens === undefined) return undefined
+            return recordCacheHistoryUsage(ctx, sessionID, { sampleID, kind, tokens, model })
+          })
+          .catch(() => undefined)
       }),
     )
 

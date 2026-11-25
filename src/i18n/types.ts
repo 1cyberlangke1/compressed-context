@@ -36,6 +36,18 @@ export interface Messages {
       readonly description: string
       readonly group: string
     }
+    readonly kind: {
+      readonly primary: string
+      readonly compaction: string
+      readonly title: string
+      readonly generate: string
+      readonly unknown: string
+    }
+    readonly structure: string
+    readonly request: string
+    readonly truncated: string
+    readonly noRequest: string
+    readonly chars: (value: string) => string
     readonly cause: {
       readonly system: string
       readonly tools: string

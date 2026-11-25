@@ -11,12 +11,21 @@
  */
 
 import type { CacheSample } from "../shared/cache.ts"
-import { diffRequests, dropPercent, type CacheDrop } from "../shared/cache-drops.ts"
+import {
+  diffRequests,
+  dropPercent,
+  outlineFromBody,
+  requestPreview,
+  type CacheDrop,
+  type CacheRequestKind,
+  type RequestDiff,
+} from "../shared/cache-drops.ts"
 
-/** 抓到的上游原始请求；messageID 要等 step.ended 才能确定。 */
+/** 抓到的上游原始请求；messageID 要等 usage 才能确定。 */
 export interface CapturedRequest {
   readonly body: string
   readonly at: number
+  readonly kind: CacheRequestKind
 }
 
 /** 已消费的请求：补上它对应的 assistant messageID。 */
@@ -92,7 +101,7 @@ export function dropTracker(): DropTracker {
 }
 
 /**
- * 输入：上一条样本 + 本条样本 + 报文对 + 阈值。
+ * 输入：上一条样本 + 本条样本 + 报文对 + 阈值 + 本次请求类型。
  * 输出：达到阈值时返回记录；否则 undefined。
  * 预期：跌幅按百分点比较，只记下降；报文对不上时记 `unknown`，不猜断点。
  */
@@ -100,6 +109,7 @@ export function planCacheDrop(input: {
   readonly previousSample: CacheSample
   readonly sample: CacheSample
   readonly pair: RequestPair
+  readonly kind: CacheRequestKind
   readonly model?: string
   readonly threshold: number
 }): CacheDrop | undefined {
@@ -109,6 +119,7 @@ export function planCacheDrop(input: {
   return {
     messageID: input.sample.messageID,
     at: input.sample.at,
+    kind: input.kind,
     ...(input.model === undefined ? {} : { model: input.model }),
     prevMessageID: input.previousSample.messageID,
     prompt: input.sample.input,
@@ -120,17 +131,25 @@ export function planCacheDrop(input: {
     dropPp,
     cause: diff.cause,
     ...(diff.breakPoint === undefined ? {} : { breakPoint: diff.breakPoint }),
+    ...(diff.outline.length === 0 ? {} : { outline: diff.outline }),
+    ...(diff.request === undefined ? {} : { request: diff.request }),
   }
 }
 
-/** 输入：报文对 + 上一条样本的 messageID；输出：断点结果或 unknown。 */
-function comparePair(
-  pair: RequestPair,
-  previousMessageID: string,
-): { readonly cause: CacheDrop["cause"]; readonly breakPoint?: CacheDrop["breakPoint"] } {
+/**
+ * 输入：报文对 + 上一条样本的 messageID。
+ * 输出：同一种请求类型的相邻两轮才做前缀对比；否则记 unknown。
+ * 预期：unknown 时仍保留当前请求的结构轮廓与原文预览，便于面板展示「原始请求」。
+ */
+function comparePair(pair: RequestPair, previousMessageID: string): RequestDiff {
   const current = pair.current
+  if (current === undefined) return { cause: "unknown", outline: [] }
   const previous = pair.previous
-  if (current === undefined || previous === undefined) return { cause: "unknown" }
-  if (previous.messageID !== previousMessageID) return { cause: "unknown" }
+  if (previous === undefined) {
+    return { cause: "unknown", outline: outlineFromBody(current.body), request: requestPreview(current.body) }
+  }
+  if (previous.kind !== current.kind || previous.messageID !== previousMessageID) {
+    return { cause: "unknown", outline: outlineFromBody(current.body), request: requestPreview(current.body) }
+  }
   return diffRequests(previous.body, current.body)
 }

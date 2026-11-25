@@ -16,8 +16,8 @@ function request(system: string): string {
 describe("DropTracker", () => {
   it("同一会话後一次 capture 覆盖前一次（重试只留最后一个报文）", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("old"), at: 1 })
-    tracker.capture("s1", { body: request("new"), at: 2 })
+    tracker.capture("s1", { body: request("old"), at: 1, kind: "primary" })
+    tracker.capture("s1", { body: request("new"), at: 2, kind: "primary" })
     const pair = tracker.consume("s1", "msg_1")
     expect(pair.current?.body).toBe(request("new"))
     expect(pair.previous).toBeUndefined()
@@ -25,11 +25,11 @@ describe("DropTracker", () => {
 
   it("第一次 consume 没有 previous，第二次才拿到上一轮报文并补上 messageID", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("a"), at: 1 })
+    tracker.capture("s1", { body: request("a"), at: 1, kind: "primary" })
     const first = tracker.consume("s1", "msg_1")
     expect(first.previous).toBeUndefined()
 
-    tracker.capture("s1", { body: request("b"), at: 2 })
+    tracker.capture("s1", { body: request("b"), at: 2, kind: "primary" })
     const second = tracker.consume("s1", "msg_2")
     expect(second.previous?.body).toBe(request("a"))
     expect(second.previous?.messageID).toBe("msg_1")
@@ -38,7 +38,7 @@ describe("DropTracker", () => {
 
   it("本轮没抓到报文时消费仍推进 previous，但绝不用两个不相邻报文对比", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("a"), at: 1 })
+    tracker.capture("s1", { body: request("a"), at: 1, kind: "primary" })
     tracker.consume("s1", "msg_1")
 
     // 这一轮没有 http.request（例如走了别的传输路径）。
@@ -50,15 +50,15 @@ describe("DropTracker", () => {
 
   it("超过单份报文上限时直接丢弃 pending，避免吃满内存", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("a"), at: 1 })
-    tracker.capture("s1", { body: "x".repeat(8 * 1024 * 1024 + 1), at: 2 })
+    tracker.capture("s1", { body: request("a"), at: 1, kind: "primary" })
+    tracker.capture("s1", { body: "x".repeat(8 * 1024 * 1024 + 1), at: 2, kind: "primary" })
     expect(tracker.consume("s1", "msg_1").current).toBeUndefined()
   })
 
   it("forget 清掉某会话全部状态，不影响其它会话", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("a"), at: 1 })
-    tracker.capture("s2", { body: request("b"), at: 1 })
+    tracker.capture("s1", { body: request("a"), at: 1, kind: "primary" })
+    tracker.capture("s2", { body: request("b"), at: 1, kind: "primary" })
     tracker.consume("s2", "msg_2")
     tracker.forget("s1")
     expect(tracker.consume("s1", "msg_1").current).toBeUndefined()
@@ -67,13 +67,13 @@ describe("DropTracker", () => {
 
   it("两个会话交错抓取/消费时绝不串台", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("s1-a"), at: 1 })
-    tracker.capture("s2", { body: request("s2-a"), at: 1 })
+    tracker.capture("s1", { body: request("s1-a"), at: 1, kind: "primary" })
+    tracker.capture("s2", { body: request("s2-a"), at: 1, kind: "primary" })
     expect(tracker.consume("s1", "s1-msg1").current?.body).toBe(request("s1-a"))
     expect(tracker.consume("s2", "s2-msg1").current?.body).toBe(request("s2-a"))
 
-    tracker.capture("s1", { body: request("s1-b"), at: 2 })
-    tracker.capture("s2", { body: request("s2-b"), at: 2 })
+    tracker.capture("s1", { body: request("s1-b"), at: 2, kind: "primary" })
+    tracker.capture("s2", { body: request("s2-b"), at: 2, kind: "primary" })
     const first = tracker.consume("s1", "s1-msg2")
     const second = tracker.consume("s2", "s2-msg2")
     expect(first.previous?.body).toBe(request("s1-a"))
@@ -84,12 +84,12 @@ describe("DropTracker", () => {
 
   it("同目录父会话与子代理会话各自独立配对", () => {
     const tracker = createDropTracker()
-    tracker.capture("ses_parent", { body: request("parent"), at: 1 })
-    tracker.capture("ses_child", { body: request("child"), at: 1 })
+    tracker.capture("ses_parent", { body: request("parent"), at: 1, kind: "primary" })
+    tracker.capture("ses_child", { body: request("child"), at: 1, kind: "primary" })
     tracker.consume("ses_parent", "parent-m1")
     tracker.consume("ses_child", "child-m1")
 
-    tracker.capture("ses_child", { body: request("child2"), at: 2 })
+    tracker.capture("ses_child", { body: request("child2"), at: 2, kind: "primary" })
     const childPair = tracker.consume("ses_child", "child-m2")
     expect(childPair.previous?.body).toBe(request("child"))
     // 父会话没有被推进，它的上一轮仍是 parent-m1。
@@ -102,9 +102,9 @@ describe("planCacheDrop 的相邻判定", () => {
   /** 输入：tracker + 两轮报文；输出：可直接交给 planCacheDrop 的报文对。 */
   function pairOf(previousBody: string, currentBody: string, firstID = "msg_1", secondID = "msg_2") {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: previousBody, at: 1 })
+    tracker.capture("s1", { body: previousBody, at: 1, kind: "primary" })
     tracker.consume("s1", firstID)
-    tracker.capture("s1", { body: currentBody, at: 2 })
+    tracker.capture("s1", { body: currentBody, at: 2, kind: "primary" })
     return tracker.consume("s1", secondID)
   }
 
@@ -114,6 +114,7 @@ describe("planCacheDrop 的相邻判定", () => {
       previousSample: sample("msg_1", 90),
       sample: sample("msg_2", 40),
       pair,
+      kind: "primary",
       threshold: 10,
     })
     expect(result?.cause).toBe("system")
@@ -129,6 +130,7 @@ describe("planCacheDrop 的相邻判定", () => {
       previousSample: sample("msg_1", 90),
       sample: sample("msg_2", 40),
       pair,
+      kind: "primary",
       threshold: 10,
     })
     expect(result?.cause).toBe("unknown")
@@ -137,12 +139,13 @@ describe("planCacheDrop 的相邻判定", () => {
 
   it("没有上一轮报文时记 unknown", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("AAB"), at: 2 })
+    tracker.capture("s1", { body: request("AAB"), at: 2, kind: "primary" })
     const pair = tracker.consume("s1", "msg_2")
     const result = planCacheDrop({
       previousSample: sample("msg_1", 90),
       sample: sample("msg_2", 40),
       pair,
+      kind: "primary",
       threshold: 10,
     })
     expect(result?.cause).toBe("unknown")
@@ -154,6 +157,7 @@ describe("planCacheDrop 的相邻判定", () => {
       previousSample: sample("msg_1", 90),
       sample: sample("msg_2", 85),
       pair,
+      kind: "primary",
       threshold: 10,
     })
     expect(result).toBeUndefined()
@@ -165,6 +169,7 @@ describe("planCacheDrop 的相邻判定", () => {
       previousSample: sample("msg_1", 40),
       sample: sample("msg_2", 90),
       pair,
+      kind: "primary",
       threshold: 10,
     })
     expect(result).toBeUndefined()
@@ -184,6 +189,7 @@ describe("planCacheDrop 的相邻判定", () => {
       previousSample: sample("msg_1", 90),
       sample: sample("msg_2", 40),
       pair,
+      kind: "primary",
       threshold: 10,
     })
     expect(result?.cause).toBe("append")

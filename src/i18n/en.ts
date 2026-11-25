@@ -38,6 +38,18 @@ export const en: Messages = {
       description: "Inspect this session's hit-rate drops and prefix breakpoints",
       group: "Plugin",
     },
+    kind: {
+      primary: "Chat",
+      compaction: "Native compaction",
+      title: "Title",
+      generate: "Plugin summary",
+      unknown: "Unknown request",
+    },
+    structure: "Request structure",
+    request: "Text at breakpoint",
+    truncated: "truncated",
+    noRequest: "No raw request available",
+    chars: (value) => `${value} chars`,
     cause: {
       system: "System prompt changed",
       tools: "Tool definitions changed",

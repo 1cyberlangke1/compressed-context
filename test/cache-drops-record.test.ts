@@ -5,7 +5,7 @@ import type { Plugin } from "@opencode/plugin"
 import type { Schema } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { loadCacheHistory, recordCacheHistoryStep } from "../src/compression/cache-history.ts"
+import { loadCacheHistory, recordCacheHistoryStep, recordCacheHistoryUsage } from "../src/compression/cache-history.ts"
 import { dropTracker } from "../src/compression/cache-drops.ts"
 import { clearDeletedSessions } from "../src/compression/deleted-sessions.ts"
 import type { StorageLike } from "../src/compression/state.ts"
@@ -81,10 +81,10 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     const tracker = dropTracker()
     tracker.forget("ses_a")
 
-    tracker.capture("ses_a", { body: body("AAA"), at: 1 })
+    tracker.capture("ses_a", { body: body("AAA"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
 
-    tracker.capture("ses_a", { body: body("AAB"), at: 2 })
+    tracker.capture("ses_a", { body: body("AAB"), at: 2, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m2", tokens: tokens(40) })
 
     const history = await loadCacheHistory(storage, "ses_a")
@@ -107,9 +107,9 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     const tracker = dropTracker()
     tracker.forget("ses_a")
 
-    tracker.capture("ses_a", { body: body("AAA"), at: 1 })
+    tracker.capture("ses_a", { body: body("AAA"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
-    tracker.capture("ses_a", { body: body("AAB"), at: 2 })
+    tracker.capture("ses_a", { body: body("AAB"), at: 2, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m2", tokens: tokens(40) })
 
     const history = await loadCacheHistory(storage, "ses_a")
@@ -127,12 +127,12 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     const tracker = dropTracker()
     tracker.forget("ses_a")
 
-    tracker.capture("ses_a", { body: body("AAA"), at: 1 })
+    tracker.capture("ses_a", { body: body("AAA"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
-    tracker.capture("ses_a", { body: body("AAB"), at: 2 })
+    tracker.capture("ses_a", { body: body("AAB"), at: 2, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m2", tokens: tokens(85) })
 
-    tracker.capture("ses_a", { body: body("AAC"), at: 3 })
+    tracker.capture("ses_a", { body: body("AAC"), at: 3, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m3", tokens: tokens(40) })
 
     const history = await loadCacheHistory(storage, "ses_a")
@@ -150,12 +150,12 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     const tracker = dropTracker()
     tracker.forget("ses_a")
 
-    tracker.capture("ses_a", { body: body("AAA"), at: 1 })
+    tracker.capture("ses_a", { body: body("AAA"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
     // m2 这一轮没抓到报文（例如走了别的传输路径），跌幅也没到阈值。
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m2", tokens: tokens(85) })
 
-    tracker.capture("ses_a", { body: body("AAC"), at: 3 })
+    tracker.capture("ses_a", { body: body("AAC"), at: 3, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m3", tokens: tokens(40) })
 
     const history = await loadCacheHistory(storage, "ses_a")
@@ -173,13 +173,13 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     tracker.forget("ses_parent")
     tracker.forget("ses_child")
 
-    tracker.capture("ses_parent", { body: body("parent-A"), at: 1 })
-    tracker.capture("ses_child", { body: body("child-A"), at: 1 })
+    tracker.capture("ses_parent", { body: body("parent-A"), at: 1, kind: "primary" })
+    tracker.capture("ses_child", { body: body("child-A"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_parent", { messageID: "p1", tokens: tokens(90) })
     await recordCacheHistoryStep(ctx, "ses_child", { messageID: "c1", tokens: tokens(90) })
 
-    tracker.capture("ses_parent", { body: body("parent-B"), at: 2 })
-    tracker.capture("ses_child", { body: body("child-B"), at: 2 })
+    tracker.capture("ses_parent", { body: body("parent-B"), at: 2, kind: "primary" })
+    tracker.capture("ses_child", { body: body("child-B"), at: 2, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_parent", { messageID: "p2", tokens: tokens(40) })
     await recordCacheHistoryStep(ctx, "ses_child", { messageID: "c2", tokens: tokens(40) })
 
@@ -200,19 +200,88 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
     tracker.forget("ses_a")
     tracker.forget("ses_b")
 
-    tracker.capture("ses_a", { body: body("a-1"), at: 1 })
+    tracker.capture("ses_a", { body: body("a-1"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "a1", tokens: tokens(90) })
-    tracker.capture("ses_b", { body: body("b-1"), at: 1 })
+    tracker.capture("ses_b", { body: body("b-1"), at: 1, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_b", { messageID: "b1", tokens: tokens(90) })
 
-    tracker.capture("ses_a", { body: body("a-2"), at: 2 })
+    tracker.capture("ses_a", { body: body("a-2"), at: 2, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_a", { messageID: "a2", tokens: tokens(40) })
-    tracker.capture("ses_b", { body: body("b-2"), at: 2 })
+    tracker.capture("ses_b", { body: body("b-2"), at: 2, kind: "primary" })
     await recordCacheHistoryStep(ctx, "ses_b", { messageID: "b2", tokens: tokens(40) })
 
     const a = await loadCacheHistory(storage, "ses_a")
     const b = await loadCacheHistory(storage, "ses_b")
     expect(a.drops[0]?.breakPoint?.before).toContain("a-1")
     expect(b.drops[0]?.breakPoint?.before).toContain("b-1")
+  })
+
+  it("压缩 / generate 等非主请求同样记录，并带上请求类型", async () => {
+    const directory = tempProject()
+    const storage = createStorage()
+    const ctx = createContext(directory, storage)
+    writeSettings(directory, { cacheDropsEnabled: true, cacheDropsThreshold: 10 })
+    const tracker = dropTracker()
+    tracker.forget("ses_a")
+
+    tracker.capture("ses_a", { body: body("primary-A"), at: 1, kind: "primary" })
+    await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
+
+    // 第一次摘要请求：跨类型没有同类型上一轮，只能记 unknown。
+    tracker.capture("ses_a", { body: body("summary-A"), at: 2, kind: "generate" })
+    await recordCacheHistoryUsage(ctx, "ses_a", {
+      sampleID: "generate:1",
+      kind: "generate",
+      tokens: tokens(70),
+      model: "fake/model",
+    })
+
+    // 第二次摘要请求：同类型相邻，可以对比 system 前缀。
+    tracker.capture("ses_a", { body: body("summary-B"), at: 3, kind: "generate" })
+    await recordCacheHistoryUsage(ctx, "ses_a", {
+      sampleID: "generate:2",
+      kind: "generate",
+      tokens: tokens(30),
+      model: "fake/model",
+    })
+
+    const history = await loadCacheHistory(storage, "ses_a")
+    expect(history.samples.map((sample) => sample.messageID)).toEqual(["m1", "generate:1", "generate:2"])
+    expect(history.drops).toHaveLength(2)
+    expect(history.drops[0]).toMatchObject({ messageID: "generate:1", kind: "generate", cause: "unknown" })
+    expect(history.drops[0]?.outline?.some((segment) => segment.key === "system[0]")).toBe(true)
+    expect(history.drops[1]).toMatchObject({
+      messageID: "generate:2",
+      kind: "generate",
+      cause: "system",
+      model: "fake/model",
+      dropPp: 40,
+    })
+    expect(history.drops[1]?.request?.segment).toBe("system[0]")
+  })
+
+  it("有跌幅但没有上一轮报文时记 unknown，仍然落盘", async () => {
+    const directory = tempProject()
+    const storage = createStorage()
+    const ctx = createContext(directory, storage)
+    writeSettings(directory, { cacheDropsEnabled: true, cacheDropsThreshold: 10 })
+    const tracker = dropTracker()
+    tracker.forget("ses_a")
+
+    tracker.capture("ses_a", { body: body("primary-A"), at: 1, kind: "primary" })
+    await recordCacheHistoryStep(ctx, "ses_a", { messageID: "m1", tokens: tokens(90) })
+
+    // 只抓到这一轮，没有上一轮可对照。
+    tracker.capture("ses_a", { body: body("compaction-A"), at: 2, kind: "compaction" })
+    await recordCacheHistoryUsage(ctx, "ses_a", {
+      sampleID: "compaction:1",
+      kind: "compaction",
+      tokens: tokens(30),
+    })
+
+    const history = await loadCacheHistory(storage, "ses_a")
+    expect(history.drops).toHaveLength(1)
+    expect(history.drops[0]).toMatchObject({ kind: "compaction", cause: "unknown" })
+    expect(history.drops[0]?.breakPoint).toBeUndefined()
   })
 })

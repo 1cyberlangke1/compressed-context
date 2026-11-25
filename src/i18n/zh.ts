@@ -38,6 +38,18 @@ export const zh: Messages = {
       description: "查看本会话的缓存命中率跌幅与断点",
       group: "插件",
     },
+    kind: {
+      primary: "主对话",
+      compaction: "原生压缩",
+      title: "标题生成",
+      generate: "插件摘要",
+      unknown: "未知请求",
+    },
+    structure: "原始请求结构",
+    request: "断点处原文",
+    truncated: "已截断",
+    noRequest: "没有可展示的原始请求",
+    chars: (value) => `${value} 字符`,
     cause: {
       system: "系统提示变了",
       tools: "工具定义变了",

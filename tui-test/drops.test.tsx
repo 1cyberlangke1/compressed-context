@@ -42,8 +42,14 @@ function drop(id: string, dropPp: number, before: string, after: string): CacheD
     prevHit: 900,
     prevHitRate: 90,
     dropPp,
+    kind: "compaction",
     cause: "system",
     breakPoint: { segment: "system[0]", offset: 3, before, after },
+    outline: [
+      { key: "system[0]", chars: 4 },
+      { key: "messages[0]", chars: 10 },
+    ],
+    request: { segment: "system[0]", text: `{"role":"system","content":"${after}"}`, truncated: false },
   }
 }
 
@@ -201,11 +207,12 @@ describe("DropsView", () => {
     try {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.panelTitle))
       expect(frame).toContain("-50.0pp")
+      expect(frame).toContain(copy.drops.kind.compaction)
+      expect(frame).toContain(copy.drops.structure)
+      expect(frame).toContain(copy.drops.request)
+      expect(frame).toContain("AABA")
       expect(frame).toContain(copy.drops.was)
       expect(frame).toContain(copy.drops.now)
-      // was/now 各自把不同字符高亮出来；这里只断言两侧原文都在。
-      expect(frame).toContain("AAAA")
-      expect(frame).toContain("AABA")
     } finally {
       app.renderer.destroy()
     }

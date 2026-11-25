@@ -307,6 +307,7 @@ const CacheDropJson = {
   properties: {
     messageID: { type: "string" },
     at: { type: "number" },
+    kind: { type: "string", enum: ["primary", "compaction", "title", "generate", "unknown"] },
     model: { type: "string" },
     prevMessageID: { type: "string" },
     prompt: { type: "number" },
@@ -329,6 +330,25 @@ const CacheDropJson = {
         after: { type: "string" },
       },
       required: ["segment", "offset", "before", "after"],
+      additionalProperties: false,
+    },
+    outline: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { key: { type: "string" }, chars: { type: "number" } },
+        required: ["key", "chars"],
+        additionalProperties: false,
+      },
+    },
+    request: {
+      type: "object",
+      properties: {
+        segment: { type: "string" },
+        text: { type: "string" },
+        truncated: { type: "boolean" },
+      },
+      required: ["segment", "text", "truncated"],
       additionalProperties: false,
     },
   },

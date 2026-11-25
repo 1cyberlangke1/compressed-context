@@ -42,6 +42,9 @@ describe("diffRequests", () => {
     expect(result.cause).toBe("system")
     expect(result.breakPoint?.segment).toBe("system[0]")
     expect(result.breakPoint?.offset).toBeGreaterThan(0)
+    expect(result.outline.map((segment) => segment.key)).toContain("system[0]")
+    expect(result.request?.segment).toBe("system[0]")
+    expect(result.request?.text).toContain("AAB")
   })
 
   it("工具定义变化归为 tools，段号指向具体工具", () => {
@@ -62,7 +65,7 @@ describe("diffRequests", () => {
 
   it("两条请求完全相同归为 none", () => {
     const same = chat([{ role: "user", content: "a" }])
-    expect(diffRequests(same, same)).toEqual({ cause: "none" })
+    expect(diffRequests(same, same)).toMatchObject({ cause: "none" })
   })
 
   it("窗口后移（新一轮首条消息是上一轮更靠后的消息）归为 window", () => {
@@ -115,7 +118,7 @@ describe("diffRequests", () => {
   })
 
   it("非 JSON 请求体不声称断点", () => {
-    expect(diffRequests("not-json", chat([{ role: "user", content: "a" }]))).toEqual({ cause: "none" })
+    expect(diffRequests("not-json", chat([{ role: "user", content: "a" }]))).toMatchObject({ cause: "none" })
   })
 
   it("摘录按码点切片，不会把 emoji 劈成半个", () => {

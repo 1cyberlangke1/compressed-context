@@ -1,10 +1,14 @@
 /**
  * 缓存突变的跨进程载体与纯逻辑。
  *
- * 服务端在 `http.request` 抓下发给上游的原始请求体，在 `step.ended` 拿到 usage 后
- * 与上一轮比较：命中率跌幅达到阈值时，记录断点所在段、段内偏移与两侧原文片段。
- * 本模块只放纯函数：切段、找首个差异、摘录、解析、裁剪，方便单测。
+ * 服务端在 `http.request` 抓下发给上游的原始请求体，在该请求的 usage 已知后
+ * 与上一条样本比较：命中率跌幅达到阈值时，记录断点所在段、段内偏移、两侧原文、
+ * 请求结构轮廓与断点段的原始文本。本模块只放纯函数：切段、找首个差异、摘录、
+ * 解析、裁剪，方便单测。
  */
+
+/** 触发这次请求的用途；与宿主的 `SessionRequestKind` 对齐。 */
+export type CacheRequestKind = "primary" | "compaction" | "title" | "generate" | "unknown"
 
 /** 断点归类；`append`/`none` 表示前缀没有变，掉缓存与本地报文无关。 */
 export type CacheDropCause =
@@ -29,11 +33,26 @@ export interface CacheDropBreak {
   readonly after: string
 }
 
+/** 请求结构里的一段；只存标识与字符数，便于在面板里展示「原始请求」的骨架。 */
+export interface CacheDropSegment {
+  readonly key: string
+  readonly chars: number
+}
+
+/** 断点所在段的原始文本；超出上限时截断并标记。 */
+export interface CacheDropRequest {
+  readonly segment: string
+  readonly text: string
+  readonly truncated: boolean
+}
+
 /** 一条缓存突变记录；只存诊断结果，不存整段 payload。 */
 export interface CacheDrop {
-  /** 本条 assistant message ID，与缓存样本按 ID 关联。 */
+  /** 本条样本 ID；primary 是 assistant messageID，其它请求是 `kind:时间`。 */
   readonly messageID: string
   readonly at: number
+  /** 请求用途；旧记录没有这个字段。 */
+  readonly kind?: CacheRequestKind
   readonly model?: string
   readonly prevMessageID: string
   readonly prompt: number
@@ -46,6 +65,10 @@ export interface CacheDrop {
   readonly dropPp: number
   readonly cause: CacheDropCause
   readonly breakPoint?: CacheDropBreak
+  /** 当前请求的结构轮廓。 */
+  readonly outline?: readonly CacheDropSegment[]
+  /** 断点段的原始文本（截断）。 */
+  readonly request?: CacheDropRequest
 }
 
 /** 按上游顺序分组的段：system → tools → messages → options。 */
@@ -57,10 +80,22 @@ interface Groups {
   readonly options?: string
 }
 
+/** 一次请求差异的完整结果。 */
+export interface RequestDiff {
+  readonly cause: CacheDropCause
+  readonly breakPoint?: CacheDropBreak
+  /** 当前请求的段轮廓；解析失败时为空数组。 */
+  readonly outline: readonly CacheDropSegment[]
+  /** 断点段原文；没有断点时缺省。 */
+  readonly request?: CacheDropRequest
+}
+
 /** 摘录在断点前保留的码点数。 */
 const EXCERPT_LEAD = 40
 /** 摘录总长（码点）。 */
 const EXCERPT_LENGTH = 96
+/** 原始请求片段最多存这么多码点，避免 100 条记录撑爆 storage。 */
+export const REQUEST_TEXT_MAX_CHARS = 2_400
 
 const SYSTEM_KEYS = ["system", "instructions", "systemInstruction"] as const
 const MESSAGE_KEYS = ["messages", "input", "contents"] as const
@@ -116,6 +151,45 @@ function groupsOf(body: string): Groups | undefined {
   }
 }
 
+/** 输入：分组；输出：请求结构轮廓（段标识 + 字符数）。 */
+function outlineOf(groups: Groups): readonly CacheDropSegment[] {
+  const segments: CacheDropSegment[] = []
+  groups.system.forEach((text, index) => {
+    segments.push({ key: `system[${index.toString()}]`, chars: Array.from(text).length })
+  })
+  groups.tools.forEach((text, index) => {
+    segments.push({ key: `tools[${index.toString()}]`, chars: Array.from(text).length })
+  })
+  groups.messages.forEach((text, index) => {
+    segments.push({ key: `messages[${index.toString()}]`, chars: Array.from(text).length })
+  })
+  if (groups.options !== undefined) {
+    segments.push({ key: "options", chars: Array.from(groups.options).length })
+  }
+  return segments
+}
+
+/** 输入：段标识 + 原文；输出：截断后的原始请求片段。 */
+function requestOf(segment: string, text: string): CacheDropRequest {
+  const points = Array.from(text)
+  return {
+    segment,
+    text: points.slice(0, REQUEST_TEXT_MAX_CHARS).join(""),
+    truncated: points.length > REQUEST_TEXT_MAX_CHARS,
+  }
+}
+
+/** 输入：原始请求体；输出：请求结构轮廓；解析失败时为空数组。 */
+export function outlineFromBody(body: string): readonly CacheDropSegment[] {
+  const groups = groupsOf(body)
+  return groups === undefined ? [] : outlineOf(groups)
+}
+
+/** 输入：整段原始请求；输出：可直接展示的请求片段；用于没有断点的 unknown 记录。 */
+export function requestPreview(body: string, segment = "request"): CacheDropRequest {
+  return requestOf(segment, body)
+}
+
 /** 输入：两段已按码点拆开的文本；输出：首个不同码点的下标，完全相同返回较短长度。 */
 function firstDifference(left: readonly string[], right: readonly string[]): number {
   const limit = Math.min(left.length, right.length)
@@ -143,45 +217,76 @@ function diffGroup(
   prev: readonly string[],
   next: readonly string[],
   kind: "system" | "tools",
-): CacheDropBreak | undefined {
+): { readonly breakPoint: CacheDropBreak; readonly text: string } | undefined {
   const limit = Math.min(prev.length, next.length)
   for (let index = 0; index < limit; index += 1) {
     const left = prev[index]
     const right = next[index]
     if (left === undefined || right === undefined || left === right) continue
-    return excerptOf(`${kind}[${index.toString()}]`, left, right, firstDifference(Array.from(left), Array.from(right)))
+    return {
+      breakPoint: excerptOf(`${kind}[${index.toString()}]`, left, right, firstDifference(Array.from(left), Array.from(right))),
+      text: right,
+    }
   }
   if (prev.length === next.length) return undefined
   const index = limit
   const left = prev[index]
   const right = next[index]
   if (left !== undefined) {
-    return { segment: `${kind}[${index.toString()}]`, offset: 0, before: Array.from(left).slice(0, EXCERPT_LENGTH).join(""), after: "" }
+    return {
+      breakPoint: {
+        segment: `${kind}[${index.toString()}]`,
+        offset: 0,
+        before: Array.from(left).slice(0, EXCERPT_LENGTH).join(""),
+        after: "",
+      },
+      text: left,
+    }
   }
   if (right !== undefined) {
-    return { segment: `${kind}[${index.toString()}]`, offset: 0, before: "", after: Array.from(right).slice(0, EXCERPT_LENGTH).join("") }
+    return {
+      breakPoint: {
+        segment: `${kind}[${index.toString()}]`,
+        offset: 0,
+        before: "",
+        after: Array.from(right).slice(0, EXCERPT_LENGTH).join(""),
+      },
+      text: right,
+    }
   }
   return undefined
 }
 
 /**
  * 输入：上一轮与这一轮的原始请求体。
- * 输出：首个差异归类与断点摘录；没有差异时返回 `none`/`append`。
+ * 输出：首个差异归类、断点摘录、当前请求轮廓与断点段原文。
  * 预期：只在消息组判断窗口后移；解析失败时不声称有断点。
  */
-export function diffRequests(prevBody: string, nextBody: string): {
-  readonly cause: CacheDropCause
-  readonly breakPoint?: CacheDropBreak
-} {
+export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
   const prev = groupsOf(prevBody)
   const next = groupsOf(nextBody)
-  if (prev === undefined || next === undefined) return { cause: "none" }
+  if (prev === undefined || next === undefined) return { cause: "none", outline: [] }
+  const outline = outlineOf(next)
 
   const system = diffGroup(prev.system, next.system, "system")
-  if (system !== undefined) return { cause: "system", breakPoint: system }
+  if (system !== undefined) {
+    return {
+      cause: "system",
+      breakPoint: system.breakPoint,
+      outline,
+      request: requestOf(system.breakPoint.segment, system.text),
+    }
+  }
 
   const tools = diffGroup(prev.tools, next.tools, "tools")
-  if (tools !== undefined) return { cause: "tools", breakPoint: tools }
+  if (tools !== undefined) {
+    return {
+      cause: "tools",
+      breakPoint: tools.breakPoint,
+      outline,
+      request: requestOf(tools.breakPoint.segment, tools.text),
+    }
+  }
 
   const windowShift = isWindowShift(prev.messages, next.messages)
   const limit = Math.min(prev.messages.length, next.messages.length)
@@ -189,25 +294,31 @@ export function diffRequests(prevBody: string, nextBody: string): {
     const left = prev.messages[index]
     const right = next.messages[index]
     if (left === undefined || right === undefined || left === right) continue
+    const segment = `messages[${index.toString()}]`
     return {
       cause: windowShift ? "window" : "history",
-      breakPoint: excerptOf(`messages[${index.toString()}]`, left, right, firstDifference(Array.from(left), Array.from(right))),
+      breakPoint: excerptOf(segment, left, right, firstDifference(Array.from(left), Array.from(right))),
+      outline,
+      request: requestOf(segment, right),
     }
   }
 
-  if (prev.messages.length < next.messages.length) return { cause: "append" }
+  if (prev.messages.length < next.messages.length) return { cause: "append", outline }
   if (prev.messages.length > next.messages.length) {
     const index = next.messages.length
     const removed = prev.messages[index]
-    if (removed === undefined) return { cause: "history" }
+    if (removed === undefined) return { cause: "history", outline }
+    const segment = `messages[${index.toString()}]`
     return {
       cause: "history",
       breakPoint: {
-        segment: `messages[${index.toString()}]`,
+        segment,
         offset: 0,
         before: Array.from(removed).slice(0, EXCERPT_LENGTH).join(""),
         after: "",
       },
+      outline,
+      request: requestOf(segment, removed),
     }
   }
 
@@ -217,9 +328,11 @@ export function diffRequests(prevBody: string, nextBody: string): {
     return {
       cause: "params",
       breakPoint: excerptOf("options", before, after, firstDifference(Array.from(before), Array.from(after))),
+      outline,
+      request: requestOf("options", after),
     }
   }
-  return { cause: "none" }
+  return { cause: "none", outline }
 }
 
 /** 输入：两轮消息组；输出：这一轮的首条消息是否是上一轮更靠后的某条（窗口后移）。 */
@@ -260,11 +373,15 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
   if (typeof messageID !== "string" || messageID.length === 0) return undefined
   if (typeof prevMessageID !== "string" || prevMessageID.length === 0) return undefined
   if (!isCause(cause)) return undefined
+  const kind = parseKind(record["kind"])
   const model = record["model"]
   const breakPoint = parseBreak(record["breakPoint"])
+  const outline = parseOutline(record["outline"])
+  const request = parseRequest(record["request"])
   return {
     messageID,
     at: record["at"] as number,
+    ...(kind === undefined ? {} : { kind }),
     ...(typeof model === "string" && model.length > 0 ? { model } : {}),
     prevMessageID,
     prompt: record["prompt"] as number,
@@ -276,10 +393,12 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
     dropPp: record["dropPp"] as number,
     cause,
     ...(breakPoint === undefined ? {} : { breakPoint }),
+    ...(outline === undefined ? {} : { outline }),
+    ...(request === undefined ? {} : { request }),
   }
 }
 
-/** 输入：任意值；输出：是否是合法归类。 */
+/** 输入：任意值；输出：合法归类。 */
 function isCause(value: unknown): value is CacheDropCause {
   return (
     value === "system" ||
@@ -291,6 +410,17 @@ function isCause(value: unknown): value is CacheDropCause {
     value === "none" ||
     value === "unknown"
   )
+}
+
+/** 输入：任意值；输出：合法请求类型或 undefined。 */
+function parseKind(value: unknown): CacheRequestKind | undefined {
+  return value === "primary" ||
+    value === "compaction" ||
+    value === "title" ||
+    value === "generate" ||
+    value === "unknown"
+    ? value
+    : undefined
 }
 
 /** 输入：任意值；输出：合法断点或 undefined。 */
@@ -305,6 +435,35 @@ function parseBreak(value: unknown): CacheDropBreak | undefined {
   if (typeof offset !== "number" || !Number.isFinite(offset) || offset < 0) return undefined
   if (typeof before !== "string" || typeof after !== "string") return undefined
   return { segment, offset, before, after }
+}
+
+/** 输入：任意值；输出：合法轮廓或 undefined；空数组视为缺省。 */
+function parseOutline(value: unknown): readonly CacheDropSegment[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const segments: CacheDropSegment[] = []
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue
+    const record = item as Record<string, unknown>
+    const key = record["key"]
+    const chars = record["chars"]
+    if (typeof key !== "string" || key.length === 0) continue
+    if (typeof chars !== "number" || !Number.isFinite(chars) || chars < 0) continue
+    segments.push({ key, chars })
+  }
+  return segments.length === 0 ? undefined : segments
+}
+
+/** 输入：任意值；输出：合法原始请求片段或 undefined。 */
+function parseRequest(value: unknown): CacheDropRequest | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const segment = record["segment"]
+  const text = record["text"]
+  const truncated = record["truncated"]
+  if (typeof segment !== "string" || segment.length === 0) return undefined
+  if (typeof text !== "string") return undefined
+  if (typeof truncated !== "boolean") return undefined
+  return { segment, text, truncated }
 }
 
 /**
