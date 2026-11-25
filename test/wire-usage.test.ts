@@ -81,6 +81,28 @@ describe("usageFromWireBody", () => {
     })
   })
 
+  it("同一对象里 input_tokens 与缓存字段并存时按非缓存输入处理", () => {
+    const body =
+      '{"usage":{"input_tokens":1000,"cache_read_input_tokens":200,"cache_creation_input_tokens":50,"output_tokens":10}}'
+    expect(usageFromWireBody(body)).toEqual({
+      input: 1000,
+      output: 10,
+      reasoning: 0,
+      cache: { read: 200, write: 50 },
+    })
+  })
+
+  it("没有厂商字段名也按数值语义自适应", () => {
+    const body =
+      '{"meta":{"promptTokenCount":1000,"cachedContentTokenCount":600,"candidatesTokenCount":40,"thoughtsTokenCount":2}}'
+    expect(usageFromWireBody(body)).toEqual({
+      input: 400,
+      output: 42,
+      reasoning: 0,
+      cache: { read: 600, write: 0 },
+    })
+  })
+
   it("没有任何 usage 时返回 undefined", () => {
     expect(usageFromWireBody("")).toBeUndefined()
     expect(usageFromWireBody("data: [DONE]")).toBeUndefined()
