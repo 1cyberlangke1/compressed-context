@@ -165,7 +165,7 @@ export function DropsDialog(props: {
                   <text fg={barColor(drop.dropPp, theme)} width={9} flexShrink={0} textAlign="right">
                     {`-${drop.dropPp.toFixed(1)}pp`}
                   </text>
-                  <text fg={theme.text.muted} width={11} flexShrink={0}>
+                  <text fg={theme.text.muted} width={8} flexShrink={0}>
                     {copy().drops.kind[drop.kind ?? "unknown"]}
                   </text>
                   <text fg={theme.text.muted} width={3} flexShrink={0} textAlign="center">

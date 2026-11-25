@@ -83,6 +83,7 @@ export function DropsSection(props: {
                     <box
                       flexDirection="row"
                       height={1}
+                      gap={1}
                       onMouseOver={() => {
                         setHovered(drop.messageID)
                       }}
@@ -102,7 +103,7 @@ export function DropsSection(props: {
                       <text fg={theme.text.feedback.error.base} width={9} flexShrink={0} textAlign="right">
                         {`-${drop.dropPp.toFixed(1)}pp`}
                       </text>
-                      <text fg={theme.text.muted} width={11} flexShrink={0}>
+                      <text fg={theme.text.muted} width={8} flexShrink={0}>
                         {copy().drops.kind[drop.kind ?? "unknown"]}
                       </text>
                       <text fg={theme.text.muted} width={3} flexShrink={0} textAlign="center">
