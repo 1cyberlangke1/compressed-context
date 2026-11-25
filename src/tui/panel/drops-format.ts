@@ -6,6 +6,19 @@ export function segmentLabel(breakPoint: CacheDropBreak | undefined): string {
   return breakPoint.offset > 0 ? `${breakPoint.segment} +${breakPoint.offset.toString()}` : breakPoint.segment
 }
 
+/**
+ * 输入：断点；输出：三段字母前缀 + 下标（`mes[62]`、`sys`）。
+ * 预期：侧栏很窄时只省略后面的部分，不挤压时间/跌幅/类型列。
+ */
+export function shortSegment(breakPoint: CacheDropBreak | undefined): string {
+  if (breakPoint === undefined) return ""
+  const match = /^(.*)\[(\d+)\]$/.exec(breakPoint.segment)
+  const base = match?.[1] ?? breakPoint.segment
+  const index = match?.[2]
+  const short = Array.from(base).slice(0, 3).join("")
+  return index === undefined ? short : `${short}[${index}]`
+}
+
 /** 输入：毫秒时间戳；输出：`HH:MM`。预期：只显示本地时钟，跨天信息由面板顺序承担。 */
 export function timeLabel(at: number): string {
   const date = new Date(at)

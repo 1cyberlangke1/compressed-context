@@ -108,7 +108,7 @@ describe("DropsSection", () => {
       expect(frame).toContain("(1)")
       expect(frame).toContain("-50.0pp")
       expect(frame).toContain(copy.drops.causeIcon.system)
-      expect(frame).toContain("system[0] +3")
+      expect(frame).toContain("sys[0]")
     } finally {
       app.renderer.destroy()
     }

@@ -5,7 +5,7 @@ import { resolveMessages } from "../../i18n/index.ts"
 import { localeArgument, type Settings } from "../../shared/settings.ts"
 import type { UpdateSettings } from "../types.ts"
 import { usePanelData } from "./data-scoped.ts"
-import { segmentLabel, timeLabel } from "./drops-format.ts"
+import { shortSegment, timeLabel } from "./drops-format.ts"
 
 /** 侧栏最多预览的记录数；更多记录只在弹窗里完整查看。 */
 const SIDEBAR_ROWS = 10
@@ -97,12 +97,18 @@ export function DropsSection(props: {
                       <text width={2} fg={theme.text.feedback.error.base}>
                         {hovered() === drop.messageID ? (frame() === 0 ? "▸ " : " ▸") : "  "}
                       </text>
-                      <text fg={theme.text.muted}>{timeLabel(drop.at)}</text>
-                      <text fg={theme.text.feedback.error.base}>{`-${drop.dropPp.toFixed(1)}pp`}</text>
-                      <text fg={theme.text.muted}>{copy().drops.kind[drop.kind ?? "unknown"]}</text>
-                      <text fg={theme.text.muted}>{copy().drops.causeIcon[drop.cause]}</text>
-                      <text fg={theme.text.base} flexGrow={1} wrapMode="none">
-                        {segmentLabel(drop.breakPoint)}
+                      <text fg={theme.text.muted} flexShrink={0}>
+                        {timeLabel(drop.at)}
+                      </text>
+                      <text fg={theme.text.feedback.error.base} flexShrink={0}>{`-${drop.dropPp.toFixed(1)}pp`}</text>
+                      <text fg={theme.text.muted} flexShrink={0}>
+                        {copy().drops.kind[drop.kind ?? "unknown"]}
+                      </text>
+                      <text fg={theme.text.muted} flexShrink={0}>
+                        {copy().drops.causeIcon[drop.cause]}
+                      </text>
+                      <text fg={theme.text.base} flexGrow={1} flexShrink={1} wrapMode="none">
+                        {shortSegment(drop.breakPoint)}
                       </text>
                     </box>
                   )}
