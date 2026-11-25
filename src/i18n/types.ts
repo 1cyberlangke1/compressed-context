@@ -52,6 +52,7 @@ export interface Messages {
     readonly request: string
     readonly truncated: string
     readonly noRequest: string
+    readonly noBreak: string
     readonly chars: (value: string) => string
     readonly cause: {
       readonly system: string

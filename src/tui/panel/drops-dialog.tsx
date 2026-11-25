@@ -3,11 +3,11 @@ import { createMemo, createSignal, For, Show } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
 import { formatHitRate } from "../../shared/cache.ts"
-import type { CacheDrop, CacheDropSegment } from "../../shared/cache-drops.ts"
+import type { CacheDrop } from "../../shared/cache-drops.ts"
 import { formatTokens } from "../../shared/format.ts"
 import { localeArgument, type Settings } from "../../shared/settings.ts"
 import { usePanelData } from "./data-scoped.ts"
-import { segmentLabel, splitExcerpt, timeLabel } from "./drops-format.ts"
+import { groupOutline, segmentLabel, splitExcerpt, timeLabel } from "./drops-format.ts"
 
 /** 列表默认可见行数上限；终端更高也不会把详情挤没。 */
 const MAX_LIST_ROWS = 6
@@ -35,11 +35,6 @@ function prettyRequest(text: string): readonly string[] {
   } catch {
     return text.split(/\r?\n/)
   }
-}
-
-/** 输入：段轮廓；输出：`messages[0] 30,887 · messages[1] 348,976`。预期：空轮廓为空串。 */
-function outlineText(segments: readonly CacheDropSegment[], chars: (value: string) => string): string {
-  return segments.map((segment) => `${segment.key} ${chars(segment.chars.toLocaleString())}`).join(" · ")
 }
 
 /** 输入：符号 + 正文 + 颜色；输出：`-`/`+` 行，正文按词换行。预期：差异段完整显示。 */
@@ -198,6 +193,8 @@ function DropDetail(props: {
 }) {
   const lines = createMemo(() => (props.drop.request === undefined ? [] : prettyRequest(props.drop.request.text)))
   const outline = createMemo(() => props.drop.outline ?? [])
+  const groups = createMemo(() => groupOutline(outline()))
+  const [treeOpen, setTreeOpen] = createSignal(false)
   const excerpt = createMemo(() => {
     const point = props.drop.breakPoint
     if (point === undefined) return undefined
@@ -220,7 +217,7 @@ function DropDetail(props: {
       <box flexDirection="row" gap={1} flexWrap="wrap">
         <text fg={props.theme.text.muted}>{props.copy.drops.prev}</text>
         <text fg={props.theme.text.base}>{formatTokens(props.drop.prevPrompt)}</text>
-        <text fg={props.theme.text.muted}>{`${formatHitRate(props.drop.prevHitRate)}%`}</text>
+        <text fg={props.theme.text.feedback.success.base}>{`${formatHitRate(props.drop.prevHitRate)}%`}</text>
         <text fg={props.theme.text.muted}>{"→"}</text>
         <text fg={props.theme.text.muted}>{props.copy.drops.cur}</text>
         <text fg={props.theme.text.base}>{formatTokens(props.drop.prompt)}</text>
@@ -233,23 +230,58 @@ function DropDetail(props: {
           <box flexDirection="column" width="100%">
             <text fg={props.theme.text.muted} wrapMode="word">{`${props.copy.drops.break} ${segmentLabel(props.drop.breakPoint)}`}</text>
             <Show when={split().prefix.length > 0}>
-              <text fg={props.theme.text.muted} wrapMode="word">{`…${split().prefix}`}</text>
+              <text fg={props.theme.text.feedback.success.base} wrapMode="word">{`…${split().prefix}`}</text>
             </Show>
             <DiffLine sign="-" text={split().was} color={props.theme.text.feedback.error.base} />
-            <DiffLine sign="+" text={split().now} color={props.theme.text.feedback.success.base} />
+            <DiffLine sign="+" text={split().now} color={props.theme.text.feedback.error.base} />
             <Show when={split().suffix.length > 0}>
-              <text fg={props.theme.text.muted} wrapMode="word">{`${split().suffix}…`}</text>
+              <text fg={props.theme.text.feedback.success.base} wrapMode="word">{`${split().suffix}…`}</text>
             </Show>
           </box>
         )}
       </Show>
+      <Show when={props.drop.breakPoint === undefined}>
+        <text fg={props.theme.text.muted}>{props.copy.drops.noBreak}</text>
+      </Show>
 
-      <Show when={outline().length > 0}>
+      <Show when={groups().length > 0}>
         <box flexDirection="column" width="100%">
-          <text fg={props.theme.text.muted}>{props.copy.drops.structure}</text>
-          <text fg={props.theme.text.base} wrapMode="word">
-            {outlineText(outline(), props.copy.drops.chars)}
-          </text>
+          <box
+            flexDirection="row"
+            height={1}
+            gap={1}
+            onMouseDown={() => {
+              setTreeOpen(!treeOpen())
+            }}
+          >
+            <text fg={props.theme.text.base}>{treeOpen() ? "▼" : "▶"}</text>
+            <text fg={props.theme.text.muted}>{props.copy.drops.structure}</text>
+          </box>
+          <Show when={treeOpen()}>
+            <For each={groups()}>
+              {(group) => (
+                <box flexDirection="column" width="100%">
+                  <Show
+                    when={group.array}
+                    fallback={
+                      <text fg={props.theme.text.base} wrapMode="word">
+                        {`${group.name} ${props.copy.drops.chars((group.leaves[0]?.chars ?? 0).toLocaleString())}`}
+                      </text>
+                    }
+                  >
+                    <text fg={props.theme.text.base}>{`${group.name} (${group.leaves.length.toString()})`}</text>
+                    <For each={group.leaves}>
+                      {(leaf) => (
+                        <text fg={props.theme.text.muted} wrapMode="word">
+                          {`  ${leaf.label} ${props.copy.drops.chars(leaf.chars.toLocaleString())}`}
+                        </text>
+                      )}
+                    </For>
+                  </Show>
+                </box>
+              )}
+            </For>
+          </Show>
         </box>
       </Show>
 

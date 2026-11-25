@@ -1,4 +1,39 @@
-import type { CacheDropBreak } from "../../shared/cache-drops.ts"
+import type { CacheDropBreak, CacheDropSegment } from "../../shared/cache-drops.ts"
+
+/** 结构树的一个叶子：数组元素是 `[i]`，标量字段没有标签。 */
+export interface OutlineLeaf {
+  readonly label: string
+  readonly chars: number
+}
+
+/** 结构树的一层：顶层字段名 + 它的叶子。 */
+export interface OutlineGroup {
+  readonly name: string
+  readonly array: boolean
+  readonly leaves: readonly OutlineLeaf[]
+}
+
+/**
+ * 输入：扁平段轮廓（`messages[3]` / `system`）。
+ * 输出：按字段分组的树：数组字段收起为 `messages (63)`，标量字段是单叶。
+ * 预期：保持请求里的字段顺序，不合并不同字段。
+ */
+export function groupOutline(segments: readonly CacheDropSegment[]): readonly OutlineGroup[] {
+  const groups: { name: string; array: boolean; leaves: OutlineLeaf[] }[] = []
+  for (const segment of segments) {
+    const match = /^(.*)\[(\d+)\]$/.exec(segment.key)
+    const name = match?.[1] ?? segment.key
+    const index = match?.[2]
+    const existing = groups.find((group) => group.name === name)
+    const leaf: OutlineLeaf = index === undefined ? { label: "", chars: segment.chars } : { label: `[${index}]`, chars: segment.chars }
+    if (existing === undefined) {
+      groups.push({ name, array: index !== undefined, leaves: [leaf] })
+      continue
+    }
+    existing.leaves.push(leaf)
+  }
+  return groups
+}
 
 /** 输入：断点；输出：`system[0] +41` 这样的定位文本；无断点时为空串。 */
 export function segmentLabel(breakPoint: CacheDropBreak | undefined): string {

@@ -30,7 +30,7 @@ function fakeTheme(): Context["theme"] {
 }
 
 /** 输入：id + 跌幅 + 报文差异；输出：一条缓存突变记录。 */
-function drop(id: string, dropPp: number, before: string, after: string): CacheDrop {
+function drop(id: string, dropPp: number, before: string, after: string, withBreak = true): CacheDrop {
   return {
     messageID: id,
     at: Date.UTC(2026, 0, 1, 3, 4),
@@ -43,8 +43,8 @@ function drop(id: string, dropPp: number, before: string, after: string): CacheD
     prevHitRate: 90,
     dropPp,
     kind: "compaction",
-    cause: "system",
-    breakPoint: { segment: "system[0]", offset: 3, before, after },
+    cause: withBreak ? "system" : "append",
+    ...(withBreak ? { breakPoint: { segment: "system[0]", offset: 3, before, after } } : {}),
     outline: [
       { key: "system[0]", chars: 4 },
       { key: "messages[0]", chars: 10 },
@@ -283,6 +283,40 @@ describe("DropsDialog", () => {
       await app.mockMouse.click(4, row)
       const after = await app.waitForFrame((value) => value.includes("AAAB"))
       expect(after).toContain("AAAB")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("没有断点时说明前缀未变", async () => {
+    const app = await testRender(
+      () => <DialogFixture drops={[drop("m2", 50, "AAAA", "AABA", false)]} initial="m2" />,
+      { width: 120, height: 32 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.noBreak))
+      expect(frame).toContain(copy.drops.causeIcon.append)
+      expect(frame).not.toContain(`${copy.drops.break} `)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("请求结构默认折叠，点击标题后展开为树", async () => {
+    const app = await testRender(
+      () => <DialogFixture drops={[drop("m2", 50, "AAAA", "AABA")]} initial="m2" />,
+      { width: 120, height: 32 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.structure))
+      expect(frame).not.toContain("messages (1)")
+      const row = frame.split("\n").findIndex((line) => line.includes(copy.drops.structure))
+      await app.mockMouse.click(4, row)
+      const open = await app.waitForFrame((value) => value.includes("messages (1)"))
+      expect(open).toContain("system")
+      expect(open).toContain("[0]")
     } finally {
       app.renderer.destroy()
     }

@@ -50,6 +50,7 @@ export const en: Messages = {
     request: "Text at breakpoint",
     truncated: "truncated",
     noRequest: "No raw request available",
+    noBreak: "Prefix unchanged; no text difference to compare",
     chars: (value) => `${value} chars`,
     cause: {
       system: "System prompt changed",

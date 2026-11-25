@@ -50,6 +50,7 @@ export const zh: Messages = {
     request: "断点处原文",
     truncated: "已截断",
     noRequest: "没有可展示的原始请求",
+    noBreak: "前缀没有变化，没有可对照的文本差异",
     chars: (value) => `${value} 字符`,
     cause: {
       system: "系统提示变了",

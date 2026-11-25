@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { segmentLabel, shortSegment, splitExcerpt } from "../src/tui/panel/drops-format.ts"
+import { groupOutline, segmentLabel, shortSegment, splitExcerpt } from "../src/tui/panel/drops-format.ts"
 
 /** 输入：段标识 + 两侧摘录；输出：断点对象。 */
 function point(segment: string, before = "AAAA", after = "AABA", offset = 1) {
@@ -41,5 +41,26 @@ describe("splitExcerpt", () => {
       now: "B",
       suffix: "A",
     })
+  })
+})
+
+describe("groupOutline", () => {
+  it("数组字段收成父节点，标量字段是单叶", () => {
+    const groups = groupOutline([
+      { key: "system", chars: 12 },
+      { key: "messages[0]", chars: 30 },
+      { key: "messages[1]", chars: 40 },
+    ])
+    expect(groups).toEqual([
+      { name: "system", array: false, leaves: [{ label: "", chars: 12 }] },
+      {
+        name: "messages",
+        array: true,
+        leaves: [
+          { label: "[0]", chars: 30 },
+          { label: "[1]", chars: 40 },
+        ],
+      },
+    ])
   })
 })
