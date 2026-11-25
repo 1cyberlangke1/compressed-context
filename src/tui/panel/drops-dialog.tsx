@@ -195,6 +195,17 @@ function DropDetail(props: {
   const outline = createMemo(() => props.drop.outline ?? [])
   const groups = createMemo(() => groupOutline(outline()))
   const [treeOpen, setTreeOpen] = createSignal(false)
+  const [openGroups, setOpenGroups] = createSignal<ReadonlySet<string>>(new Set())
+
+  /** 输入：字段名；输出：无；预期：单独展开/收起这一层的数组。 */
+  const toggleGroup = (name: string): void => {
+    setOpenGroups((current) => {
+      const next = new Set(current)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
   const excerpt = createMemo(() => {
     const point = props.drop.breakPoint
     if (point === undefined) return undefined
@@ -240,7 +251,18 @@ function DropDetail(props: {
           </box>
         )}
       </Show>
-      <Show when={props.drop.breakPoint === undefined}>
+      <Show when={props.drop.appended}>
+        {(tail) => (
+          <box flexDirection="column" width="100%">
+            <box flexDirection="row" gap={1} flexWrap="wrap">
+              <text fg={props.theme.text.muted}>{props.copy.drops.appended}</text>
+              <text fg={props.theme.text.base}>{segmentLabel(tail())}</text>
+            </box>
+            <DiffLine sign="+" text={tail().after} color={props.theme.text.feedback.success.base} />
+          </box>
+        )}
+      </Show>
+      <Show when={props.drop.breakPoint === undefined && props.drop.appended === undefined}>
         <text fg={props.theme.text.muted}>{props.copy.drops.noBreak}</text>
       </Show>
 
@@ -269,14 +291,28 @@ function DropDetail(props: {
                       </text>
                     }
                   >
-                    <text fg={props.theme.text.base}>{`${group.name} (${group.leaves.length.toString()})`}</text>
-                    <For each={group.leaves}>
-                      {(leaf) => (
-                        <text fg={props.theme.text.muted} wrapMode="word">
-                          {`  ${leaf.label} ${props.copy.drops.chars(leaf.chars.toLocaleString())}`}
-                        </text>
-                      )}
-                    </For>
+                    <box
+                      flexDirection="row"
+                      height={1}
+                      gap={1}
+                      onMouseDown={() => {
+                        toggleGroup(group.name)
+                      }}
+                    >
+                      <text fg={props.theme.text.base}>
+                        {openGroups().has(group.name) ? "▼" : "▶"}
+                      </text>
+                      <text fg={props.theme.text.base}>{`${group.name} (${group.leaves.length.toString()})`}</text>
+                    </box>
+                    <Show when={openGroups().has(group.name)}>
+                      <For each={group.leaves}>
+                        {(leaf) => (
+                          <text fg={props.theme.text.muted} wrapMode="word">
+                            {`  ${leaf.label} ${props.copy.drops.chars(leaf.chars.toLocaleString())}`}
+                          </text>
+                        )}
+                      </For>
+                    </Show>
                   </Show>
                 </box>
               )}

@@ -61,6 +61,8 @@ describe("diffRequests", () => {
     const result = diffRequests(left, right)
     expect(result.cause).toBe("append")
     expect(result.breakPoint).toBeUndefined()
+    expect(result.appended?.segment).toBe("messages[1]")
+    expect(result.appended?.after).toContain("b")
   })
 
   it("两条请求完全相同归为 none", () => {

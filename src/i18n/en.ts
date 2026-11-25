@@ -51,6 +51,7 @@ export const en: Messages = {
     truncated: "truncated",
     noRequest: "No raw request available",
     noBreak: "Prefix unchanged; no text difference to compare",
+    appended: "Appended suffix",
     chars: (value) => `${value} chars`,
     cause: {
       system: "System prompt changed",

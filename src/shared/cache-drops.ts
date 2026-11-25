@@ -65,6 +65,8 @@ export interface CacheDrop {
   readonly dropPp: number
   readonly cause: CacheDropCause
   readonly breakPoint?: CacheDropBreak
+  /** 只追加时新增的尾部段；用于面板展示后缀变化。 */
+  readonly appended?: CacheDropBreak
   /** 当前请求的结构轮廓。 */
   readonly outline?: readonly CacheDropSegment[]
   /** 断点段的原始文本（截断）。 */
@@ -85,6 +87,8 @@ interface Field {
 export interface RequestDiff {
   readonly cause: CacheDropCause
   readonly breakPoint?: CacheDropBreak
+  /** 只追加新内容时的尾部片段；前缀没断，但后缀变长了。 */
+  readonly appended?: CacheDropBreak
   /** 当前请求的段轮廓；解析失败时为空数组。 */
   readonly outline: readonly CacheDropSegment[]
   /** 断点段原文；没有断点时缺省。 */
@@ -243,7 +247,7 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
   const prevByKey = new Map(prev.map((field) => [field.key, field] as const))
   const nextByKey = new Map(next.map((field) => [field.key, field] as const))
   const windowShift = isWindowShift(prev, next)
-  let grew = false
+  let grown: { readonly field: Field; readonly index: number } | undefined
 
   for (const field of next) {
     const before = prevByKey.get(field.key)
@@ -271,7 +275,9 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
         request: requestOf(segment, right),
       }
     }
-    if (field.items.length > before.items.length) grew = true
+    if (field.items.length > before.items.length && grown === undefined) {
+      grown = { field, index: before.items.length }
+    }
   }
 
   // 整段字段消失：按请求顺序报第一个缺失字段。
@@ -303,7 +309,20 @@ export function diffRequests(prevBody: string, nextBody: string): RequestDiff {
     }
   }
 
-  if (grew) return { cause: "append", outline }
+  if (grown !== undefined) {
+    const added = grown.field.items[grown.index]
+    if (added === undefined) return { cause: "append", outline }
+    return {
+      cause: "append",
+      outline,
+      appended: {
+        segment: segmentName(grown.field, grown.index),
+        offset: 0,
+        before: "",
+        after: Array.from(added).slice(0, EXCERPT_LENGTH).join(""),
+      },
+    }
+  }
   return { cause: "none", outline }
 }
 
@@ -341,6 +360,7 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
   const kind = parseKind(record["kind"])
   const model = record["model"]
   const breakPoint = parseBreak(record["breakPoint"])
+  const appended = parseBreak(record["appended"])
   const outline = parseOutline(record["outline"])
   const request = parseRequest(record["request"])
   return {
@@ -358,6 +378,7 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
     dropPp: record["dropPp"] as number,
     cause,
     ...(breakPoint === undefined ? {} : { breakPoint }),
+    ...(appended === undefined ? {} : { appended }),
     ...(outline === undefined ? {} : { outline }),
     ...(request === undefined ? {} : { request }),
   }

@@ -303,7 +303,26 @@ describe("DropsDialog", () => {
     }
   })
 
-  test("请求结构默认折叠，点击标题后展开为树", async () => {
+  test("只追加时显示新增后缀", async () => {
+    const tailed: CacheDrop = {
+      ...drop("m3", 50, "AAAA", "AABA", false),
+      appended: { segment: "messages[1]", offset: 0, before: "", after: "brand-new-content" },
+    }
+    const app = await testRender(() => <DialogFixture drops={[tailed]} initial="m3" />, {
+      width: 120,
+      height: 32,
+    })
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.appended))
+      expect(frame).toContain("brand-new-content")
+      expect(frame).not.toContain(copy.drops.noBreak)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("请求结构默认折叠，逐层点击后再展开", async () => {
     const app = await testRender(
       () => <DialogFixture drops={[drop("m2", 50, "AAAA", "AABA")]} initial="m2" />,
       { width: 120, height: 32 },
@@ -312,11 +331,16 @@ describe("DropsDialog", () => {
     try {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.structure))
       expect(frame).not.toContain("messages (1)")
-      const row = frame.split("\n").findIndex((line) => line.includes(copy.drops.structure))
-      await app.mockMouse.click(4, row)
-      const open = await app.waitForFrame((value) => value.includes("messages (1)"))
-      expect(open).toContain("system")
-      expect(open).toContain("[0]")
+      const rootRow = frame.split("\n").findIndex((line) => line.includes(copy.drops.structure))
+      await app.mockMouse.click(4, rootRow)
+      // 顶层展开后，数组仍保持折叠，只显示组名和数量。
+      const opened = await app.waitForFrame((value) => value.includes("messages (1)"))
+      expect(opened).toContain("system")
+      expect(opened).not.toContain("[0] 10 字符")
+      const groupRow = opened.split("\n").findIndex((line) => line.includes("messages (1)"))
+      await app.mockMouse.click(4, groupRow)
+      const expanded = await app.waitForFrame((value) => value.includes("[0] 10 字符"))
+      expect(expanded).toContain("[0] 10 字符")
     } finally {
       app.renderer.destroy()
     }

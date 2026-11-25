@@ -53,6 +53,8 @@ export interface Messages {
     readonly truncated: string
     readonly noRequest: string
     readonly noBreak: string
+    /** 只追加时展示的后缀标题。 */
+    readonly appended: string
     readonly chars: (value: string) => string
     readonly cause: {
       readonly system: string

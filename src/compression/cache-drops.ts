@@ -141,6 +141,7 @@ export function planCacheDrop(input: {
     dropPp,
     cause: diff.cause,
     ...(diff.breakPoint === undefined ? {} : { breakPoint: diff.breakPoint }),
+    ...(diff.appended === undefined ? {} : { appended: diff.appended }),
     ...(diff.outline.length === 0 ? {} : { outline: diff.outline }),
     ...(diff.request === undefined ? {} : { request: diff.request }),
   }
