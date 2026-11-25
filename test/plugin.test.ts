@@ -22,7 +22,13 @@ interface UpdateInput {
  * 输出：覆盖 setup 所需域的最小假 ctx。
  * 预期：不需要真实 OpenCode 宿主即可跑完注册流程。
  */
-function createFakeContext(options: { readonly directory?: string; readonly parentID?: string } = {}) {
+function createFakeContext(
+  options: {
+    readonly directory?: string
+    readonly parentID?: string
+    readonly storage?: Plugin.Context["storage"]
+  } = {},
+) {
   const hooks: RecordedHook[] = []
   const updates: UpdateInput[] = []
   const tools: string[] = []
@@ -30,7 +36,7 @@ function createFakeContext(options: { readonly directory?: string; readonly pare
   let disposed = false
 
   const ctx = {
-    storage: {
+    storage: options.storage ?? {
       get: () => Promise.resolve(undefined),
       set: () => Promise.resolve(),
       remove: () => Promise.resolve(),
@@ -109,6 +115,59 @@ describe("服务端插件入口", () => {
       "http.response",
     ])
     expect(tools).toEqual(["compress", "decompress", "checkpoint_tree"])
+  })
+
+  it("开启缓存突变后，http 钩子会把非主请求的 usage 落进 storage", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "cc-hooks-"))
+    mkdirSync(join(directory, ".opencode"), { recursive: true })
+    writeFileSync(join(directory, ".opencode", "compressed-context.json"), JSON.stringify({ cacheDropsEnabled: true }))
+    const data = new Map<string, unknown>()
+    const storage = {
+      get: (key: string) => Promise.resolve(data.get(key)),
+      set: (key: string, value: unknown) => {
+        data.set(key, value)
+        return Promise.resolve()
+      },
+      remove: (key: string) => {
+        data.delete(key)
+        return Promise.resolve()
+      },
+      scan: () => Promise.resolve({ entries: [] }),
+    } as unknown as Plugin.Context["storage"]
+    const { ctx, hooks } = createFakeContext({ directory, storage })
+    await plugin.setup(ctx)
+
+    const requestHook = hooks.find((hook) => hook.name === "http.request")
+    const responseHook = hooks.find((hook) => hook.name === "http.response")
+    expect(requestHook).toBeDefined()
+    expect(responseHook).toBeDefined()
+
+    await requestHook?.callback({
+      sessionID: "ses_test",
+      kind: "generate",
+      request: new Request("http://localhost/generate", {
+        method: "POST",
+        body: JSON.stringify({ system: "S", messages: [{ role: "user", content: "hi" }] }),
+      }),
+    })
+    await responseHook?.callback({
+      sessionID: "ses_test",
+      kind: "generate",
+      model: { providerID: "p", id: "m" },
+      response: new Response(
+        'data: {"usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":5}}',
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+    })
+
+    await vi.waitFor(() => {
+      expect(data.get("cache:history:ses_test")).toBeDefined()
+    })
+    const history = data.get("cache:history:ses_test") as {
+      readonly samples: readonly { readonly input: number; readonly cached: number; readonly hitRate: number }[]
+    }
+    expect(history.samples).toHaveLength(1)
+    expect(history.samples[0]).toMatchObject({ input: 100, cached: 90, hitRate: 90 })
   })
 
   it("context 钩子把统计合并进 session metadata", async () => {
