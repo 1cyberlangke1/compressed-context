@@ -220,13 +220,14 @@ export async function registerSettingsRpc(
     },
     cacheHistoryGet: async (input) => {
       const sessionID = (input as { readonly sessionID: string }).sessionID
-      const history = await loadCacheHistory(ctx.storage, sessionID)      // 只在历史为空时补写一次；已有历史时只读，避免每次 TUI 刷新都拉全文。
+      const history = await loadCacheHistory(ctx.storage, sessionID)
+      // 只在历史为空时补写一次；已有历史时只读，避免每次 TUI 刷新都拉全文。
       if (history.samples.length === 0) {
         await recordCacheHistory(ctx, sessionID)
         const bootstrapped = await loadCacheHistory(ctx.storage, sessionID)
-        return { samples: bootstrapped.samples }
+        return { samples: bootstrapped.samples, drops: bootstrapped.drops }
       }
-      return { samples: history.samples }
+      return { samples: history.samples, drops: history.drops }
     },
     nativeCompactionDisable: async (input) => {
       const path = (input as { readonly path: string }).path

@@ -3,17 +3,19 @@ import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 
 import type { SummaryBlock } from "../../shared/blocks.ts"
 import type { CacheSample } from "../../shared/cache.ts"
+import type { CacheDrop } from "../../shared/cache-drops.ts"
 import { contextRpc, rpcLocation } from "../../shared/rpc.ts"
 import type { Settings } from "../../shared/settings.ts"
 import { parseStats, STATS_KEY, type ContextStats } from "../../shared/stats.ts"
 
 /** 面板分区各自需要的数据范围；独立 slot 时只拉自己那份。 */
-export type PanelDataScope = "all" | "context" | "cache" | "summaries"
+export type PanelDataScope = "all" | "context" | "cache" | "summaries" | "drops"
 
 /** Panel 需要的服务端数据；全部是响应式 accessor。 */
 export interface PanelData {
   readonly stats: Accessor<ContextStats | undefined>
   readonly cache: Accessor<readonly CacheSample[]>
+  readonly drops: Accessor<readonly CacheDrop[]>
   readonly blocks: Accessor<readonly SummaryBlock[]>
   /** 编辑块成功后手动重拉 active 链。 */
   readonly refreshBlocks: () => Promise<void>
@@ -32,19 +34,21 @@ export function usePanelData(input: {
 }): PanelData {
   const scope = input.scope ?? "all"
   const needStats = scope === "all" || scope === "context"
-  const needCache = scope === "all" || scope === "cache"
+  const needCache = scope === "all" || scope === "cache" || scope === "drops"
   const needBlocks = scope === "all" || scope === "summaries"
   const [stats, setStats] = createSignal<ContextStats>()
   const [cache, setCache] = createSignal<readonly CacheSample[]>([])
+  const [drops, setDrops] = createSignal<readonly CacheDrop[]>([])
   const [blocks, setBlocks] = createSignal<readonly SummaryBlock[]>([])
   const rpc = () => contextRpc(input.context.client)
 
-  /** 输入：无；输出：无；预期：从服务端拉取该会话持久化的缓存历史。 */
+  /** 输入：无；输出：无；预期：从服务端拉取该会话持久化的缓存历史与突变记录。 */
   const refreshCache = async (): Promise<void> => {
     if (!needCache) return
     try {
       const got = await rpc().cacheHistoryGet({ sessionID: input.sessionID }, rpcLocation(input.context))
       setCache(got.samples)
+      setDrops(got.drops)
     } catch {
       // server plugin not loaded；保留上一次数据
     }
@@ -74,7 +78,7 @@ export function usePanelData(input: {
 
   // 显示开关变化时重新拉取；首次挂载也会跑一次。
   createEffect(() => {
-    if (input.settings().showCacheChart || input.settings().showCacheLog) void refreshCache()
+    if (input.settings().showCacheChart || input.settings().showCacheLog || input.settings().showCacheDrops) void refreshCache()
   })
   createEffect(() => {
     if (input.settings().showSummaries) void refreshBlocks()
@@ -89,7 +93,9 @@ export function usePanelData(input: {
       if (event.data.sessionID !== input.sessionID) return
       void refresh()
       // 缓存历史由服务端在 usage.updated 时补写；这里同步刷新面板。
-      if (input.settings().showCacheChart || input.settings().showCacheLog) void refreshCache()
+      if (input.settings().showCacheChart || input.settings().showCacheLog || input.settings().showCacheDrops) {
+        void refreshCache()
+      }
     }),
   )
   onCleanup(
@@ -109,5 +115,5 @@ export function usePanelData(input: {
     }),
   )
 
-  return { stats, cache, blocks, refreshBlocks }
+  return { stats, cache, drops, blocks, refreshBlocks }
 }

@@ -3,6 +3,7 @@ import type { Schema } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { cacheHistoryKey, type CacheMessage, type CacheSample } from "../src/shared/cache.ts"
+import type { CacheDrop } from "../src/shared/cache-drops.ts"
 import { loadCacheHistory, recordCacheHistory, saveCacheHistory } from "../src/compression/cache-history.ts"
 import { clearDeletedSessions, markSessionDeleted } from "../src/compression/deleted-sessions.ts"
 import type { StorageLike } from "../src/compression/state.ts"
@@ -28,6 +29,23 @@ function createStorage(): StorageLike {
 /** 输入：id + 时间；输出：合法样本。 */
 function sample(id: string, at: number): CacheSample {
   return { messageID: id, at, input: 100, output: 10, cached: 80, hitRate: 80 }
+}
+
+/** 输入：id + 时间；输出：合法缓存突变记录。 */
+function dropRecord(id: string, at: number): CacheDrop {
+  return {
+    messageID: id,
+    at,
+    prevMessageID: `prev-${id}`,
+    prompt: 100,
+    hit: 10,
+    hitRate: 10,
+    prevPrompt: 100,
+    prevHit: 90,
+    prevHitRate: 90,
+    dropPp: 80,
+    cause: "history",
+  }
 }
 
 /** 输入：id + 时间；输出：带 usage 的 assistant 消息。 */
@@ -61,15 +79,15 @@ afterEach(() => {
 describe("loadCacheHistory / saveCacheHistory", () => {
   it("写入后能读回，缺失会话是空历史", async () => {
     const storage = createStorage()
-    await saveCacheHistory(storage, "ses_a", [sample("m1", 10)])
+    await saveCacheHistory(storage, "ses_a", { v: 2, samples: [sample("m1", 10)], drops: [] })
     expect((await loadCacheHistory(storage, "ses_a")).samples).toEqual([sample("m1", 10)])
     expect((await loadCacheHistory(storage, "ses_b")).samples).toEqual([])
   })
 
   it("不同会话的历史互相隔离", async () => {
     const storage = createStorage()
-    await saveCacheHistory(storage, "ses_a", [sample("a1", 10), sample("a2", 20)])
-    await saveCacheHistory(storage, "ses_b", [sample("b1", 30)])
+    await saveCacheHistory(storage, "ses_a", { v: 2, samples: [sample("a1", 10), sample("a2", 20)], drops: [] })
+    await saveCacheHistory(storage, "ses_b", { v: 2, samples: [sample("b1", 30)], drops: [] })
     expect((await loadCacheHistory(storage, "ses_a")).samples.map((item) => item.messageID)).toEqual([
       "a1",
       "a2",
@@ -77,6 +95,24 @@ describe("loadCacheHistory / saveCacheHistory", () => {
     expect((await loadCacheHistory(storage, "ses_b")).samples.map((item) => item.messageID)).toEqual([
       "b1",
     ])
+  })
+
+  it("v1 数据读入后补空 drops，写成 v2", async () => {
+    const storage = createStorage()
+    await storage.set("cache:history:ses_a", { v: 1, samples: [sample("m1", 10)] } as unknown as Schema.Json)
+    const history = await loadCacheHistory(storage, "ses_a")
+    expect(history.v).toBe(2)
+    expect(history.drops).toEqual([])
+  })
+
+  it("不同会话的突变记录互相隔离", async () => {
+    const storage = createStorage()
+    const dropA = dropRecord("a1", 1)
+    const dropB = dropRecord("b1", 2)
+    await saveCacheHistory(storage, "ses_a", { v: 2, samples: [sample("a1", 10)], drops: [dropA] })
+    await saveCacheHistory(storage, "ses_b", { v: 2, samples: [sample("b1", 20)], drops: [dropB] })
+    expect((await loadCacheHistory(storage, "ses_a")).drops).toEqual([dropA])
+    expect((await loadCacheHistory(storage, "ses_b")).drops).toEqual([dropB])
   })
 })
 

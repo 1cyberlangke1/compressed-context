@@ -56,6 +56,11 @@ describe("initialSettings / normalizeSettings", () => {
       decompressTempCap: 50,
       decompressTempMaxAgeHours: 24,
       decompressShowTokens: true,
+      cacheDropsEnabled: false,
+      cacheDropsThreshold: 10,
+      cacheDropsMaxRecords: 100,
+      cacheDropsExpanded: true,
+      showCacheDrops: true,
     })
   })
 

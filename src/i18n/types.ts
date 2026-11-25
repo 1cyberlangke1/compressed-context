@@ -19,6 +19,34 @@ export interface Messages {
   readonly summariesTitle: string
   /** 合并来源：按连续段分组的紧凑文本（如 #b34…#b50 + #b52…#b77）。 */
   readonly mergedJoined: (ids: string) => string
+  /** 缓存突变分区与面板文案。 */
+  readonly drops: {
+    readonly title: string
+    readonly panelTitle: string
+    readonly more: (count: number) => string
+    readonly empty: string
+    readonly break: string
+    readonly prev: string
+    readonly cur: string
+    readonly was: string
+    readonly now: string
+    readonly hint: (threshold: number, max: number) => string
+    readonly command: {
+      readonly title: string
+      readonly description: string
+      readonly group: string
+    }
+    readonly cause: {
+      readonly system: string
+      readonly tools: string
+      readonly params: string
+      readonly history: string
+      readonly window: string
+      readonly append: string
+      readonly none: string
+      readonly unknown: string
+    }
+  }
   readonly noData: string
   readonly command: {
     readonly title: string
@@ -171,6 +199,14 @@ export interface Messages {
     readonly decompressTempMaxAgeHoursHint: string
     readonly decompressTempMaxAgeHoursInvalid: string
     readonly decompressShowTokens: string
+    readonly cacheDropsEnabled: string
+    readonly cacheDropsShow: string
+    readonly cacheDropsThreshold: string
+    readonly cacheDropsThresholdHint: string
+    readonly cacheDropsThresholdInvalid: string
+    readonly cacheDropsMaxRecords: string
+    readonly cacheDropsMaxRecordsHint: string
+    readonly cacheDropsMaxRecordsInvalid: string
     readonly submit: string
     readonly language: string
     readonly auto: string

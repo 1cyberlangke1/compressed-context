@@ -107,6 +107,20 @@ export const MAX_DECOMPRESS_TEMP_CAP = 1_000
 export const MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS = 1
 export const MAX_DECOMPRESS_TEMP_MAX_AGE_HOURS = 720
 
+/** 缓存突变记录：命中率跌幅阈值（百分点）与每个会话的记录条数上限。 */
+export const DEFAULT_CACHE_DROPS_THRESHOLD = 10
+export const MIN_CACHE_DROPS_THRESHOLD = 1
+export const MAX_CACHE_DROPS_THRESHOLD = 100
+export const DEFAULT_CACHE_DROPS_MAX_RECORDS = 100
+export const MIN_CACHE_DROPS_MAX_RECORDS = 1
+export const MAX_CACHE_DROPS_MAX_RECORDS = 1000
+/** 缓存突变侧栏分区是否展开；纯 TUI 状态。 */
+export const DEFAULT_CACHE_DROPS_EXPANDED = true
+/** 缓存突变侧栏分区是否显示；纯 TUI 状态。 */
+export const DEFAULT_SHOW_CACHE_DROPS = true
+/** 缓存突变记录总开关；关闭时不抓请求体、不算差异、不写记录。 */
+export const DEFAULT_CACHE_DROPS_ENABLED = false
+
 /** 服务端关心的压缩设置；TUI 的 Settings 在此基础上加显示项。 */
 export interface CompressionSettings {
   /** 强制压缩阈值（占用百分比） */
@@ -143,6 +157,12 @@ export interface CompressionSettings {
   decompressTempMaxAgeHours: number
   /** decompress 返回是否带估算 token */
   decompressShowTokens: boolean
+  /** 缓存突变记录开关 */
+  cacheDropsEnabled: boolean
+  /** 命中率跌幅达到该百分点才记录 */
+  cacheDropsThreshold: number
+  /** 每个会话最多保留多少条突变记录 */
+  cacheDropsMaxRecords: number
 }
 
 /** 允许按模型覆盖的字段；只放 token 相关项，界面与行为项保持全局。 */
@@ -200,6 +220,10 @@ export interface Settings extends CompressionSettings {
   showSummaries: boolean
   /** 摘要区是否展开 */
   summariesExpanded: boolean
+  /** 缓存突变分区是否展开 */
+  cacheDropsExpanded: boolean
+  /** 显示缓存突变分区 */
+  showCacheDrops: boolean
   /** 已选择不再提醒 OpenCode 原生压缩仍开启 */
   nativeCompactionPromptDismissed: boolean
 }
@@ -234,6 +258,11 @@ export const DEFAULT_SETTINGS: Settings = {
   decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
   decompressTempMaxAgeHours: DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   decompressShowTokens: DEFAULT_DECOMPRESS_SHOW_TOKENS,
+  cacheDropsEnabled: DEFAULT_CACHE_DROPS_ENABLED,
+  cacheDropsThreshold: DEFAULT_CACHE_DROPS_THRESHOLD,
+  cacheDropsMaxRecords: DEFAULT_CACHE_DROPS_MAX_RECORDS,
+  cacheDropsExpanded: DEFAULT_CACHE_DROPS_EXPANDED,
+  showCacheDrops: DEFAULT_SHOW_CACHE_DROPS,
 }
 
 /** 输入：任意值；输出：是否是合法语言设置。 */
@@ -559,6 +588,23 @@ export function normalizeSettings(value: Readonly<Record<string, unknown>>): Set
     ),
     decompressShowTokens:
       typeof value["decompressShowTokens"] === "boolean" ? value["decompressShowTokens"] : DEFAULT_DECOMPRESS_SHOW_TOKENS,
+    cacheDropsEnabled:
+      typeof value["cacheDropsEnabled"] === "boolean" ? value["cacheDropsEnabled"] : DEFAULT_CACHE_DROPS_ENABLED,
+    cacheDropsThreshold: readInt(
+      value["cacheDropsThreshold"],
+      MIN_CACHE_DROPS_THRESHOLD,
+      MAX_CACHE_DROPS_THRESHOLD,
+      DEFAULT_CACHE_DROPS_THRESHOLD,
+    ),
+    cacheDropsMaxRecords: readInt(
+      value["cacheDropsMaxRecords"],
+      MIN_CACHE_DROPS_MAX_RECORDS,
+      MAX_CACHE_DROPS_MAX_RECORDS,
+      DEFAULT_CACHE_DROPS_MAX_RECORDS,
+    ),
+    cacheDropsExpanded:
+      typeof value["cacheDropsExpanded"] === "boolean" ? value["cacheDropsExpanded"] : DEFAULT_CACHE_DROPS_EXPANDED,
+    showCacheDrops: typeof value["showCacheDrops"] === "boolean" ? value["showCacheDrops"] : DEFAULT_SHOW_CACHE_DROPS,
   }
 }
 

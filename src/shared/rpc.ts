@@ -2,6 +2,7 @@ import type { Rpc } from "@opencode/plugin/rpc"
 
 import type { SummaryBlock } from "./blocks.ts"
 import type { CacheSample } from "./cache.ts"
+import type { CacheDrop } from "./cache-drops.ts"
 import type { Settings } from "./settings.ts"
 
 /** 配置层路径：全局在前，项目由远到近。 */
@@ -65,6 +66,11 @@ const SettingsProperties = {
   decompressTempCap: { type: "number" },
   decompressTempMaxAgeHours: { type: "number" },
   decompressShowTokens: { type: "boolean" },
+  cacheDropsEnabled: { type: "boolean" },
+  cacheDropsThreshold: { type: "number" },
+  cacheDropsMaxRecords: { type: "number" },
+  cacheDropsExpanded: { type: "boolean" },
+  showCacheDrops: { type: "boolean" },
   enabled: { type: "boolean" },
   expanded: { type: "boolean" },
   locale: { type: "string", enum: ["auto", "zh", "en"] },
@@ -295,10 +301,60 @@ const CacheSampleJson = {
   additionalProperties: false,
 } as const
 
+/** 一条缓存突变记录。 */
+const CacheDropJson = {
+  type: "object",
+  properties: {
+    messageID: { type: "string" },
+    at: { type: "number" },
+    model: { type: "string" },
+    prevMessageID: { type: "string" },
+    prompt: { type: "number" },
+    hit: { type: "number" },
+    hitRate: { type: "number" },
+    prevPrompt: { type: "number" },
+    prevHit: { type: "number" },
+    prevHitRate: { type: "number" },
+    dropPp: { type: "number" },
+    cause: {
+      type: "string",
+      enum: ["system", "tools", "params", "history", "window", "append", "none", "unknown"],
+    },
+    breakPoint: {
+      type: "object",
+      properties: {
+        segment: { type: "string" },
+        offset: { type: "number" },
+        before: { type: "string" },
+        after: { type: "string" },
+      },
+      required: ["segment", "offset", "before", "after"],
+      additionalProperties: false,
+    },
+  },
+  required: [
+    "messageID",
+    "at",
+    "prevMessageID",
+    "prompt",
+    "hit",
+    "hitRate",
+    "prevPrompt",
+    "prevHit",
+    "prevHitRate",
+    "dropPp",
+    "cause",
+  ],
+  additionalProperties: false,
+} as const
+
 const CacheHistoryOutputJson = {
   type: "object",
-  properties: { samples: { type: "array", items: CacheSampleJson } },
-  required: ["samples"],
+  properties: {
+    samples: { type: "array", items: CacheSampleJson },
+    drops: { type: "array", items: CacheDropJson },
+  },
+  required: ["samples", "drops"],
   additionalProperties: false,
 } as const
 
@@ -381,7 +437,7 @@ export interface ContextRpcClient {
   cacheHistoryGet(
     input: { readonly sessionID: string },
     options?: { readonly location?: { readonly directory: string } },
-  ): Promise<{ readonly samples: readonly CacheSample[] }>
+  ): Promise<{ readonly samples: readonly CacheSample[]; readonly drops: readonly CacheDrop[] }>
   nativeCompactionDisable(
     input: {
       readonly path: string

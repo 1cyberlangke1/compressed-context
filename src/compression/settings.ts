@@ -2,6 +2,9 @@ import type { Plugin } from "@opencode/plugin"
 
 import {
   DEFAULT_AUTO_COMPRESS,
+  DEFAULT_CACHE_DROPS_ENABLED,
+  DEFAULT_CACHE_DROPS_MAX_RECORDS,
+  DEFAULT_CACHE_DROPS_THRESHOLD,
   DEFAULT_DECOMPRESS_INLINE_MAX,
   DEFAULT_DECOMPRESS_SHOW_TOKENS,
   DEFAULT_DECOMPRESS_TEMP_CAP,
@@ -25,6 +28,10 @@ import {
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
   MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+  MIN_CACHE_DROPS_MAX_RECORDS,
+  MIN_CACHE_DROPS_THRESHOLD,
+  MAX_CACHE_DROPS_MAX_RECORDS,
+  MAX_CACHE_DROPS_THRESHOLD,
   MIN_NUDGE_GROWTH_TOKENS,
   MIN_SUMMARY_PERCENT,
   MIN_TRIGGER_PERCENT,
@@ -157,6 +164,9 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   decompressTempCap: DEFAULT_DECOMPRESS_TEMP_CAP,
   decompressTempMaxAgeHours: DEFAULT_DECOMPRESS_TEMP_MAX_AGE_HOURS,
   decompressShowTokens: DEFAULT_DECOMPRESS_SHOW_TOKENS,
+  cacheDropsEnabled: DEFAULT_CACHE_DROPS_ENABLED,
+  cacheDropsThreshold: DEFAULT_CACHE_DROPS_THRESHOLD,
+  cacheDropsMaxRecords: DEFAULT_CACHE_DROPS_MAX_RECORDS,
 }
 
 /**
@@ -236,6 +246,17 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
   ) {
     return undefined
   }
+  const cacheDropsEnabled = readStrictBoolean(record["cacheDropsEnabled"], DEFAULT_CACHE_DROPS_ENABLED)
+  if (cacheDropsEnabled === undefined) return undefined
+  const cacheDropsThreshold =
+    record["cacheDropsThreshold"] === undefined
+      ? DEFAULT_CACHE_DROPS_THRESHOLD
+      : readOptionalInt(record["cacheDropsThreshold"], MIN_CACHE_DROPS_THRESHOLD, MAX_CACHE_DROPS_THRESHOLD)
+  const cacheDropsMaxRecords =
+    record["cacheDropsMaxRecords"] === undefined
+      ? DEFAULT_CACHE_DROPS_MAX_RECORDS
+      : readOptionalInt(record["cacheDropsMaxRecords"], MIN_CACHE_DROPS_MAX_RECORDS, MAX_CACHE_DROPS_MAX_RECORDS)
+  if (cacheDropsThreshold === undefined || cacheDropsMaxRecords === undefined) return undefined
   return {
     models,
     triggerPercent: Math.round(percent),
@@ -255,6 +276,9 @@ export function parseServerSettings(value: unknown): ServerSettings | undefined 
     decompressTempCap,
     decompressTempMaxAgeHours,
     decompressShowTokens,
+    cacheDropsEnabled,
+    cacheDropsThreshold,
+    cacheDropsMaxRecords,
   }
 }
 

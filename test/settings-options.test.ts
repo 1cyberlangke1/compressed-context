@@ -30,9 +30,12 @@ describe("buildSettingsOptions", () => {
       "enableCompressTool",
       "enableDecompressTool",
       "enableCheckpointTreeTool",
+      "cacheDropsEnabled",
       "blockPercent",
       "totalPercent",
       "recentT1Blocks",
+      "cacheDropsThreshold",
+      "cacheDropsMaxRecords",
       "summaryLanguage",
       "summaryFormat",
       "showTimeline",
@@ -41,6 +44,7 @@ describe("buildSettingsOptions", () => {
       "showCacheChart",
       "showCacheLog",
       "showSummaries",
+      "showCacheDrops",
       "decompressInlineMax",
       "decompressTempCap",
       "decompressTempMaxAgeHours",
@@ -110,10 +114,10 @@ describe("三层菜单", () => {
     // 摘要分类包含完整四项（语言 · 格式 · 时间线 · 块头估算）
     expect(sections[2]?.footer).toBe("自动 · Markdown · 关 · 关")
     // 开关分类与界面分类只输出纯粹状态流，不拼接任何冗长功能名字
-    expect(sections[3]?.footer).toBe("开 · 开 · 开 · 开")
+    expect(sections[3]?.footer).toBe("开 · 开 · 开 · 开 · 关")
     // 解压分类完整包含四项（内联上限 · 临时文件上限 · 保留时间 · 估算标记）
     expect(sections[4]?.footer).toBe("10k · 50 · 24h · 开")
-    expect(sections[5]?.footer).toBe("开 · 开 · 关 · 开 · 自动")
+    expect(sections[5]?.footer).toBe("开 · 开 · 关 · 开 · 开 · 自动")
     expect(sections.at(-1)?.title).toBe(`${copy.update.checkUpdates} v${PLUGIN_VERSION}`)
     expect(sections.at(-1)?.footer).toBeUndefined()
   })
@@ -126,18 +130,22 @@ describe("三层菜单", () => {
       "blockPercent",
       "totalPercent",
       "recentT1Blocks",
+      "cacheDropsThreshold",
+      "cacheDropsMaxRecords",
     ])
     expect(itemsOfGroup(all, "switches").map((option) => option.value)).toEqual([
       "autoCompress",
       "enableCompressTool",
       "enableDecompressTool",
       "enableCheckpointTreeTool",
+      "cacheDropsEnabled",
     ])
     expect(itemsOfGroup(all, "interface").map((option) => option.value)).toEqual([
       "show",
       "showCacheChart",
       "showCacheLog",
       "showSummaries",
+      "showCacheDrops",
       "language",
     ])
   })

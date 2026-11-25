@@ -2,6 +2,7 @@ import { Plugin } from "@opencode/plugin"
 
 import { maybeAutoCompress, maybeAutoCompressStep, maybeNudge } from "./compression/auto.ts"
 import { recordCacheHistoryStep } from "./compression/cache-history.ts"
+import { dropTracker } from "./compression/cache-drops.ts"
 import { adoptNativeCheckpoint } from "./compression/adopt.ts"
 import { handleCompaction } from "./compression/compaction.ts"
 import { cleanupStaleTempFiles } from "./compression/decompress.ts"
@@ -41,9 +42,10 @@ export default Plugin.define({
       maxAgeMs: effectiveDecompressTempMaxAgeHours(initialSettings) * 60 * 60 * 1000,
     })
 
-    /** 输入：sessionID；输出：无；预期：会话空闲/删除时清掉进程内统计缓存。 */
+    /** 输入：sessionID；输出：无；预期：会话空闲/删除时清掉进程内统计缓存与请求追踪。 */
     const forgetMemory = (sessionID: string): void => {
       published.delete(sessionID)
+      dropTracker().forget(sessionID)
     }
 
     const publishStats = async (sessionID: string, stats: ContextStats): Promise<void> => {
@@ -165,6 +167,27 @@ export default Plugin.define({
         // 插件自己的摘要请求走 generate 流：不隐藏的话，子代理的摘要请求
         // 仍然会向模型广告 compress/decompress/checkpoint_tree。
         await applyToolPolicy({ sessionID: event.sessionID, tools: event.tools })
+      }),
+    )
+
+    // 缓存突变记录：只在开关打开、且是主请求时抓原始报文。
+    // 克隆请求体不会消费宿主稍后要读的那一份，属于官方支持的只读观察方式。
+    disposables.push(
+      await ctx.session.hook("http.request", async (event) => {
+        if (event.kind !== "primary") return
+        const settings = await loadServerSettings(ctx)
+        if (!settings.cacheDropsEnabled) {
+          dropTracker().forget(event.sessionID)
+          return
+        }
+        // 子代理会话短命，侧栏不展示；不抓它的报文，省内存也避免噪声。
+        if (await isSubagentSession(ctx, event.sessionID)) return
+        try {
+          const body = await event.request.clone().text()
+          dropTracker().capture(event.sessionID, { body, at: Date.now() })
+        } catch {
+          // 请求体读失败只影响这条记录，不影响真正发出去的请求。
+        }
       }),
     )
 

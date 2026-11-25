@@ -9,9 +9,16 @@ import {
   hitRatePercent,
   parseCacheHistory,
   sampleFromMessage,
+  type CacheHistory,
   type CacheMessage,
   type CacheSample,
 } from "../src/shared/cache.ts"
+import type { CacheDrop } from "../src/shared/cache-drops.ts"
+
+/** 输入：样本 + 突变记录；输出：完整 v2 历史；用于比较。 */
+function history(samples: readonly CacheSample[], drops: readonly CacheDrop[] = []): CacheHistory {
+  return { v: 2, samples, drops }
+}
 
 /** 输入：id + usage；输出：带 tokens 的 assistant 消息。 */
 function assistant(
@@ -137,16 +144,35 @@ describe("appendCacheSamples", () => {
 })
 
 describe("parseCacheHistory", () => {
-  it("解析合法历史", () => {
+  it("解析合法历史：v1 读入后升级为 v2 并补空 drops", () => {
     const value = { v: 1, samples: [sample("m1", 10)] }
-    expect(parseCacheHistory(value)).toEqual(value)
+    expect(parseCacheHistory(value)).toEqual({ v: 2, samples: [sample("m1", 10)], drops: [] })
+  })
+
+  it("解析 v2 的突变记录并按上限裁剪", () => {
+    const drop: CacheDrop = {
+      messageID: "m2",
+      at: 20,
+      prevMessageID: "m1",
+      prompt: 100,
+      hit: 10,
+      hitRate: 10,
+      prevPrompt: 100,
+      prevHit: 90,
+      prevHitRate: 90,
+      dropPp: 80,
+      cause: "tools",
+    }
+    const parsed = parseCacheHistory({ v: 2, samples: [], drops: [drop] })
+    expect(parsed.drops).toEqual([drop])
+    expect(parseCacheHistory({ v: 2, samples: [], drops: [drop] }, 1).drops).toHaveLength(1)
   })
 
   it("坏数据返回空历史", () => {
-    expect(parseCacheHistory(undefined)).toEqual({ v: 1, samples: [] })
-    expect(parseCacheHistory(null)).toEqual({ v: 1, samples: [] })
-    expect(parseCacheHistory({ v: 2, samples: [] })).toEqual({ v: 1, samples: [] })
-    expect(parseCacheHistory({ v: 1, samples: "no" })).toEqual({ v: 1, samples: [] })
+    expect(parseCacheHistory(undefined)).toEqual({ v: 2, samples: [], drops: [] })
+    expect(parseCacheHistory(null)).toEqual({ v: 2, samples: [], drops: [] })
+    expect(parseCacheHistory({ v: 3, samples: [] })).toEqual({ v: 2, samples: [], drops: [] })
+    expect(parseCacheHistory({ v: 1, samples: "no" })).toEqual({ v: 2, samples: [], drops: [] })
   })
 
   it("丢弃非法样本并截断到 10 条", () => {
@@ -187,8 +213,27 @@ describe("parseCacheHistory", () => {
 
 describe("cacheHistoryEquals", () => {
   it("内容一致返回 true，不一致返回 false", () => {
-    expect(cacheHistoryEquals([sample("m1", 10)], [sample("m1", 10)])).toBe(true)
-    expect(cacheHistoryEquals([sample("m1", 10)], [sample("m1", 11)])).toBe(false)
-    expect(cacheHistoryEquals([], [])).toBe(true)
+    expect(history([sample("m1", 10)]).samples).toEqual([sample("m1", 10)])
+    expect(cacheHistoryEquals(history([sample("m1", 10)]), history([sample("m1", 10)]))).toBe(true)
+    expect(cacheHistoryEquals(history([sample("m1", 10)]), history([sample("m1", 11)]))).toBe(false)
+    expect(cacheHistoryEquals(history([]), history([]))).toBe(true)
+  })
+
+  it("只要突变记录不同就判定为不一致", () => {
+    const drop: CacheDrop = {
+      messageID: "m1",
+      at: 10,
+      prevMessageID: "m0",
+      prompt: 100,
+      hit: 10,
+      hitRate: 10,
+      prevPrompt: 100,
+      prevHit: 90,
+      prevHitRate: 90,
+      dropPp: 80,
+      cause: "history",
+    }
+    expect(cacheHistoryEquals(history([], [drop]), history([], [drop]))).toBe(true)
+    expect(cacheHistoryEquals(history([], [drop]), history([], []))).toBe(false)
   })
 })

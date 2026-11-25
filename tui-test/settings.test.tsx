@@ -131,6 +131,8 @@ describe("SettingsCommand", () => {
         "blockPercent",
         "totalPercent",
         "recentT1Blocks",
+        "cacheDropsThreshold",
+        "cacheDropsMaxRecords",
       ])
     } finally {
       app.renderer.destroy()
@@ -192,6 +194,7 @@ describe("SettingsCommand", () => {
         "showCacheChart",
         "showCacheLog",
         "showSummaries",
+        "showCacheDrops",
         "language",
       ])
     } finally {

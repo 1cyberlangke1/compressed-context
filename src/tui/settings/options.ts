@@ -72,6 +72,10 @@ export const SETTINGS_ACTIONS = [
   "decompressTempCap",
   "decompressTempMaxAgeHours",
   "decompressShowTokens",
+  "cacheDropsEnabled",
+  "showCacheDrops",
+  "cacheDropsThreshold",
+  "cacheDropsMaxRecords",
   "language",
   "enableCheckpointTreeTool",
 ] as const
@@ -101,10 +105,14 @@ export const ACTION_GROUPS: Record<SettingsAction, SettingsGroup> = {
   enableCompressTool: "switches",
   enableDecompressTool: "switches",
   enableCheckpointTreeTool: "switches",
+  cacheDropsEnabled: "switches",
+  cacheDropsThreshold: "defaults",
+  cacheDropsMaxRecords: "defaults",
   show: "interface",
   showCacheChart: "interface",
   showCacheLog: "interface",
   showSummaries: "interface",
+  showCacheDrops: "interface",
   language: "interface",
   decompressInlineMax: "decompress",
   decompressTempCap: "decompress",
@@ -175,6 +183,7 @@ export function buildSectionOptions(input: {
           settings.enableCompressTool,
           settings.enableDecompressTool,
           settings.enableCheckpointTreeTool,
+          settings.cacheDropsEnabled,
         ],
         copy,
       ),
@@ -193,6 +202,7 @@ export function buildSectionOptions(input: {
           settings.showCacheChart,
           settings.showCacheLog,
           settings.showSummaries,
+          settings.showCacheDrops,
         ],
         copy,
       )} · ${localeLabel(settings, copy)}`,
@@ -245,6 +255,8 @@ export type ToggleSetting = Extract<
   | "showCacheLog"
   | "showSummaries"
   | "decompressShowTokens"
+  | "cacheDropsEnabled"
+  | "showCacheDrops"
 >
 
 /**
@@ -303,6 +315,12 @@ export function buildSettingsOptions(input: {
       onOff(settings.enableCheckpointTreeTool),
       copy.settings.categories.switches,
     ),
+    toggle(
+      "cacheDropsEnabled",
+      copy.settings.cacheDropsEnabled,
+      onOff(settings.cacheDropsEnabled),
+      copy.settings.categories.switches,
+    ),
     {
       title: copy.settings.summaryBlockPercent,
       value: "blockPercent",
@@ -319,6 +337,18 @@ export function buildSettingsOptions(input: {
       title: copy.settings.recentT1Blocks,
       value: "recentT1Blocks",
       footer: settings.recentT1Blocks.toString(),
+      category: copy.settings.categories.defaults,
+    },
+    {
+      title: copy.settings.cacheDropsThreshold,
+      value: "cacheDropsThreshold",
+      footer: `${settings.cacheDropsThreshold.toString()}pp`,
+      category: copy.settings.categories.defaults,
+    },
+    {
+      title: copy.settings.cacheDropsMaxRecords,
+      value: "cacheDropsMaxRecords",
+      footer: settings.cacheDropsMaxRecords.toString(),
       category: copy.settings.categories.defaults,
     },
     {
@@ -362,6 +392,12 @@ export function buildSettingsOptions(input: {
       "showSummaries",
       copy.settings.showSummaries,
       onOff(settings.showSummaries),
+      copy.settings.categories.interface,
+    ),
+    toggle(
+      "showCacheDrops",
+      copy.settings.cacheDropsShow,
+      onOff(settings.showCacheDrops),
       copy.settings.categories.interface,
     ),
     {

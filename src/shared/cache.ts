@@ -1,16 +1,21 @@
 /**
  * 缓存命中历史的跨进程载体。
  *
- * 服务端插件在 session.idle 时把最近 10 条 assistant 消息的 usage 追加到
- * storage（`cache:history:<sessionID>`）；TUI 通过 RPC 读取。
+ * 服务端插件在 step 结束时把 assistant 消息的 usage 追加到 storage
+ * （`cache:history:<sessionID>`）；TUI 通过 RPC 读取。
  * 本模块只放纯函数：采样、追加、校验、排序，方便单测。
  */
+
+import { cacheDropsEqual, parseCacheDrops, type CacheDrop } from "./cache-drops.ts"
 
 /** 每个会话一份，key 里带 sessionID，父/子会话互不影响。 */
 export const CACHE_HISTORY_PREFIX = "cache:history:"
 
 /** 只保留最近 10 次请求。 */
 export const CACHE_HISTORY_LIMIT = 10
+
+/** 缓存突变记录上限；设置 `cacheDropsMaxRecords` 更大时也不超过它，避免 storage 无限膨胀。 */
+export const MAX_CACHE_DROPS = 1000
 
 /** 一条缓存命中样本；hitRate 是 0..100，向下截断到两位小数。 */
 export interface CacheSample {
@@ -22,13 +27,14 @@ export interface CacheSample {
   readonly hitRate: number
 }
 
-/** storage 里的持久化结构。 */
+/** storage 里的持久化结构；v2 起附带缓存突变记录，v1 读入时自动补空数组。 */
 export interface CacheHistory {
-  readonly v: 1
+  readonly v: 2
   readonly samples: readonly CacheSample[]
+  readonly drops: readonly CacheDrop[]
 }
 
-export const EMPTY_CACHE_HISTORY: CacheHistory = { v: 1, samples: [] }
+export const EMPTY_CACHE_HISTORY: CacheHistory = { v: 2, samples: [], drops: [] }
 
 /**
  * 输入：总输入 token + 命中 token。
@@ -66,22 +72,33 @@ export interface CacheMessage {
   }
 }
 
+/** 一次 step 的 usage；与 `CacheMessage.tokens` 同形状。 */
+export interface StepTokens {
+  readonly input: number
+  readonly output: number
+  readonly reasoning: number
+  readonly cache: { readonly read: number; readonly write: number }
+}
+
+/** 输入：messageID + step usage + 时间；输出：缓存样本。预期：prompt = 非缓存输入 + 读缓存 + 写缓存。 */
+export function sampleFromTokens(messageID: string, tokens: StepTokens, at: number): CacheSample {
+  const prompt = tokens.input + tokens.cache.read + tokens.cache.write
+  return {
+    messageID,
+    at,
+    input: prompt,
+    output: tokens.output + tokens.reasoning,
+    cached: tokens.cache.read,
+    hitRate: hitRatePercent(prompt, tokens.cache.read),
+  }
+}
+
 /** 输入：消息 + 缺时间时的回退值；输出：样本或 undefined。 */
 export function sampleFromMessage(message: CacheMessage, fallbackAt: number): CacheSample | undefined {
   if (message.type !== "assistant") return undefined
   const tokens = message.tokens
   if (tokens === undefined) return undefined
-  const input = tokens.input + tokens.cache.read + tokens.cache.write
-  const output = tokens.output + tokens.reasoning
-  const cached = tokens.cache.read
-  return {
-    messageID: message.id,
-    at: message.time?.created ?? fallbackAt,
-    input,
-    output,
-    cached,
-    hitRate: hitRatePercent(input, cached),
-  }
+  return sampleFromTokens(message.id, tokens, message.time?.created ?? fallbackAt)
 }
 
 /** 输入：样本列表；输出：按时间升序、去重、只留最新 10 条。 */
@@ -138,11 +155,16 @@ export function appendCacheSampleFromStep(
   return appendCacheSamples(existing, [{ id: messageID, type: "assistant", tokens }], fallbackAt)
 }
 
-/** 输入：任意 storage 值；输出：合法历史；损坏时返回空历史，绝不抛错。hitRate 按 input/cached 重算。 */
-export function parseCacheHistory(value: unknown): CacheHistory {
+/**
+ * 输入：任意 storage 值 + 突变记录上限。
+ * 输出：合法历史；损坏时返回空历史，绝不抛错。hitRate 按 input/cached 重算。
+ * 预期：兼容 v1（只有 samples）与 v2；v1 读入后补 `drops: []`。
+ */
+export function parseCacheHistory(value: unknown, maxDrops: number = MAX_CACHE_DROPS): CacheHistory {
   if (typeof value !== "object" || value === null) return EMPTY_CACHE_HISTORY
   const record = value as Record<string, unknown>
-  if (record["v"] !== 1 || !Array.isArray(record["samples"])) return EMPTY_CACHE_HISTORY
+  const version = record["v"]
+  if ((version !== 1 && version !== 2) || !Array.isArray(record["samples"])) return EMPTY_CACHE_HISTORY
   const samples: CacheSample[] = []
   for (const item of record["samples"]) {
     if (typeof item !== "object" || item === null) continue
@@ -178,11 +200,17 @@ export function parseCacheHistory(value: unknown): CacheHistory {
       hitRate: hitRatePercent(input, cached),
     })
   }
-  return { v: 1, samples: normalizeSamples(samples) }
+  const drops = version === 2 ? parseCacheDrops(record["drops"], maxDrops) : []
+  return { v: 2, samples: normalizeSamples(samples), drops }
 }
 
-/** 输入：两条历史；输出：样本是否完全一致；用于避免无变化的重复写盘。 */
-export function cacheHistoryEquals(left: readonly CacheSample[], right: readonly CacheSample[]): boolean {
+/** 输入：两条历史；输出：样本与突变记录是否完全一致；用于避免无变化的重复写盘。 */
+export function cacheHistoryEquals(left: CacheHistory, right: CacheHistory): boolean {
+  return samplesEqual(left.samples, right.samples) && cacheDropsEqual(left.drops, right.drops)
+}
+
+/** 输入：两组样本；输出：是否逐条一致（含 hitRate，便于发现重算差异）。 */
+function samplesEqual(left: readonly CacheSample[], right: readonly CacheSample[]): boolean {
   if (left.length !== right.length) return false
   return left.every((sample, index) => {
     const other = right[index]

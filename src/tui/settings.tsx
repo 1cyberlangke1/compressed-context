@@ -15,6 +15,10 @@ import {
   MIN_DECOMPRESS_INLINE_MAX,
   MIN_DECOMPRESS_TEMP_CAP,
   MIN_DECOMPRESS_TEMP_MAX_AGE_HOURS,
+  MIN_CACHE_DROPS_MAX_RECORDS,
+  MIN_CACHE_DROPS_THRESHOLD,
+  MAX_CACHE_DROPS_MAX_RECORDS,
+  MAX_CACHE_DROPS_THRESHOLD,
   effectiveDecompressInlineMax,
   effectiveDecompressTempCap,
   effectiveDecompressTempMaxAgeHours,
@@ -262,6 +266,36 @@ export function SettingsCommand(props: {
         }}
       />
     ))
+  }
+
+  const openCacheDropsThreshold = (): void => {
+    openTokenField({
+      title: copy().settings.cacheDropsThreshold,
+      hint: copy().settings.cacheDropsThresholdHint,
+      invalid: copy().settings.cacheDropsThresholdInvalid,
+      placeholder: "10",
+      initial: props.settings.cacheDropsThreshold.toString(),
+      min: MIN_CACHE_DROPS_THRESHOLD,
+      max: MAX_CACHE_DROPS_THRESHOLD,
+      apply: (draft, value) => {
+        draft.cacheDropsThreshold = value
+      },
+    })
+  }
+
+  const openCacheDropsMaxRecords = (): void => {
+    openTokenField({
+      title: copy().settings.cacheDropsMaxRecords,
+      hint: copy().settings.cacheDropsMaxRecordsHint,
+      invalid: copy().settings.cacheDropsMaxRecordsInvalid,
+      placeholder: "100",
+      initial: props.settings.cacheDropsMaxRecords.toString(),
+      min: MIN_CACHE_DROPS_MAX_RECORDS,
+      max: MAX_CACHE_DROPS_MAX_RECORDS,
+      apply: (draft, value) => {
+        draft.cacheDropsMaxRecords = value
+      },
+    })
   }
 
   const openThreshold = (): void => {
@@ -728,6 +762,22 @@ export function SettingsCommand(props: {
     enableCheckpointTreeTool: async () => {
       await toggleSetting("enableCheckpointTreeTool")
       return false
+    },
+    cacheDropsEnabled: async () => {
+      await toggleSetting("cacheDropsEnabled")
+      return false
+    },
+    showCacheDrops: async () => {
+      await toggleSetting("showCacheDrops")
+      return false
+    },
+    cacheDropsThreshold: () => {
+      openCacheDropsThreshold()
+      return true
+    },
+    cacheDropsMaxRecords: () => {
+      openCacheDropsMaxRecords()
+      return true
     },
     recentT1Blocks: () => {
       openRecentT1()

@@ -367,13 +367,16 @@ describe("服务端设置", () => {
       decompressTempCap: 50,
       decompressTempMaxAgeHours: 24,
       decompressShowTokens: true,
+      cacheDropsEnabled: false,
+      cacheDropsThreshold: 10,
+      cacheDropsMaxRecords: 100,
     })
     expect(
       parseServerSettings({
         triggerPercent: 95,
         summaryBlockPercent: 30,
         summaryTotalPercent: 60,
-      recentT1Blocks: 2,
+        recentT1Blocks: 2,
         summaryLanguage: "zh",
       }),
     ).toEqual({
@@ -395,6 +398,9 @@ describe("服务端设置", () => {
       decompressTempCap: 50,
       decompressTempMaxAgeHours: 24,
       decompressShowTokens: true,
+      cacheDropsEnabled: false,
+      cacheDropsThreshold: 10,
+      cacheDropsMaxRecords: 100,
     })
     expect(parseServerSettings({ triggerPercent: 59 })).toBeUndefined()
     expect(parseServerSettings({ triggerPercent: 96 })).toBeUndefined()

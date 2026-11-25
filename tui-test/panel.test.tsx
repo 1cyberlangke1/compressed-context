@@ -135,7 +135,7 @@ function fakeContext(input = 100): Context {
       rpc: () => ({
         cacheHistoryGet: (_input: unknown, options: unknown) => {
           rpcCalls.push({ method: "cacheHistoryGet", options })
-          return Promise.resolve({ samples })
+          return Promise.resolve({ samples, drops: [] })
         },
         blocksGet: (_input: unknown, options: unknown) => {
           rpcCalls.push({ method: "blocksGet", options })
