@@ -30,7 +30,6 @@ export const en: Messages = {
     break: "Break",
     prev: "Prev",
     cur: "Now",
-    hint: (threshold, max) => `Same-session hit rate drop ≥${threshold.toString()}pp · up to ${max.toString()} records`,
     spark: "old → new",
     footer: "Click a record to switch · esc closes",
     closeLabel: "esc",

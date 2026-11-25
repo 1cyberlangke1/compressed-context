@@ -93,9 +93,9 @@ export function DropsDialog(props: {
   const listHeight = createMemo(() =>
     Math.max(MIN_LIST_ROWS, Math.min(MAX_LIST_ROWS, Math.floor(props.context.renderer.height / 8))),
   )
-  /** 详情区吃掉剩余高度；给标题、提示、火花线、列表和底部提示留出固定行数。 */
+  /** 详情区吃掉剩余高度；给标题、火花线、列表和底部提示留出固定行数。 */
   const detailHeight = createMemo(() =>
-    Math.max(6, Math.min(30, props.context.renderer.height - listHeight() - 15)),
+    Math.max(6, Math.min(30, props.context.renderer.height - listHeight() - 14)),
   )
   const escColor = () =>
     hovered() ? theme.text.feedback.error.base : theme.text.muted
@@ -125,9 +125,6 @@ export function DropsDialog(props: {
           {copy().drops.closeLabel}
         </text>
       </box>
-      <text fg={theme.text.muted} wrapMode="word">
-        {copy().drops.hint(props.settings.cacheDropsThreshold, props.settings.cacheDropsMaxRecords)}
-      </text>
 
       <Show
         when={drops().length > 0}

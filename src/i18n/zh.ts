@@ -30,7 +30,6 @@ export const zh: Messages = {
     break: "断点",
     prev: "上条",
     cur: "本条",
-    hint: (threshold, max) => `同会话命中率下降 ≥${threshold.toString()}pp 才记录 · 最多 ${max.toString()} 条`,
     spark: "旧 → 新",
     footer: "点列表切换记录 · esc 关闭",
     closeLabel: "esc",

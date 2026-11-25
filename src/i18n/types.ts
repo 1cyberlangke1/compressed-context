@@ -28,7 +28,6 @@ export interface Messages {
     readonly break: string
     readonly prev: string
     readonly cur: string
-    readonly hint: (threshold: number, max: number) => string
     /** 火花线右侧的时序说明。 */
     readonly spark: string
     /** 弹窗底部操作提示。 */
