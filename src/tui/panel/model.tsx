@@ -1,9 +1,10 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, For } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
 import { modelTint, tintAt } from "../../shared/model-color.ts"
 import { fieldLayers, layerLabel, summarySegments, type Layer } from "../../shared/model-summary.ts"
+import { contextRpc, rpcLocation } from "../../shared/rpc.ts"
 import { localeArgument, resolveForModel, type Settings } from "../../shared/settings.ts"
 import { toHex, toRgb } from "../chart/color.ts"
 import type { UpdateSettings } from "../types.ts"
@@ -88,6 +89,28 @@ export function ModelPanel(props: {
 
   const chars = createMemo(() => Array.from(modelName()))
 
+  /** 该模型当前的校准系数；服务端不可用时不显示这一段。 */
+  const [calibration, setCalibration] = createSignal<{ cjk: number; ascii: number; samples: number }>()
+
+  createEffect(() => {
+    const model = current()
+    if (model === undefined) {
+      setCalibration(undefined)
+      return
+    }
+    void (async () => {
+      try {
+        const got = await contextRpc(props.context.client).calibrationGet(
+          { model: `${model.providerID}/${model.modelID}` },
+          rpcLocation(props.context),
+        )
+        setCalibration(got)
+      } catch {
+        setCalibration(undefined)
+      }
+    })()
+  })
+
   return (
     <box flexDirection="column">
       <text>
@@ -102,6 +125,13 @@ export function ModelPanel(props: {
         <For each={segments()}>
           {(segment) => <text fg={colorOf(segment.layer)}>{segment.text}</text>}
         </For>
+        <Show when={calibration()}>
+          {(value) => (
+            <text fg={theme.text.muted}>
+              {`${copy().modelPanel.icons.calibration} ${value().cjk.toFixed(2)}/${value().ascii.toFixed(2)}`}
+            </text>
+          )}
+        </Show>
       </box>
     </box>
   )

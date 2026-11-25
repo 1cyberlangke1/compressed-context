@@ -12,7 +12,8 @@ import { activeBlocks, renderSummary } from "./render.ts"
 import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
 import { loadState } from "./state.ts"
 import { stateStore } from "./state-store.ts"
-import { normalizeSettings, resolveSummaryLimits } from "../shared/settings.ts"
+import { normalizeSettings, resolveSummaryLimits, type ModelIdentity } from "../shared/settings.ts"
+import { loadCalibration, resetCalibration, setManualCalibration } from "./calibration.ts"
 import { resolveConfigFiles } from "../shared/config-paths.ts"
 import { watchConfigFiles } from "./settings-watcher.ts"
 import {
@@ -36,6 +37,28 @@ function readLayers(input: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined
   const layers = value.filter((item): item is string => typeof item === "string" && item.length > 0)
   return layers.length === 0 ? undefined : layers
+}
+
+/** 输入：RPC 参数里的 `providerID/modelID`；输出：模型身份；格式不对返回 undefined。 */
+function readModel(input: unknown): ModelIdentity | undefined {
+  if (typeof input !== "object" || input === null) return undefined
+  const value = (input as { readonly model?: unknown }).model
+  if (typeof value !== "string") return undefined
+  const slash = value.indexOf("/")
+  if (slash <= 0 || slash === value.length - 1) return undefined
+  return { providerID: value.slice(0, slash), id: value.slice(slash + 1) }
+}
+
+/** 输入：RPC 参数；输出：模型 + 两个系数；缺字段或非数字返回 undefined。 */
+function readCalibrationSet(
+  input: unknown,
+): { readonly model: ModelIdentity; readonly cjk: number; readonly ascii: number } | undefined {
+  const model = readModel(input)
+  if (model === undefined) return undefined
+  const record = input as { readonly cjk?: unknown; readonly ascii?: unknown }
+  if (typeof record.cjk !== "number" || typeof record.ascii !== "number") return undefined
+  if (!Number.isFinite(record.cjk) || !Number.isFinite(record.ascii)) return undefined
+  return { model, cjk: record.cjk, ascii: record.ascii }
 }
 
 /** 设置 RPC 的可选回调。 */
@@ -182,6 +205,27 @@ export async function registerSettingsRpc(
     nativeCompactionDisable: async (input) => {
       const path = (input as { readonly path: string }).path
       return disableNativeCompaction(path)
+    },
+    calibrationGet: async (input) => {
+      const model = readModel(input)
+      if (model === undefined) return { cjk: 1, ascii: 0.25, samples: 0 }
+      const state = await loadCalibration(ctx.storage, model)
+      return { cjk: state.cjk, ascii: state.ascii, samples: state.samples }
+    },
+    calibrationSet: async (input) => {
+      const parsed = readCalibrationSet(input)
+      if (parsed === undefined) return { ok: false, error: "invalid coefficient" }
+      const ok = await setManualCalibration(ctx.storage, parsed.model, {
+        cjk: parsed.cjk,
+        ascii: parsed.ascii,
+      })
+      return ok ? { ok: true } : { ok: false, error: "coefficient out of range" }
+    },
+    calibrationReset: async (input) => {
+      const model = readModel(input)
+      if (model === undefined) return { ok: false, error: "invalid model" }
+      await resetCalibration(ctx.storage, model)
+      return { ok: true }
     },
   })
 

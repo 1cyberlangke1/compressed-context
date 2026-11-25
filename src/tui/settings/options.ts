@@ -202,15 +202,16 @@ export function buildSectionOptions(input: {
 }
 
 /**
- * 输入：设置 + 文案 + 当前模型。
- * 输出：按模型第一层的两项。
+ * 输入：设置 + 文案 + 当前模型 + 当前模型校准系数摘要。
+ * 输出：按模型第一层的三项：当前模型 / 模型覆盖 / 校准系数。
  * 预期：没有当前模型时右侧显示「未识别」，点进去退回选择器。
  */
 export function buildModelSectionOptions(input: {
   readonly settings: Settings
   readonly copy: Messages
   readonly currentModel?: string
-}): readonly DialogSelectOption<"current" | "overrides">[] {
+  readonly calibration?: string
+}): readonly DialogSelectOption<"current" | "overrides" | "calibration">[] {
   const { settings, copy } = input
   return [
     {
@@ -222,6 +223,11 @@ export function buildModelSectionOptions(input: {
       title: copy.settings.modelOverrides,
       value: "overrides",
       footer: copy.settings.modelsConfigured(Object.keys(settings.models).length),
+    },
+    {
+      title: copy.settings.calibration,
+      value: "calibration",
+      footer: input.calibration ?? copy.settings.calibrationUnset,
     },
   ]
 }

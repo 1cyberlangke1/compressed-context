@@ -4,14 +4,18 @@ import { formatTokens } from "../shared/format.ts"
 import { sameLocation } from "../shared/location.ts"
 import { resolveForModel, resolveSummaryLimits, triggerTokens, type SummaryFormat } from "../shared/settings.ts"
 import {
+  charsTokens,
   contentCategories,
-  countText,
+  countChars,
+  DEFAULT_TOKEN_COEFS,
   estimateCategories,
   formatCategoryBreakdown,
   totalCategories,
   type TokenCategories,
+  type TokenCoefs,
   type ToolDefinitionLike,
 } from "../shared/tokens.ts"
+import { calibrationCoefs } from "./calibration.ts"
 import { endCompactionRequest, isCompactionInFlight, tryBeginCompactionRequest } from "./inflight.ts"
 import { pickMergeGroup } from "./distill.ts"
 import { activeBlocks, renderAll } from "./render.ts"
@@ -147,6 +151,7 @@ function summaryOverBudget(
   state: State,
   settings: ReturnType<typeof resolveForModel>,
   windowTokens: number | undefined,
+  coefs: TokenCoefs = DEFAULT_TOKEN_COEFS,
 ): boolean {
   if (windowTokens === undefined) return false
   const limits = resolveSummaryLimits(settings, windowTokens)
@@ -156,7 +161,7 @@ function summaryOverBudget(
     showTimeline: settings.showTimeline,
     showBlockTokens: settings.showBlockTokens,
   })
-  return countText(summary) > limits.budgetTokens
+  return charsTokens(countChars(summary), coefs) > limits.budgetTokens
 }
 
 /**
@@ -196,8 +201,9 @@ async function clearStalePhaseIfWithinBudget(
   state: State,
   settings: ReturnType<typeof resolveForModel>,
   windowTokens: number | undefined,
+  coefs: TokenCoefs,
 ): Promise<void> {
-  if (summaryOverBudget(state, settings, windowTokens)) return
+  if (summaryOverBudget(state, settings, windowTokens, coefs)) return
   await stateStore(ctx.storage).transact(sessionID, (current) => {
     if (current.phase === undefined) return { result: undefined }
     return { next: clearPhase(current), result: undefined }
@@ -407,28 +413,34 @@ export async function resolveLimit(
   return effective
 }
 
-/** 输入：system / tools / messages；输出：估算总 token。 */
-function estimateTotal(input: AutoInput): number {
+/** 输入：system / tools / messages + 系数；输出：估算总 token。 */
+function estimateTotal(input: AutoInput, coefs: TokenCoefs): number {
   return totalCategories(
-    estimateCategories({
-      system: input.system,
-      tools: input.tools,
-      messages: input.messages,
-    }),
+    estimateCategories(
+      {
+        system: input.system,
+        tools: input.tools,
+        messages: input.messages,
+      },
+      coefs,
+    ),
   )
 }
 
 /**
- * 输入：system / tools / messages。
+ * 输入：system / tools / messages + 系数。
  * 输出：按类别的 token 估算。
  * 预期：一次算出全部分类，增长量与提醒里的构成行共用同一份结果，避免重复遍历。
  */
-function categoriesOf(input: AutoInput): TokenCategories {
-  return estimateCategories({
-    system: input.system,
-    tools: input.tools,
-    messages: input.messages,
-  })
+function categoriesOf(input: AutoInput, coefs: TokenCoefs): TokenCategories {
+  return estimateCategories(
+    {
+      system: input.system,
+      tools: input.tools,
+      messages: input.messages,
+    },
+    coefs,
+  )
 }
 
 /** 单个 assistant 的真实 prompt 大小；output/reasoning 不属于本轮输入。 */
@@ -507,6 +519,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     const state = await expireStalePendingStorage(input.ctx, input.sessionID)
     if (blockedByState(state)) return
     const settings = resolveForModel(await loadServerSettings(input.ctx), input.model)
+    const coefs = await calibrationCoefs(input.ctx.storage, input.model)
     const limit =
       (await resolveLimit(input.ctx, input.model, settings.contextLimit, input.sessionID)) ??
       (await effectiveLimit(input.ctx.storage, input.sessionID, input.model))
@@ -514,12 +527,12 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
     // 已开头的合并链：与 autoCompress 无关，手动压缩后也要继续 T2/T3。
     // 摘要一超限就立刻入队合并，不等新的 user 消息：等下去只会让同一回合的新内容堆到
     // 保留窗口之外，那时合并就保不住它们了。
-    const overBudget = summaryOverBudget(state, settings, limit)
+    const overBudget = summaryOverBudget(state, settings, limit, coefs)
     if (state.phase !== undefined) {
       if (overBudget && (await hasContentSinceCompaction(input.ctx, input.sessionID))) {
         await requestCompaction(input.ctx, input.sessionID)
       } else if (!overBudget) {
-        await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit)
+        await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, limit, coefs)
       }
       return
     }
@@ -539,7 +552,7 @@ export async function maybeAutoCompress(input: AutoInput): Promise<void> {
       return
     }
     if (limit === undefined) return
-    const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input)
+    const total = (await measuredPromptTokens(input.ctx, input.sessionID)) ?? estimateTotal(input, coefs)
     const threshold = triggerTokens(settings, limit)
     if (threshold === undefined || total < threshold) return
     // 一次用户消息最多自动压一刀：刚压完还没有新的 user 消息时，再压只会把只剩 checkpoint 的
@@ -578,15 +591,20 @@ export async function maybeAutoCompressStep(input: {
     if (blockedByState(state)) return
 
     const settings = resolveForModel(await loadServerSettings(input.ctx), session.model)
+    // 会话没记录模型时退回默认系数：估算可能不准，但不会因为缺模型而整段跳过压缩判定。
+    const coefs =
+      session.model === undefined
+        ? DEFAULT_TOKEN_COEFS
+        : await calibrationCoefs(input.ctx.storage, session.model)
     const effective = await effectiveLimit(input.ctx.storage, input.sessionID, session.model)
 
     // 已开头的合并链：与 autoCompress 无关；摘要超限就立刻合并，不等新的 user 消息。
-    const overBudget = summaryOverBudget(state, settings, effective)
+    const overBudget = summaryOverBudget(state, settings, effective, coefs)
     if (state.phase !== undefined) {
       if (overBudget && (await hasContentSinceCompaction(input.ctx, input.sessionID))) {
         await requestCompaction(input.ctx, input.sessionID)
       } else if (!overBudget) {
-        await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective)
+        await clearStalePhaseIfWithinBudget(input.ctx, input.sessionID, state, settings, effective, coefs)
       }
       return
     }
@@ -710,7 +728,8 @@ export async function maybeNudge(input: NudgeInput): Promise<void> {
 
     // 只看会增长的内容（工具定义 + 工具结果 + 文本 + 媒体），不拿整段 prompt 做减法：
     // 后者会把系统提示词、摘要块和刚留下的最近保留区都算成「新增长」，阈值被严重虚标。
-    const categories = categoriesOf(input)
+    const coefs = await calibrationCoefs(input.ctx.storage, input.model)
+    const categories = categoriesOf(input, coefs)
     const total = contentCategories(categories)
     const eligible = eligibleMessages(input.messages)
     const canEmit = eligible.length > 0 && buildTranscript(eligible).length >= MIN_SOURCE_CHARS

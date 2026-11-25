@@ -134,6 +134,13 @@ export interface Messages {
     readonly overrideNone: string
     readonly overrideResetAll: string
     readonly overrideDelete: string
+    readonly calibration: string
+    readonly calibrationCjk: string
+    readonly calibrationAscii: string
+    readonly calibrationReset: string
+    readonly calibrationHint: string
+    readonly calibrationInvalid: string
+    readonly calibrationUnset: string
     readonly modelConfigured: string
     readonly overrideInheritAction: string
     readonly overrideCustom: string
@@ -169,6 +176,7 @@ export interface Messages {
       readonly total: string
       readonly nudge: string
       readonly recent: string
+      readonly calibration: string
     }
   }
   readonly languages: {

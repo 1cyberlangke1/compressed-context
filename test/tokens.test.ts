@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 
-import { contentCategories, countText, estimateCategories } from "../src/shared/tokens.ts"
+import {
+  charsTokens,
+  contentCategories,
+  countChars,
+  countText,
+  estimateCategories,
+  estimateChars,
+} from "../src/shared/tokens.ts"
 
 describe("countText", () => {
   it("ASCII 按 4 字符取整，CJK 按 1:1", () => {
@@ -186,5 +193,56 @@ describe("contentCategories", () => {
     expect(
       contentCategories({ system: 0, tools: 0, tool: 0, text: 0, recent: 0, summaries: 0, media: 0 }),
     ).toBe(0)
+  })
+})
+
+describe("countChars / charsTokens", () => {
+  it("按 CJK 与其它字符分开计数", () => {
+    expect(countChars("")).toEqual({ cjk: 0, ascii: 0 })
+    expect(countChars("你好ab")).toEqual({ cjk: 2, ascii: 2 })
+  })
+
+  it("默认系数下与 countText 完全一致", () => {
+    for (const text of ["", "abcde", "你好abcd", "T=标题|G=目标", "a".repeat(1000)]) {
+      expect(charsTokens(countChars(text))).toBe(countText(text))
+    }
+  })
+
+  it("自定义系数按字符类型分别折算", () => {
+    const chars = { cjk: 100, ascii: 1000 }
+    expect(charsTokens(chars, { cjk: 0.5, ascii: 0.25 })).toBe(50 + 250)
+    expect(charsTokens(chars, { cjk: 2, ascii: 1 })).toBe(1200)
+  })
+})
+
+describe("estimateChars", () => {
+  it("汇总 system / 工具定义 / 消息的字符数，不含媒体", () => {
+    const chars = estimateChars({
+      system: [{ type: "text", text: "abcd" }],
+      tools: { read: { description: "abcd", input: {} } },
+      messages: [
+        {
+          content: [
+            { type: "text", text: "你好" },
+            { type: "media", media: { source: { mediaType: "image/png" }, info: { width: 100, height: 100 } } },
+          ],
+        },
+      ],
+    })
+    expect(chars.cjk).toBe(2)
+    // 4(系统) + 4(工具名) + 4(描述) + 2(JSON "{}")；媒体不计入字符数。
+    expect(chars.ascii).toBe(14)
+  })
+
+  it("按系数估算后与 estimateCategories 合计一致（默认系数）", () => {
+    const input = {
+      system: [{ type: "text", text: "系统提示" }],
+      tools: { read: { description: "读文件" } },
+      messages: [{ content: [{ type: "text", text: "你好世界" }] }],
+    }
+    const chars = estimateChars(input)
+    const categories = estimateCategories(input)
+    const total = categories.system + categories.tools + categories.tool + categories.text + categories.recent + categories.summaries + categories.media
+    expect(charsTokens(chars)).toBe(total)
   })
 })

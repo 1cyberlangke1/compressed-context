@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import type { SummaryFormat, SummaryLanguage } from "../shared/settings.ts"
-import { countText } from "../shared/tokens.ts"
+import { charsTokens, countChars, DEFAULT_TOKEN_COEFS, type TokenCoefs } from "../shared/tokens.ts"
 import { activeBlocks, renderAll, renderBlock } from "./render.ts"
 import {
   MAX_DISTILL_ROUNDS,
@@ -54,6 +54,8 @@ export interface DistillOnceInput {
   /** 上一层还没提交的块；合并时可能来自 pending。 */
   readonly pending: Block | undefined
   readonly budgetTokens: number
+  /** 预算比较用的每字符 token 系数；缺省为默认规则。 */
+  readonly coefs?: TokenCoefs
   /** 保留区：最新这么多个 T1 块不参与合并；预算压力下会自动让位。 */
   readonly recentT1Blocks: number
   /** 自上次 T1 以来已连续合并的刀数；用于刹车，防止连环压缩跑飞。 */
@@ -179,8 +181,9 @@ export function planT1Phase(
   summary: string,
   active: readonly Block[],
   budgetTokens: number,
+  coefs: TokenCoefs = DEFAULT_TOKEN_COEFS,
 ): CompactionPhase | undefined {
-  return countText(summary) > budgetTokens && active.length > 0 ? 2 : undefined
+  return charsTokens(countChars(summary), coefs) > budgetTokens && active.length > 0 ? 2 : undefined
 }
 
 /**
@@ -194,6 +197,9 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     showTimeline: input.showTimeline === true,
     showBlockTokens: input.showBlockTokens === true,
   }
+  const coefs = input.coefs ?? DEFAULT_TOKEN_COEFS
+  /** 输入：摘要文本；输出：按当前系数估算的 token。 */
+  const summaryTokens = (text: string): number => charsTokens(countChars(text), coefs)
   const active = activeBlocks(input.state.blocks, input.pending)
   const currentSummary = renderAll(input.state.blocks, input.pending, renderOptions)
   /** 输入：可选错误原因；输出：未合并的结果。预期：所有「状态没变」分支共用同一形状。 */
@@ -205,7 +211,7 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
     ...(error === undefined ? {} : { error }),
   })
   // 预算内不动：合并只由「摘要撑爆预算」触发，不做整理性合并。
-  if (countText(currentSummary) <= input.budgetTokens) return unchanged()
+  if (summaryTokens(currentSummary) <= input.budgetTokens) return unchanged()
   const group = pickMergeGroup(active, input.recentT1Blocks)
   if (group === undefined) return unchanged()
 
@@ -284,7 +290,7 @@ export async function distillOnce(input: DistillOnceInput): Promise<DistillOnceR
   }
   const summary = renderAll(working, merged, renderOptions)
   // 预算只按 token 判断：窗口百分比是 token 口径，字符长度不能拿来和它比。
-  const stillOver = countText(summary) > input.budgetTokens
+  const stillOver = summaryTokens(summary) > input.budgetTokens
   const distillRounds = (input.distillRounds ?? 0) + 1
   // 连环合并要能收敛：还超预算、还有块、且没到本次 T1 的轮数上限才继续。
   const nextPhase: CompactionPhase | undefined =

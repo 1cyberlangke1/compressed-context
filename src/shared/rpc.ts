@@ -127,6 +127,36 @@ const NativeCompactionDisableOutputJson = {
   additionalProperties: false,
 } as const
 
+/** 校准系数查询/写入：`model` 是 `providerID/modelID`。 */
+const CalibrationInputJson = {
+  type: "object",
+  properties: { model: { type: "string" } },
+  required: ["model"],
+  additionalProperties: false,
+} as const
+
+const CalibrationOutputJson = {
+  type: "object",
+  properties: {
+    cjk: { type: "number" },
+    ascii: { type: "number" },
+    samples: { type: "number" },
+  },
+  required: ["cjk", "ascii", "samples"],
+  additionalProperties: false,
+} as const
+
+const CalibrationSetInputJson = {
+  type: "object",
+  properties: {
+    model: { type: "string" },
+    cjk: { type: "number" },
+    ascii: { type: "number" },
+  },
+  required: ["model", "cjk", "ascii"],
+  additionalProperties: false,
+} as const
+
 /** 需要明确指定会话的只读查询。 */
 const SessionInputJson = {
   type: "object",
@@ -261,6 +291,9 @@ export const ContextRpc: Rpc.PortableDefinition = {
       input: NativeCompactionDisableInputJson,
       output: NativeCompactionDisableOutputJson,
     },
+    calibrationGet: { input: CalibrationInputJson, output: CalibrationOutputJson },
+    calibrationSet: { input: CalibrationSetInputJson, output: OkJson },
+    calibrationReset: { input: CalibrationInputJson, output: OkJson },
   },
   events: {
     settingsUpdated: { schema: SettingsOutputJson },
@@ -303,6 +336,18 @@ export interface ContextRpcClient {
     input: {
       readonly path: string
     },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<{ readonly ok: boolean; readonly error?: string }>
+  calibrationGet(
+    input: { readonly model: string },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<{ readonly cjk: number; readonly ascii: number; readonly samples: number }>
+  calibrationSet(
+    input: { readonly model: string; readonly cjk: number; readonly ascii: number },
+    options?: { readonly location?: { readonly directory: string } },
+  ): Promise<{ readonly ok: boolean; readonly error?: string }>
+  calibrationReset(
+    input: { readonly model: string },
     options?: { readonly location?: { readonly directory: string } },
   ): Promise<{ readonly ok: boolean; readonly error?: string }>
   readonly events: {

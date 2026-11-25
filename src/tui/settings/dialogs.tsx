@@ -225,6 +225,42 @@ export function PercentDialog(props: {
   )
 }
 
+/** 输入：TUI 上下文 + 文案 + 标题/提示 + 初始值 + 合法范围 + 确认回调。
+ *  输出：小数对话框（用于每个字符折算多少 token）。
+ *  预期：只接受范围内的十进制小数，越界或非法显示 invalid，不写入。 */
+export function CoefDialog(props: {
+  readonly context: Context
+  readonly copy: Messages
+  readonly title: string
+  readonly hint: string
+  readonly invalid: string
+  readonly initial: string
+  readonly min: number
+  readonly max: number
+  readonly onConfirm: (value: number) => void
+}) {
+  return (
+    <DialogInput
+      context={props.context}
+      copy={props.copy}
+      title={props.title}
+      hint={props.hint}
+      invalid={props.invalid}
+      placeholder="1.0"
+      initial={props.initial}
+      parse={(text) => {
+        const trimmed = text.trim()
+        if (!/^\d+(?:\.\d+)?$/.test(trimmed)) return undefined
+        const value = Number(trimmed)
+        if (!Number.isFinite(value) || value < props.min || value > props.max) return undefined
+        return value
+      }}
+      preview={(value) => value.toFixed(3)}
+      onConfirm={props.onConfirm}
+    />
+  )
+}
+
 /** 输入：TUI 上下文 + 文案 + 初始值 + 确认回调。 */
 export function ThresholdDialog(props: {
   readonly context: Context

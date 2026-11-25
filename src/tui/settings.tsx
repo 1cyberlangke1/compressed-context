@@ -31,7 +31,8 @@ import {
   type SummaryLanguage,
 } from "../shared/settings.ts"
 import type { UpdateCheckResult } from "../shared/update.ts"
-import { CountDialog, PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
+import { CoefDialog, CountDialog, PercentDialog, ThresholdDialog, TokenDialog } from "./settings/dialogs.tsx"
+import { TOKEN_COEF_MAX, TOKEN_COEF_MIN } from "../shared/tokens.ts"
 import { effectiveWindow } from "../shared/model-summary.ts"
 import {
   buildEditorOptions,
@@ -120,6 +121,34 @@ export function SettingsCommand(props: {
   const routeSessionID = (): string | undefined => {
     const route = props.context.ui.router.current()
     return route.type === "session" ? route.sessionID : undefined
+  }
+
+  /** 输入：`provider/model`；输出：该模型的校准系数；RPC 不可用返回 undefined。 */
+  const fetchCalibration = async (model: string): Promise<{ cjk: number; ascii: number; samples: number } | undefined> => {
+    try {
+      return await contextRpc(props.context.client).calibrationGet({ model }, rpcLocation(props.context))
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 输入：模型键 + 两个系数；输出：写入是否成功。预期：越界由服务端拒绝。 */
+  const writeCalibration = async (model: string, cjk: number, ascii: number): Promise<boolean> => {
+    try {
+      const got = await contextRpc(props.context.client).calibrationSet({ model, cjk, ascii }, rpcLocation(props.context))
+      return got.ok
+    } catch {
+      return false
+    }
+  }
+
+  /** 输入：模型键；输出：无；预期：删除学习记录，回到默认系数。 */
+  const resetCalibration = async (model: string): Promise<void> => {
+    try {
+      await contextRpc(props.context.client).calibrationReset({ model }, rpcLocation(props.context))
+    } catch {
+      // server plugin not loaded
+    }
   }
 
   // 读取当前会话模型的原生窗口，auto 时也能把绝对值换算成百分比。
@@ -757,20 +786,80 @@ export function SettingsCommand(props: {
     }
   }
 
-  /** 输入：无；输出：back 回第一层，done 结束。预期：按模型的两项循环。 */
+  /** 输入：校准状态；输出：菜单右侧摘要；没有记录时显示默认值。 */
+  const calibrationFooter = (
+    state: { readonly cjk: number; readonly ascii: number; readonly samples: number } | undefined,
+  ): string =>
+    state === undefined
+      ? copy().settings.calibrationUnset
+      : `${state.cjk.toFixed(2)} / ${state.ascii.toFixed(2)} · ${state.samples.toString()}`
+
+  /**
+   * 输入：无。
+   * 输出：back 回上一层，done 结束（输入框已在屏幕上）。
+   * 预期：改 CJK / ASCII 系数或重置；手改后仍会继续按真实 usage 自校正。
+   */
+  const openCalibration = async (): Promise<Flow> => {
+    const model = currentModel()
+    if (model === undefined) return "back"
+    const key = `${model.providerID}/${model.id}`
+    const state = await fetchCalibration(key)
+    if (state === undefined) return "back"
+    const picked = await props.context.ui.dialog.select<"cjk" | "ascii" | "reset">({
+      title: `${copy().settings.calibration} · ${keyLabel(key)}`,
+      options: [
+        { title: copy().settings.calibrationCjk, value: "cjk", footer: state.cjk.toFixed(3) },
+        { title: copy().settings.calibrationAscii, value: "ascii", footer: state.ascii.toFixed(3) },
+        { title: copy().settings.calibrationReset, value: "reset" },
+      ],
+    })
+    if (picked === undefined) return "back"
+    if (picked === "reset") {
+      await resetCalibration(key)
+      return "back"
+    }
+    const isCjk = picked === "cjk"
+    props.context.ui.dialog.show(() => (
+      <CoefDialog
+        context={props.context}
+        copy={copy()}
+        title={isCjk ? copy().settings.calibrationCjk : copy().settings.calibrationAscii}
+        hint={copy().settings.calibrationHint}
+        invalid={copy().settings.calibrationInvalid}
+        initial={(isCjk ? state.cjk : state.ascii).toFixed(3)}
+        min={isCjk ? TOKEN_COEF_MIN.cjk : TOKEN_COEF_MIN.ascii}
+        max={isCjk ? TOKEN_COEF_MAX.cjk : TOKEN_COEF_MAX.ascii}
+        onConfirm={(value) => {
+          void writeCalibration(key, isCjk ? value : state.cjk, isCjk ? state.ascii : value)
+        }}
+      />
+    ))
+    return "done"
+  }
+
+  /** 输入：无；输出：back 回第一层，done 结束。预期：按模型的三项循环。 */
   async function openModelSection(): Promise<Flow> {
     for (;;) {
-      const currentKey = currentKeyOf(modelEntries(), currentModel())
-      const picked = await props.context.ui.dialog.select<"current" | "overrides">({
+      const model = currentModel()
+      const currentKey = currentKeyOf(modelEntries(), model)
+      const calibrationState =
+        model === undefined ? undefined : await fetchCalibration(`${model.providerID}/${model.id}`)
+      const picked = await props.context.ui.dialog.select<"current" | "overrides" | "calibration">({
         title: copy().settings.sectionModel,
         options: buildModelSectionOptions({
           settings: props.settings,
           copy: copy(),
           ...(currentKey === undefined ? {} : { currentModel: keyLabel(currentKey) }),
+          ...(model === undefined ? {} : { calibration: calibrationFooter(calibrationState) }),
         }),
       })
       if (picked === undefined) return "back"
-      const result = picked === "current" ? await openCurrentModel() : await openOverrides()
+      const result =
+        picked === "current"
+          ? await openCurrentModel()
+          : picked === "overrides"
+            ? await openOverrides()
+            : await openCalibration()
       if (result === "done") return "done"
     }
   }

@@ -7,8 +7,9 @@ import { CHECKPOINT_PREFIX, RECENT_TAG, SUMMARY_TAG, stringify, toolInput, toolR
  *
  * 输入：`context` 钩子里的 system / tools / messages 原始结构。
  * 输出：各类别的 token 估算值（system、tools、tool、text、code、summaries、media）。
- * 预期：只用于计算「各类占多少比例」；绝对总量以 provider 返回的 usage 为准，
- *       展示层按真实总量缩放，所以这里的绝对值允许有偏差。
+ * 预期：绝对总量由 provider 返回的 usage 校准：默认系数等价于旧规则
+ *       （CJK 1 字 ≈ 1 token、其余 4 字符 ≈ 1 token），并按模型用真实 usage 学习，
+ *       所以「面板显示」与「压缩阈值」用的是同一套系数。
  */
 
 /** 单条消息内容的最小结构，避免绑定 @opencode/ai 的具体类。 */
@@ -81,16 +82,79 @@ export interface TokenCategories {
   readonly media: number
 }
 
-/** CJK 字符按 1 token 计，其余按 4 字符 1 token 向上取整。 */
-export function countText(text: string): number {
-  if (text.length === 0) return 0
-  const cjk = text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/gu)
-  const cjkCount = cjk?.length ?? 0
-  return cjkCount + Math.ceil((text.length - cjkCount) / 4)
+/** 字符分类：CJK 与非 CJK 分开计数。 */
+export interface CharCounts {
+  readonly cjk: number
+  readonly ascii: number
 }
 
-/** 输入：工具结果里的单个 content 项；输出：token 估算。 */
-function countToolResultItem(item: unknown): number {
+/** 每个 CJK / 非 CJK 字符折算多少 token。 */
+export interface TokenCoefs {
+  readonly cjk: number
+  readonly ascii: number
+}
+
+/** 默认系数：等价于旧规则「CJK 1 字 1 token，其余 4 字符 1 token」。 */
+export const DEFAULT_TOKEN_COEFS: TokenCoefs = { cjk: 1, ascii: 0.25 }
+
+/** 校准系数的合法下限：越界的观测或手填都会被拒绝。 */
+export const TOKEN_COEF_MIN: TokenCoefs = { cjk: 0.4, ascii: 0.05 }
+/** 校准系数的合法上限。 */
+export const TOKEN_COEF_MAX: TokenCoefs = { cjk: 2, ascii: 1 }
+
+/** 输入：文本；输出：CJK 字符数与非 CJK 字符数。 */
+export function countChars(text: string): CharCounts {
+  if (text.length === 0) return { cjk: 0, ascii: 0 }
+  const cjk = text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/gu)?.length ?? 0
+  return { cjk, ascii: text.length - cjk }
+}
+
+/** 输入：字符数 + 系数；输出：估算 token（向上取整，默认系数下与旧规则逐字一致）。 */
+export function charsTokens(chars: CharCounts, coefs: TokenCoefs = DEFAULT_TOKEN_COEFS): number {
+  const value = chars.cjk * coefs.cjk + chars.ascii * coefs.ascii
+  return value <= 0 ? 0 : Math.ceil(value)
+}
+
+/**
+ * 输入：文本。
+ * 输出：固定默认系数下的 token 估算。
+ * 预期：块字符上限、摘要校验这类「字符口径」的地方继续用它，不受模型校准影响。
+ */
+export function countText(text: string): number {
+  return charsTokens(countChars(text))
+}
+
+/** 内部累加器：字符数 + 直接以 token 计的媒体部分。 */
+interface Acc {
+  cjk: number
+  ascii: number
+  extra: number
+}
+
+/** 输入：无；输出：空累加器。 */
+function emptyAcc(): Acc {
+  return { cjk: 0, ascii: 0, extra: 0 }
+}
+
+/** 输入：累加器 + 文本；输出：无；预期：把文本字符数加进去。 */
+function addText(acc: Acc, text: string): void {
+  const chars = countChars(text)
+  acc.cjk += chars.cjk
+  acc.ascii += chars.ascii
+}
+
+/** 输入：累加器 + 直接 token 数；输出：无。 */
+function addTokens(acc: Acc, tokens: number): void {
+  acc.extra += tokens
+}
+
+/** 输入：累加器 + 系数；输出：token 估算。 */
+function accTokens(acc: Acc, coefs: TokenCoefs): number {
+  return charsTokens({ cjk: acc.cjk, ascii: acc.ascii }, coefs) + acc.extra
+}
+
+/** 输入：工具结果里的单个 content 项；输出：无；预期：把字符/媒体计入累加器。 */
+function collectToolResultItem(item: unknown, acc: Acc): void {
   if (typeof item === "object" && item !== null) {
     const typed = item as {
       readonly type?: unknown
@@ -106,132 +170,180 @@ function countToolResultItem(item: unknown): number {
           }
         | undefined
     }
-    if (typed.type === "text" && typeof typed.text === "string") return countText(typed.text)
+    if (typed.type === "text" && typeof typed.text === "string") {
+      addText(acc, typed.text)
+      return
+    }
     if (typed.type === "file") {
-      return attachmentTokens({ mime: typed.mime })
+      addTokens(acc, attachmentTokens({ mime: typed.mime }))
+      return
     }
     if (typed.type === "media") {
-      return attachmentTokens({
-        mime: typed.media?.mediaType ?? typed.media?.source?.mediaType,
-        data: typed.media?.source?.data,
-        durationSeconds: typed.media?.durationSeconds,
-      })
+      addTokens(
+        acc,
+        attachmentTokens({
+          mime: typed.media?.mediaType ?? typed.media?.source?.mediaType,
+          data: typed.media?.source?.data,
+          durationSeconds: typed.media?.durationSeconds,
+        }),
+      )
+      return
     }
   }
-  return countText(toolResultText(item))
+  addText(acc, toolResultText(item))
 }
 
-/** 输入：工具结果；输出：token 估算；预期：v2 的 content 数组和旧 result 都能计数。 */
-function countToolResult(result: unknown): number {
+/** 输入：工具结果；输出：无；预期：v2 的 content 数组和旧 result 都能计数。 */
+function collectToolResult(result: unknown, acc: Acc): void {
   if (Array.isArray(result)) {
-    return result.reduce<number>((sum, item) => sum + countToolResultItem(item), 0)
+    for (const item of result) collectToolResultItem(item, acc)
+    return
   }
   if (typeof result === "object" && result !== null) {
     const typed = result as { readonly content?: unknown; readonly value?: unknown; readonly output?: unknown }
-    if (Array.isArray(typed.content)) return countToolResult(typed.content)
-    if (Array.isArray(typed.value)) return countToolResult(typed.value)
-    if (typed.output !== undefined) return countToolResult(typed.output)
+    if (Array.isArray(typed.content)) {
+      collectToolResult(typed.content, acc)
+      return
+    }
+    if (Array.isArray(typed.value)) {
+      collectToolResult(typed.value, acc)
+      return
+    }
+    if (typed.output !== undefined) {
+      collectToolResult(typed.output, acc)
+      return
+    }
   }
-  return countText(toolResultText(result))
+  addText(acc, toolResultText(result))
 }
 
 /**
  * 输入：checkpoint 文本。
- * 输出：摘要与最近上下文两部分的 token 估算。
+ * 输出：摘要与最近上下文两部分的累加器。
  * 预期：只把 <summary> 计入摘要；<recent-context> 是逐字保留的最近对话，
  *       单独计数，避免把最近上下文误当成摘要。
  */
-function countCheckpoint(text: string): { readonly summary: number; readonly recent: number } {
+function collectCheckpoint(text: string): { readonly summary: Acc; readonly recent: Acc } {
   const summary = SUMMARY_TAG.exec(text)?.[1]
   const recent = RECENT_TAG.exec(text)?.[1]
   if (summary === undefined && recent === undefined) {
-    return { summary: countText(text), recent: 0 }
+    const all = emptyAcc()
+    addText(all, text)
+    return { summary: all, recent: emptyAcc() }
   }
-  return { summary: countText(summary ?? ""), recent: countText(recent ?? "") }
+  const summaryAcc = emptyAcc()
+  const recentAcc = emptyAcc()
+  addText(summaryAcc, summary ?? "")
+  addText(recentAcc, recent ?? "")
+  return { summary: summaryAcc, recent: recentAcc }
+}
+
+/** 每类一份累加器；media 单独走 extra。 */
+interface CharCategories {
+  readonly system: Acc
+  readonly tools: Acc
+  readonly tool: Acc
+  readonly text: Acc
+  readonly recent: Acc
+  readonly summaries: Acc
+  readonly media: Acc
 }
 
 /**
  * 输入：system 片段、工具定义表、消息列表。
- * 输出：按类别汇总的 token 估算。
- * 预期：所有 text / reasoning 都归入 text（代码块不再单列）；tool-call 与 tool-result 归入 tool。
+ * 输出：按类别累计的字符数与媒体 token。
+ * 预期：所有 text / reasoning 都归入 text（代码块不再单列）；tool-call 与 tool-result 归入 tool；
+ *       只保留最后一个 checkpoint 的 recent，旧 checkpoint 的 recent 不重复累加。
  */
-export function estimateCategories(input: {
+function collectCharCategories(input: {
   readonly system: readonly SystemPartLike[]
   readonly tools: Readonly<Record<string, ToolDefinitionLike>>
   readonly messages: readonly MessageLike[]
-}): TokenCategories {
-  let system = 0
+}): CharCategories {
+  const categories: CharCategories = {
+    system: emptyAcc(),
+    tools: emptyAcc(),
+    tool: emptyAcc(),
+    text: emptyAcc(),
+    recent: emptyAcc(),
+    summaries: emptyAcc(),
+    media: emptyAcc(),
+  }
+
   for (const part of input.system) {
-    if (part.type === "text") system += countText(part.text)
+    if (part.type === "text") addText(categories.system, part.text)
   }
 
-  let tools = 0
   for (const [name, definition] of Object.entries(input.tools)) {
-    tools += countText(`${name}${definition.description ?? ""}${stringify(definition.input)}`)
+    addText(categories.tools, `${name}${definition.description ?? ""}${stringify(definition.input)}`)
   }
-
-  let tool = 0
-  let text = 0
-  let recent = 0
-  let summaries = 0
-  let media = 0
 
   for (const message of input.messages) {
-    const content: readonly ContentPartLike[] = Array.isArray(message.content)
-      ? message.content
-      : []
+    const content: readonly ContentPartLike[] = Array.isArray(message.content) ? message.content : []
     const contentHasText = content.some((part) => part.type === "text")
-    if (!contentHasText && typeof message.text === "string") text += countText(message.text)
+    if (!contentHasText && typeof message.text === "string") addText(categories.text, message.text)
     for (const part of content) {
       switch (part.type) {
         case "text": {
           const value = part.text ?? ""
           if (value.trimStart().startsWith(CHECKPOINT_PREFIX)) {
-            const checkpoint = countCheckpoint(value)
-            summaries += checkpoint.summary
+            const checkpoint = collectCheckpoint(value)
+            categories.summaries.cjk += checkpoint.summary.cjk
+            categories.summaries.ascii += checkpoint.summary.ascii
+            categories.summaries.extra += checkpoint.summary.extra
             // 只保留最后一个 checkpoint 的 recent：旧 checkpoint 的 recent 不应再累加，
             // 否则同一段最近对话会被算多次。
-            recent = checkpoint.recent
-          } else text += countText(value)
+            categories.recent.cjk = checkpoint.recent.cjk
+            categories.recent.ascii = checkpoint.recent.ascii
+            categories.recent.extra = checkpoint.recent.extra
+          } else {
+            addText(categories.text, value)
+          }
           break
         }
         case "reasoning": {
-          text += countText(part.text ?? "")
+          addText(categories.text, part.text ?? "")
           break
         }
         case "tool-call": {
-          tool += countText(`${part.name ?? ""}${stringify(toolInput(part))}`)
+          addText(categories.tool, `${part.name ?? ""}${stringify(toolInput(part))}`)
           break
         }
         case "tool-result": {
-          tool += countToolResult(toolResult(part))
+          collectToolResult(toolResult(part), categories.tool)
           break
         }
         case "tool": {
-          tool += countText(`${part.name ?? ""}${stringify(toolInput(part))}`)
-          tool += countToolResult(toolResult(part))
+          addText(categories.tool, `${part.name ?? ""}${stringify(toolInput(part))}`)
+          collectToolResult(toolResult(part), categories.tool)
           break
         }
         case "compaction": {
-          summaries += countText(part.text ?? "")
+          addText(categories.summaries, part.text ?? "")
           break
         }
         case "file": {
-          media += attachmentTokens({
-            mime: part.file?.mime,
-            data: part.file?.data,
-            durationSeconds: part.file?.durationSeconds,
-          })
+          addTokens(
+            categories.media,
+            attachmentTokens({
+              mime: part.file?.mime,
+              data: part.file?.data,
+              durationSeconds: part.file?.durationSeconds,
+            }),
+          )
           break
         }
         case "media": {
-          media += attachmentTokens({
-            mime: part.media?.source?.mediaType,
-            data: part.media?.source?.data,
-            width: part.media?.info?.width,
-            height: part.media?.info?.height,
-            durationSeconds: part.media?.info?.durationSeconds,
-          })
+          addTokens(
+            categories.media,
+            attachmentTokens({
+              mime: part.media?.source?.mediaType,
+              data: part.media?.source?.data,
+              width: part.media?.info?.width,
+              height: part.media?.info?.height,
+              durationSeconds: part.media?.info?.durationSeconds,
+            }),
+          )
           break
         }
         default: {
@@ -241,7 +353,60 @@ export function estimateCategories(input: {
     }
   }
 
-  return { system, tools, tool, text, recent, summaries, media }
+  return categories
+}
+
+/**
+ * 输入：system 片段、工具定义表、消息列表、可选系数。
+ * 输出：按类别汇总的 token 估算。
+ * 预期：系数来自模型校准；缺省时等于旧规则，行为与历史版本一致。
+ */
+export function estimateCategories(
+  input: {
+    readonly system: readonly SystemPartLike[]
+    readonly tools: Readonly<Record<string, ToolDefinitionLike>>
+    readonly messages: readonly MessageLike[]
+  },
+  coefs: TokenCoefs = DEFAULT_TOKEN_COEFS,
+): TokenCategories {
+  const categories = collectCharCategories(input)
+  return {
+    system: accTokens(categories.system, coefs),
+    tools: accTokens(categories.tools, coefs),
+    tool: accTokens(categories.tool, coefs),
+    text: accTokens(categories.text, coefs),
+    recent: accTokens(categories.recent, coefs),
+    summaries: accTokens(categories.summaries, coefs),
+    media: accTokens(categories.media, coefs),
+  }
+}
+
+/**
+ * 输入：system 片段、工具定义表、消息列表。
+ * 输出：整段提示词的字符分类（不含媒体）。
+ * 预期：供校准模块把「真实 prompt token ÷ 字符数」作为观测样本。
+ */
+export function estimateChars(input: {
+  readonly system: readonly SystemPartLike[]
+  readonly tools: Readonly<Record<string, ToolDefinitionLike>>
+  readonly messages: readonly MessageLike[]
+}): CharCounts {
+  const categories = collectCharCategories(input)
+  let cjk = 0
+  let ascii = 0
+  for (const acc of [
+    categories.system,
+    categories.tools,
+    categories.tool,
+    categories.text,
+    categories.recent,
+    categories.summaries,
+    categories.media,
+  ]) {
+    cjk += acc.cjk
+    ascii += acc.ascii
+  }
+  return { cjk, ascii }
 }
 
 /**

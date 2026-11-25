@@ -163,7 +163,7 @@ describe("SettingsCommand", () => {
       captured.run?.()
       await app.waitFor(() => captured.history.length >= 4)
       const back = captured.history[3]?.options ?? []
-      expect(back.map((option) => option.value)).toEqual(["current", "overrides"])
+      expect(back.map((option) => option.value)).toEqual(["current", "overrides", "calibration"])
     } finally {
       app.renderer.destroy()
     }
@@ -175,7 +175,7 @@ describe("SettingsCommand", () => {
       captured.run?.()
       await app.waitFor(() => captured.history.length >= 4)
       const back = captured.history[3]?.options ?? []
-      expect(back.map((option) => option.value)).toEqual(["current", "overrides"])
+      expect(back.map((option) => option.value)).toEqual(["current", "overrides", "calibration"])
     } finally {
       app.renderer.destroy()
     }

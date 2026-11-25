@@ -1,9 +1,10 @@
 import type { Plugin } from "@opencode/plugin"
 
 import { resolveForModel, resolveSummaryLimits } from "../shared/settings.ts"
-import { countText } from "../shared/tokens.ts"
+import { charsTokens, countChars } from "../shared/tokens.ts"
 import { renderActiveSummary } from "./active-summary-cache.ts"
 import { resolveLimit } from "./auto.ts"
+import { calibrationCoefs } from "./calibration.ts"
 import { createT1Block } from "./block.ts"
 import { distillOnce, planT1Phase } from "./distill.ts"
 import { endCompaction, tryBeginCompaction } from "./inflight.ts"
@@ -54,6 +55,10 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
   try {
     const state = await loadState(ctx.storage, event.sessionID)
     const settings = resolveForModel(await loadServerSettings(ctx), event.model)
+    // 摘要预算用该模型学到的系数，和触发端、面板共用同一套数字。
+    const coefs = await calibrationCoefs(ctx.storage, event.model)
+    /** 输入：摘要文本；输出：按当前系数估算的 token。 */
+    const summaryTokens = (text: string): number => charsTokens(countChars(text), coefs)
     // auto 窗口在运行时解析后钳制摘要上限；数字窗口已在保存时校验，这里统一再钳一次。
     const windowTokens = await resolveLimit(ctx, event.model, settings.contextLimit, event.sessionID)
     const limits = resolveSummaryLimits(settings, windowTokens)
@@ -169,12 +174,13 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
      *       失败时把已生成的块留在链里并带上错误，由外层统一落盘后抛出。
      */
     const mergeOverBudget = async (chain: Chain): Promise<StageOutcome> => {
-      if (countText(renderChain(chain)) <= limits.budgetTokens) return { chain }
+      if (summaryTokens(renderChain(chain)) <= limits.budgetTokens) return { chain }
       const result = await distillOnce({
         ctx,
         sessionID: event.sessionID,
         state: { ...state, blocks: chain.blocks },
         pending: chain.pending,
+        coefs,
         budgetTokens: limits.budgetTokens,
         recentT1Blocks: settings.recentT1Blocks,
         distillRounds: chain.rounds,
@@ -217,7 +223,7 @@ export async function handleCompaction(ctx: Plugin.Context, event: CompactionEve
     // 失败时保留 phase 让下一次请求重试同一层；成功则由预算决定是否继续排下一层。
     const phase =
       failure === undefined
-        ? planT1Phase(summary, activeBlocks(chain.blocks, chain.pending), limits.budgetTokens)
+        ? planT1Phase(summary, activeBlocks(chain.blocks, chain.pending), limits.budgetTokens, coefs)
         : 2
     await save(chain, phase, failure)
     event.result = { summary }

@@ -13,9 +13,10 @@ import { registerSettingsRpc, type Disposable } from "./compression/settings-rpc
 import { registerCompressTool } from "./compression/tool.ts"
 import { registerDecompressTool } from "./compression/decompress-tool.ts"
 import { registerCheckpointTreeTool } from "./compression/checkpoint-tree-tool.ts"
+import { calibrationCoefs, recordCalibration, type CalibrationSample } from "./compression/calibration.ts"
 import { effectiveDecompressTempMaxAgeHours } from "./shared/settings.ts"
 import { createStats, mergeMetadata, shouldPublish, type ContextStats } from "./shared/stats.ts"
-import { estimateCategories } from "./shared/tokens.ts"
+import { estimateCategories, estimateChars } from "./shared/tokens.ts"
 
 export default Plugin.define({
   id: "compressed-context",
@@ -27,6 +28,12 @@ export default Plugin.define({
    */
   async setup(ctx) {
     const published = new Map<string, ContextStats>()
+    /** 最近一次 context 钩子算出的字符构成：等这一步的 usage 回来时作校准样本。 */
+    const pendingSamples = new Map<
+      string,
+      { readonly model: { readonly providerID: string; readonly id: string }; readonly sample: Omit<CalibrationSample, "realTokens">; readonly at: number }
+    >()
+    const SAMPLE_MAX_AGE_MS = 10 * 60_000
     const disposables: Disposable[] = []
     // 清理上一个进程留下的解压临时文件；保留期由当前设置决定，默认 24 小时。
     const initialSettings = await loadServerSettings(ctx)
@@ -60,6 +67,15 @@ export default Plugin.define({
       onStepEnded: ({ sessionID, messageID, tokens }) =>
         void (async () => {
           await recordCacheHistoryStep(ctx, sessionID, { messageID, tokens })
+          const pending = pendingSamples.get(sessionID)
+          if (pending !== undefined && Date.now() - pending.at <= SAMPLE_MAX_AGE_MS) {
+            pendingSamples.delete(sessionID)
+            await recordCalibration(ctx.storage, pending.model, {
+              chars: pending.sample.chars,
+              mediaTokens: pending.sample.mediaTokens,
+              realTokens: tokens.input + tokens.cache.read + tokens.cache.write,
+            })
+          }
           await maybeAutoCompressStep({ ctx, sessionID, tokens })
         })(),
     })
@@ -98,14 +114,28 @@ export default Plugin.define({
           model: event.model,
         })
 
+        // 估算用该模型自己学到的系数：显示与压缩阈值共用同一套数字。
+        const coefs = await calibrationCoefs(ctx.storage, event.model)
         const stats = createStats(
-          estimateCategories({
-            system: event.system,
-            tools: event.tools,
-            messages: event.messages,
-          }),
+          estimateCategories(
+            {
+              system: event.system,
+              tools: event.tools,
+              messages: event.messages,
+            },
+            coefs,
+          ),
           Date.now(),
         )
+        // 记下这次请求的字符构成：usage 回来后按同一份统计校准系数。
+        pendingSamples.set(event.sessionID, {
+          model: { providerID: event.model.providerID, id: event.model.id },
+          sample: {
+            chars: estimateChars({ system: event.system, tools: event.tools, messages: event.messages }),
+            mediaTokens: stats.media,
+          },
+          at: Date.now(),
+        })
         if (shouldPublish(published.get(event.sessionID), stats)) {
           published.set(event.sessionID, stats)
           void publishStats(event.sessionID, stats).catch(() => undefined)

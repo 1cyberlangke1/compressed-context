@@ -151,13 +151,15 @@ describe("三层菜单", () => {
     expect(total).toBe(all.length)
   })
 
-  it("按模型第一层显示当前模型与覆盖数量", () => {
+  it("按模型第一层显示当前模型、覆盖数量与校准系数", () => {
     const options = buildModelSectionOptions({
       settings: { ...DEFAULT_SETTINGS, models: { "google/gemini-3-pro": { triggerPercent: 85 } } },
       copy,
       currentModel: "[google]gemini-3-pro",
+      calibration: "1.36 / 0.19 · 12",
     })
-    expect(options.map((option) => option.value)).toEqual(["current", "overrides"])
+    expect(options.map((option) => option.value)).toEqual(["current", "overrides", "calibration"])
     expect(options[1]?.footer).toBe("1 条")
+    expect(options[2]?.footer).toBe("1.36 / 0.19 · 12")
   })
 })

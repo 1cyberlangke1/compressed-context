@@ -112,7 +112,9 @@ export function Panel(props: {
   const rows = createMemo(() => {
     const value = data.stats()
     if (value === undefined || value.estimatedTotal <= 0) return []
-    return scaleCategories(value, contextTokens()).filter((row) => row.value > 0)
+    // 不做「按真实总量缩放」：分类数字就是压缩阈值判定用的那一套估算，
+    // 这样侧栏显示的摘要量超过预算时，判定那边也一定超。
+    return scaleCategories(value, 0).filter((row) => row.value > 0)
   })
 
   const toggleExpanded = (): void => {
