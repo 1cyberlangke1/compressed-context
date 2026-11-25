@@ -53,12 +53,25 @@ function drop(id: string, dropPp: number, before: string, after: string, withBre
   }
 }
 
-/** 输入：记录数组 + 设置；输出：带 RPC 替身的 TUI 上下文。 */
-function fakeContext(drops: readonly CacheDrop[], settings: () => Settings): Context {
+/** 输入：记录数组 + 设置 + 可选弹窗回调；输出：带 RPC 替身的 TUI 上下文。 */
+function fakeContext(
+  drops: readonly CacheDrop[],
+  settings: () => Settings,
+  onDialogShow?: () => void,
+): Context {
   return {
     theme: fakeTheme(),
     renderer: { height: 40 },
     location: { directory: "/work" },
+    ui: {
+      dialog: {
+        show: () => {
+          onDialogShow?.()
+        },
+        set: () => {},
+        clear: () => {},
+      },
+    },
     data: {
       on: () => () => {},
     },
@@ -218,6 +231,7 @@ describe("DropsSection", () => {
 function DialogFixture(props: {
   readonly drops: readonly CacheDrop[]
   readonly initial?: string
+  readonly onDialogShow?: () => void
 }) {
   const [settings] = createSignal<Settings>({
     ...DEFAULT_SETTINGS,
@@ -225,7 +239,7 @@ function DialogFixture(props: {
     cacheDropsEnabled: true,
     showCacheDrops: true,
   })
-  const context = fakeContext(props.drops, settings)
+  const context = fakeContext(props.drops, settings, props.onDialogShow)
   return (
     <DropsDialog
       context={context}
@@ -388,6 +402,56 @@ describe("DropsDialog", () => {
       const roleLine = level3.split("\n").find((line) => line.includes("role")) ?? ""
       expect(indexLine.indexOf("[0]")).toBeGreaterThan(messagesLine.indexOf("messages"))
       expect(roleLine.indexOf("role")).toBeGreaterThan(indexLine.indexOf("[0]"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("点击叶子节点打开原始内容弹窗", async () => {
+    let shown = 0
+    const nested: CacheDrop = {
+      ...drop("m5", 50, "AAAA", "AABA"),
+      tree: [
+        {
+          key: "messages",
+          chars: 120,
+          children: [
+            {
+              key: "[0]",
+              chars: 60,
+              children: [{ key: "content", chars: 20, text: "\"hello world\"", truncated: false }],
+            },
+          ],
+        },
+      ],
+    }
+    const app = await testRender(
+      () => (
+        <DialogFixture
+          drops={[nested]}
+          initial="m5"
+          onDialogShow={() => {
+            shown += 1
+          }}
+        />
+      ),
+      { width: 120, height: 32 },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.structure))
+      const rootRow = frame.split("\n").findIndex((line) => line.includes(copy.drops.structure))
+      await app.mockMouse.click(4, rootRow)
+      const level1 = await app.waitForFrame((value) => value.includes("messages (1)"))
+      const messagesRow = level1.split("\n").findIndex((line) => line.includes("messages (1)"))
+      await app.mockMouse.click(6, messagesRow)
+      const level2 = await app.waitForFrame((value) => value.includes("[0] (1)"))
+      const indexRow = level2.split("\n").findIndex((line) => line.includes("[0] (1)"))
+      await app.mockMouse.click(8, indexRow)
+      const level3 = await app.waitForFrame((value) => value.includes("content"))
+      const contentRow = level3.split("\n").findIndex((line) => line.includes("content"))
+      await app.mockMouse.click(10, contentRow)
+      expect(shown).toBe(1)
     } finally {
       app.renderer.destroy()
     }

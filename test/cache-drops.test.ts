@@ -145,6 +145,8 @@ describe("treeFromBody", () => {
     expect(messages?.children?.[0]?.children?.map((node) => node.key)).toEqual(["role", "content"])
     const tools = tree.find((node) => node.key === "tools")
     expect(tools?.children?.[0]?.children?.map((node) => node.key)).toEqual(["name"])
+    const content = messages?.children?.[0]?.children?.find((node) => node.key === "content")
+    expect(content?.text).toBe("\"a\"")
   })
 
   it("非 JSON 请求体返回空树", () => {

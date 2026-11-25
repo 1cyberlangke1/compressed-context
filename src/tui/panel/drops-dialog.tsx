@@ -170,7 +170,7 @@ export function DropsDialog(props: {
         <Show when={active()}>
           {(drop) => (
             <scrollbox height={detailHeight()} scrollY={true} focused={true} width="100%">
-              <DropDetail theme={theme} copy={copy()} drop={drop()} />
+              <DropDetail context={props.context} theme={theme} copy={copy()} drop={drop()} />
             </scrollbox>
           )}
         </Show>
@@ -187,6 +187,7 @@ export function DropsDialog(props: {
  * 预期：只展示实测事实；没有断点时明确说明没有可对照的报文。
  */
 function DropDetail(props: {
+  readonly context: Context
   readonly theme: Context["theme"]
   readonly copy: ReturnType<typeof resolveMessages>
   readonly drop: CacheDrop
@@ -217,6 +218,14 @@ function DropDetail(props: {
       else next.add(name)
       return next
     })
+  }
+
+  /** 输入：叶子节点；输出：无；预期：用可滚动的「原始内容」弹窗展示叶子原文。 */
+  const openNode = (node: CacheDropNode): void => {
+    props.context.ui.dialog.show(() => (
+      <NodeTextDialog context={props.context} copy={props.copy} node={node} />
+    ))
+    props.context.ui.dialog.set({ size: "large", centered: true })
   }
 
   const excerpt = createMemo(() => {
@@ -345,6 +354,7 @@ function DropDetail(props: {
                     depth={1}
                     open={openPaths}
                     toggle={togglePath}
+                    onOpen={openNode}
                     theme={props.theme}
                     copy={props.copy}
                   />
@@ -393,12 +403,14 @@ function TreeNode(props: {
   readonly depth: number
   readonly open: Accessor<ReadonlySet<string>>
   readonly toggle: (path: string) => void
+  readonly onOpen: (node: CacheDropNode) => void
   readonly theme: Context["theme"]
   readonly copy: ReturnType<typeof resolveMessages>
 }) {
   const children = () => props.node.children ?? []
   const opened = () => props.open().has(props.path)
   const hasChildren = () => children().length > 0
+  const clickable = () => hasChildren() || props.node.text !== undefined
   return (
     <box flexDirection="column" width="100%">
       <box
@@ -408,10 +420,11 @@ function TreeNode(props: {
         paddingLeft={props.depth * 2}
         onMouseDown={() => {
           if (hasChildren()) props.toggle(props.path)
+          else if (props.node.text !== undefined) props.onOpen(props.node)
         }}
       >
         <text fg={props.theme.text.base}>{hasChildren() ? (opened() ? "▼" : "▶") : " "}</text>
-        <text fg={props.theme.text.base} wrapMode="none">
+        <text fg={clickable() ? props.theme.text.base : props.theme.text.muted} wrapMode="none">
           {props.node.key}
         </text>
         <Show
@@ -432,12 +445,67 @@ function TreeNode(props: {
               depth={props.depth + 1}
               open={props.open}
               toggle={props.toggle}
+              onOpen={props.onOpen}
               theme={props.theme}
               copy={props.copy}
             />
           )}
         </For>
       </Show>
+    </box>
+  )
+}
+
+/**
+ * 输入：被点开的叶子节点 + 文案。
+ * 输出：可滚动的原始内容弹窗；长内容只在弹窗里滚动，不撑开主界面。
+ * 预期：值是字符串时直接显示正文，其余按两空格缩进的 JSON 显示。
+ */
+export function NodeTextDialog(props: {
+  readonly context: Context
+  readonly copy: ReturnType<typeof resolveMessages>
+  readonly node: CacheDropNode
+}) {
+  const theme = props.context.theme
+  const [hovered, setHovered] = createSignal(false)
+  const lines = createMemo(() => prettyRequest(props.node.text ?? ""))
+  const height = createMemo(() => Math.max(8, Math.min(26, props.context.renderer.height - 8)))
+  return (
+    <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text fg={theme.text.base} wrapMode="word">
+          <b>{`${props.copy.drops.nodeTitle} ${props.node.key}`}</b>
+        </text>
+        <text
+          fg={hovered() ? theme.text.feedback.error.base : theme.text.muted}
+          flexShrink={0}
+          onMouseOver={() => {
+            setHovered(true)
+          }}
+          onMouseOut={() => {
+            setHovered(false)
+          }}
+          onMouseUp={() => {
+            props.context.ui.dialog.clear()
+          }}
+        >
+          {props.copy.drops.closeLabel}
+        </text>
+      </box>
+      <text fg={theme.text.muted}>
+        {props.node.truncated === true
+          ? `${props.copy.drops.chars(props.node.chars.toLocaleString())} · ${props.copy.drops.truncated}`
+          : props.copy.drops.chars(props.node.chars.toLocaleString())}
+      </text>
+      <scrollbox height={height()} scrollY={true} focused={true} width="100%">
+        <For each={lines()}>
+          {(line) => (
+            <text fg={theme.text.base} wrapMode="word">
+              {line.length === 0 ? " " : line}
+            </text>
+          )}
+        </For>
+      </scrollbox>
     </box>
   )
 }

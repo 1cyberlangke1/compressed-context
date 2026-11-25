@@ -52,6 +52,7 @@ export const en: Messages = {
     noRequest: "No raw request available",
     noBreak: "Prefix unchanged; no text difference to compare",
     appended: "Appended suffix",
+    nodeTitle: "Raw content",
     chars: (value) => `${value} chars`,
     cause: {
       system: "System prompt changed",

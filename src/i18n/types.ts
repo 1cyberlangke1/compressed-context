@@ -55,6 +55,8 @@ export interface Messages {
     readonly noBreak: string
     /** 只追加时展示的后缀标题。 */
     readonly appended: string
+    /** 结构树叶子原文弹窗标题。 */
+    readonly nodeTitle: string
     readonly chars: (value: string) => string
     readonly cause: {
       readonly system: string

@@ -85,10 +85,14 @@ interface Field {
   readonly items: readonly string[]
 }
 
-/** 请求结构树的一个节点；只存键名、字符数和子节点，不存内容。 */
+/** 请求结构树的一个节点；只存键名、字符数、可选子节点和叶子的少量原文。 */
 export interface CacheDropNode {
   readonly key: string
   readonly chars: number
+  /** 叶子节点的原文（截断）；对象/数组节点没有。 */
+  readonly text?: string
+  /** `text` 是否是截断后的。 */
+  readonly truncated?: boolean
   readonly children?: readonly CacheDropNode[]
 }
 
@@ -96,16 +100,22 @@ export interface CacheDropNode {
 export const TREE_MAX_NODES = 200
 /** 树最多展开的 JSON 层级。 */
 export const TREE_MAX_DEPTH = 4
+/** 单个叶子最多存多少字符的原文。 */
+export const NODE_TEXT_MAX_CHARS = 600
+/** 整棵树最多存多少字符的叶子原文。 */
+export const TREE_TEXT_BUDGET = 8_000
 
 /**
- * 输入：任意 JSON 值 + 当前层级 + 剩余节点预算。
+ * 输入：任意 JSON 值 + 当前层级 + 剩余节点预算 + 剩余原文预算。
  * 输出：这一层的子节点；没有子节点时返回 undefined。
- * 预期：按 JSON 实际嵌套层级生成，数组元素键是 `[i]`，对象用字段名。
+ * 预期：按 JSON 实际嵌套层级生成，数组元素键是 `[i]`，对象用字段名；
+ *       叶子存一份截断原文，供弹窗里点开查看。
  */
 function childNodes(
   value: unknown,
   depth: number,
   budget: { left: number },
+  textBudget: { left: number },
 ): readonly CacheDropNode[] | undefined {
   if (depth >= TREE_MAX_DEPTH || budget.left <= 0) return undefined
   const entries: readonly (readonly [string, unknown])[] = Array.isArray(value)
@@ -118,14 +128,30 @@ function childNodes(
   for (const [key, item] of entries) {
     if (budget.left <= 0) break
     budget.left -= 1
-    const children = childNodes(item, depth + 1, budget)
+    const children = childNodes(item, depth + 1, budget, textBudget)
+    const chars = Array.from(canonicalJson(item)).length
+    if (children !== undefined) {
+      nodes.push({ key, chars, children })
+      continue
+    }
+    const text = leafText(item, textBudget)
     nodes.push({
       key,
-      chars: Array.from(canonicalJson(item)).length,
-      ...(children === undefined ? {} : { children }),
+      chars,
+      ...(text === undefined ? {} : { text: text.text, truncated: text.truncated }),
     })
   }
   return nodes.length === 0 ? undefined : nodes
+}
+
+/** 输入：叶子值 + 剩余原文预算；输出：截断后的原文；预算用完时返回 undefined。 */
+function leafText(value: unknown, budget: { left: number }): { text: string; truncated: boolean } | undefined {
+  if (budget.left <= 0) return undefined
+  const full = canonicalJson(value)
+  const points = Array.from(full)
+  const size = Math.min(points.length, NODE_TEXT_MAX_CHARS, budget.left)
+  budget.left -= size
+  return { text: points.slice(0, size).join(""), truncated: size < points.length }
 }
 
 /** 输入：原始请求体；输出：按 JSON 层级展开的结构树；解析失败时为空数组。 */
@@ -137,7 +163,7 @@ export function treeFromBody(body: string): readonly CacheDropNode[] {
     return []
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) return []
-  return childNodes(value, 0, { left: TREE_MAX_NODES }) ?? []
+  return childNodes(value, 0, { left: TREE_MAX_NODES }, { left: TREE_TEXT_BUDGET }) ?? []
 }
 
 /** 一次请求差异的完整结果。 */
@@ -518,7 +544,15 @@ function parseTree(value: unknown, depth = 0): readonly CacheDropNode[] | undefi
     if (typeof key !== "string" || key.length === 0) continue
     if (typeof chars !== "number" || !Number.isFinite(chars) || chars < 0) continue
     const children = parseTree(record["children"], depth + 1)
-    nodes.push({ key, chars, ...(children === undefined ? {} : { children }) })
+    const text = record["text"]
+    const truncated = record["truncated"]
+    nodes.push({
+      key,
+      chars,
+      ...(typeof text === "string" ? { text } : {}),
+      ...(typeof truncated === "boolean" ? { truncated } : {}),
+      ...(children === undefined ? {} : { children }),
+    })
   }
   return nodes.length === 0 ? undefined : nodes
 }

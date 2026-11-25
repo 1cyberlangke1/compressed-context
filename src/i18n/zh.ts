@@ -52,6 +52,7 @@ export const zh: Messages = {
     noRequest: "没有可展示的原始请求",
     noBreak: "前缀没有变化，没有可对照的文本差异",
     appended: "新增后缀",
+    nodeTitle: "原始内容",
     chars: (value) => `${value} 字符`,
     cause: {
       system: "系统提示变了",
