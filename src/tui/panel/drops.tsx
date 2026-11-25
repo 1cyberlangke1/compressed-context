@@ -97,18 +97,10 @@ export function DropsSection(props: {
                       <text width={2} fg={theme.text.feedback.error.base}>
                         {hovered() === drop.messageID ? (frame() === 0 ? "▸ " : " ▸") : "  "}
                       </text>
-                      <text fg={theme.text.muted} width={5} flexShrink={0}>
-                        {timeLabel(drop.at)}
-                      </text>
-                      <text fg={theme.text.feedback.error.base} width={9} flexShrink={0} textAlign="right">
-                        {`-${drop.dropPp.toFixed(1)}pp`}
-                      </text>
-                      <text fg={theme.text.muted} width={8} flexShrink={0}>
-                        {copy().drops.kind[drop.kind ?? "unknown"]}
-                      </text>
-                      <text fg={theme.text.muted} width={3} flexShrink={0} textAlign="center">
-                        {copy().drops.causeIcon[drop.cause]}
-                      </text>
+                      <text fg={theme.text.muted}>{timeLabel(drop.at)}</text>
+                      <text fg={theme.text.feedback.error.base}>{`-${drop.dropPp.toFixed(1)}pp`}</text>
+                      <text fg={theme.text.muted}>{copy().drops.kind[drop.kind ?? "unknown"]}</text>
+                      <text fg={theme.text.muted}>{copy().drops.causeIcon[drop.cause]}</text>
                       <text fg={theme.text.base} flexGrow={1} wrapMode="none">
                         {segmentLabel(drop.breakPoint)}
                       </text>
