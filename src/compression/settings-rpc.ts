@@ -13,7 +13,15 @@ import { isBabelSummary, isMarkdownSummary } from "./schema.ts"
 import { loadState } from "./state.ts"
 import { stateStore } from "./state-store.ts"
 import { normalizeSettings, resolveSummaryLimits, type ModelIdentity } from "../shared/settings.ts"
-import { loadCalibration, resetCalibration, setManualCalibration } from "./calibration.ts"
+import {
+  loadCalibrationLayers,
+  loadEffectiveCalibration,
+  resetCalibration,
+  setManualCalibration,
+  type ResetScope,
+  type WritableScope,
+} from "./calibration.ts"
+import { DEFAULT_TOKEN_COEFS } from "../shared/tokens.ts"
 import { resolveConfigFiles } from "../shared/config-paths.ts"
 import { watchConfigFiles } from "./settings-watcher.ts"
 import {
@@ -49,16 +57,33 @@ function readModel(input: unknown): ModelIdentity | undefined {
   return { providerID: value.slice(0, slash), id: value.slice(slash + 1) }
 }
 
-/** 输入：RPC 参数；输出：模型 + 两个系数；缺字段或非数字返回 undefined。 */
+/** 输入：RPC 参数；输出：模型 + 两个系数 + 目标层；缺字段或非法返回 undefined。 */
 function readCalibrationSet(
   input: unknown,
-): { readonly model: ModelIdentity; readonly cjk: number; readonly ascii: number } | undefined {
+): {
+  readonly model: ModelIdentity
+  readonly cjk: number
+  readonly ascii: number
+  readonly scope: WritableScope
+} | undefined {
   const model = readModel(input)
   if (model === undefined) return undefined
-  const record = input as { readonly cjk?: unknown; readonly ascii?: unknown }
+  const record = input as { readonly cjk?: unknown; readonly ascii?: unknown; readonly scope?: unknown }
   if (typeof record.cjk !== "number" || typeof record.ascii !== "number") return undefined
   if (!Number.isFinite(record.cjk) || !Number.isFinite(record.ascii)) return undefined
-  return { model, cjk: record.cjk, ascii: record.ascii }
+  if (record.scope !== "exact" && record.scope !== "model") return undefined
+  return { model, cjk: record.cjk, ascii: record.ascii, scope: record.scope }
+}
+
+/** 输入：RPC 参数；输出：模型 + 重置范围；缺字段或非法返回 undefined。 */
+function readCalibrationReset(
+  input: unknown,
+): { readonly model: ModelIdentity; readonly scope: ResetScope } | undefined {
+  const model = readModel(input)
+  if (model === undefined) return undefined
+  const scope = (input as { readonly scope?: unknown }).scope
+  if (scope !== "exact" && scope !== "model" && scope !== "all") return undefined
+  return { model, scope }
 }
 
 /** 设置 RPC 的可选回调。 */
@@ -208,9 +233,27 @@ export async function registerSettingsRpc(
     },
     calibrationGet: async (input) => {
       const model = readModel(input)
-      if (model === undefined) return { cjk: 1, ascii: 0.25, samples: 0 }
-      const state = await loadCalibration(ctx.storage, model)
-      return { cjk: state.cjk, ascii: state.ascii, samples: state.samples }
+      if (model === undefined) {
+        return {
+          scope: "default" as const,
+          cjk: DEFAULT_TOKEN_COEFS.cjk,
+          ascii: DEFAULT_TOKEN_COEFS.ascii,
+          samples: 0,
+          model: { cjk: DEFAULT_TOKEN_COEFS.cjk, ascii: DEFAULT_TOKEN_COEFS.ascii, samples: 0 },
+        }
+      }
+      const effective = await loadEffectiveCalibration(ctx.storage, model)
+      const layers = await loadCalibrationLayers(ctx.storage, model)
+      return {
+        scope: effective.scope,
+        cjk: effective.state.cjk,
+        ascii: effective.state.ascii,
+        samples: effective.state.samples,
+        model: { cjk: layers.model.cjk, ascii: layers.model.ascii, samples: layers.model.samples },
+        ...(layers.exact === undefined
+          ? {}
+          : { exact: { cjk: layers.exact.cjk, ascii: layers.exact.ascii, samples: layers.exact.samples } }),
+      }
     },
     calibrationSet: async (input) => {
       const parsed = readCalibrationSet(input)
@@ -218,13 +261,13 @@ export async function registerSettingsRpc(
       const ok = await setManualCalibration(ctx.storage, parsed.model, {
         cjk: parsed.cjk,
         ascii: parsed.ascii,
-      })
+      }, parsed.scope)
       return ok ? { ok: true } : { ok: false, error: "coefficient out of range" }
     },
     calibrationReset: async (input) => {
-      const model = readModel(input)
-      if (model === undefined) return { ok: false, error: "invalid model" }
-      await resetCalibration(ctx.storage, model)
+      const request = readCalibrationReset(input)
+      if (request === undefined) return { ok: false, error: "invalid scope" }
+      await resetCalibration(ctx.storage, request.model, request.scope)
       return { ok: true }
     },
   })

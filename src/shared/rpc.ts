@@ -128,6 +128,7 @@ const NativeCompactionDisableOutputJson = {
 } as const
 
 /** 校准系数查询/写入：`model` 是 `providerID/modelID`。 */
+/** 校准系数查询入参：`model` 是 `providerID/modelID`。 */
 const CalibrationInputJson = {
   type: "object",
   properties: { model: { type: "string" } },
@@ -135,7 +136,8 @@ const CalibrationInputJson = {
   additionalProperties: false,
 } as const
 
-const CalibrationOutputJson = {
+/** 校准系数的单层快照。 */
+const CalibrationLayerJson = {
   type: "object",
   properties: {
     cjk: { type: "number" },
@@ -146,14 +148,40 @@ const CalibrationOutputJson = {
   additionalProperties: false,
 } as const
 
+/** 校准系数查询：返回生效值、来源层，以及两层各自的原始值。 */
+const CalibrationOutputJson = {
+  type: "object",
+  properties: {
+    scope: { type: "string", enum: ["exact", "model", "default"] },
+    cjk: { type: "number" },
+    ascii: { type: "number" },
+    samples: { type: "number" },
+    model: CalibrationLayerJson,
+    exact: CalibrationLayerJson,
+  },
+  required: ["scope", "cjk", "ascii", "samples", "model"],
+  additionalProperties: false,
+} as const
+
 const CalibrationSetInputJson = {
   type: "object",
   properties: {
     model: { type: "string" },
     cjk: { type: "number" },
     ascii: { type: "number" },
+    scope: { type: "string", enum: ["exact", "model"] },
   },
-  required: ["model", "cjk", "ascii"],
+  required: ["model", "cjk", "ascii", "scope"],
+  additionalProperties: false,
+} as const
+
+const CalibrationResetInputJson = {
+  type: "object",
+  properties: {
+    model: { type: "string" },
+    scope: { type: "string", enum: ["exact", "model", "all"] },
+  },
+  required: ["model", "scope"],
   additionalProperties: false,
 } as const
 
@@ -293,11 +321,25 @@ export const ContextRpc: Rpc.PortableDefinition = {
     },
     calibrationGet: { input: CalibrationInputJson, output: CalibrationOutputJson },
     calibrationSet: { input: CalibrationSetInputJson, output: OkJson },
-    calibrationReset: { input: CalibrationInputJson, output: OkJson },
+    calibrationReset: { input: CalibrationResetInputJson, output: OkJson },
   },
   events: {
     settingsUpdated: { schema: SettingsOutputJson },
   },
+}
+
+/** 单层校准快照。 */
+export interface CalibrationLayer {
+  readonly cjk: number
+  readonly ascii: number
+  readonly samples: number
+}
+
+/** 校准查询结果：生效值 + 来源层 + 两层原始值。 */
+export interface CalibrationSnapshot extends CalibrationLayer {
+  readonly scope: "exact" | "model" | "default"
+  readonly model: CalibrationLayer
+  readonly exact?: CalibrationLayer
 }
 
 /** 服务端设置读取结果。 */
@@ -341,13 +383,18 @@ export interface ContextRpcClient {
   calibrationGet(
     input: { readonly model: string },
     options?: { readonly location?: { readonly directory: string } },
-  ): Promise<{ readonly cjk: number; readonly ascii: number; readonly samples: number }>
+  ): Promise<CalibrationSnapshot>
   calibrationSet(
-    input: { readonly model: string; readonly cjk: number; readonly ascii: number },
+    input: {
+      readonly model: string
+      readonly cjk: number
+      readonly ascii: number
+      readonly scope: "exact" | "model"
+    },
     options?: { readonly location?: { readonly directory: string } },
   ): Promise<{ readonly ok: boolean; readonly error?: string }>
   calibrationReset(
-    input: { readonly model: string },
+    input: { readonly model: string; readonly scope: "exact" | "model" | "all" },
     options?: { readonly location?: { readonly directory: string } },
   ): Promise<{ readonly ok: boolean; readonly error?: string }>
   readonly events: {

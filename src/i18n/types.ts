@@ -141,6 +141,11 @@ export interface Messages {
     readonly calibrationHint: string
     readonly calibrationInvalid: string
     readonly calibrationUnset: string
+    readonly calibrationExactScope: string
+    readonly calibrationModelScope: string
+    readonly calibrationScopeUnset: string
+    readonly calibrationResetExact: string
+    readonly calibrationResetModel: string
     readonly modelConfigured: string
     readonly overrideInheritAction: string
     readonly overrideCustom: string

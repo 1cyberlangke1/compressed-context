@@ -3,7 +3,7 @@ import { createMemo, createSignal, onMount } from "solid-js"
 
 import { formatTokens } from "../shared/format.ts"
 import { resolveMessages } from "../i18n/index.ts"
-import { contextRpc, rpcLocation } from "../shared/rpc.ts"
+import { contextRpc, rpcLocation, type CalibrationSnapshot } from "../shared/rpc.ts"
 import {
   localeArgument,
   MAX_CONTEXT_LIMIT,
@@ -123,8 +123,8 @@ export function SettingsCommand(props: {
     return route.type === "session" ? route.sessionID : undefined
   }
 
-  /** 输入：`provider/model`；输出：该模型的校准系数；RPC 不可用返回 undefined。 */
-  const fetchCalibration = async (model: string): Promise<{ cjk: number; ascii: number; samples: number } | undefined> => {
+  /** 输入：`provider/model`；输出：该模型的校准快照；RPC 不可用返回 undefined。 */
+  const fetchCalibration = async (model: string): Promise<CalibrationSnapshot | undefined> => {
     try {
       return await contextRpc(props.context.client).calibrationGet({ model }, rpcLocation(props.context))
     } catch {
@@ -132,20 +132,25 @@ export function SettingsCommand(props: {
     }
   }
 
-  /** 输入：模型键 + 两个系数；输出：写入是否成功。预期：越界由服务端拒绝。 */
-  const writeCalibration = async (model: string, cjk: number, ascii: number): Promise<boolean> => {
+  /** 输入：模型键 + 两个系数 + 目标层；输出：写入是否成功。预期：越界由服务端拒绝。 */
+  const writeCalibration = async (
+    model: string,
+    cjk: number,
+    ascii: number,
+    scope: "exact" | "model",
+  ): Promise<boolean> => {
     try {
-      const got = await contextRpc(props.context.client).calibrationSet({ model, cjk, ascii }, rpcLocation(props.context))
+      const got = await contextRpc(props.context.client).calibrationSet({ model, cjk, ascii, scope }, rpcLocation(props.context))
       return got.ok
     } catch {
       return false
     }
   }
 
-  /** 输入：模型键；输出：无；预期：删除学习记录，回到默认系数。 */
-  const resetCalibration = async (model: string): Promise<void> => {
+  /** 输入：模型键 + 重置范围；输出：无；预期：删掉对应层，回落到下一层或默认值。 */
+  const resetCalibrationScope = async (model: string, scope: "exact" | "model"): Promise<void> => {
     try {
-      await contextRpc(props.context.client).calibrationReset({ model }, rpcLocation(props.context))
+      await contextRpc(props.context.client).calibrationReset({ model, scope }, rpcLocation(props.context))
     } catch {
       // server plugin not loaded
     }
@@ -797,28 +802,51 @@ export function SettingsCommand(props: {
   /**
    * 输入：无。
    * 输出：back 回上一层，done 结束（输入框已在屏幕上）。
-   * 预期：改 CJK / ASCII 系数或重置；手改后仍会继续按真实 usage 自校正。
+   * 预期：分「本提供商」和「全部提供商」两层编辑；手改后学习只更新被改的那一层。
    */
   const openCalibration = async (): Promise<Flow> => {
     const model = currentModel()
     if (model === undefined) return "back"
     const key = `${model.providerID}/${model.id}`
-    const state = await fetchCalibration(key)
-    if (state === undefined) return "back"
-    const picked = await props.context.ui.dialog.select<"cjk" | "ascii" | "reset">({
+    const snapshot = await fetchCalibration(key)
+    if (snapshot === undefined) return "back"
+    /** 输入：单层快照；输出：`1.36 / 0.19 · 12` 或「未设置」。 */
+    const layerText = (layer: CalibrationSnapshot["model"] | undefined): string =>
+      layer === undefined
+        ? copy().settings.calibrationScopeUnset
+        : `${layer.cjk.toFixed(2)} / ${layer.ascii.toFixed(2)} · ${layer.samples.toString()}`
+    const picked = await props.context.ui.dialog.select<"exact" | "model" | "resetExact" | "resetModel">({
       title: `${copy().settings.calibration} · ${keyLabel(key)}`,
       options: [
-        { title: copy().settings.calibrationCjk, value: "cjk", footer: state.cjk.toFixed(3) },
-        { title: copy().settings.calibrationAscii, value: "ascii", footer: state.ascii.toFixed(3) },
-        { title: copy().settings.calibrationReset, value: "reset" },
+        { title: copy().settings.calibrationExactScope, value: "exact", footer: layerText(snapshot.exact) },
+        { title: copy().settings.calibrationModelScope, value: "model", footer: layerText(snapshot.model) },
+        { title: copy().settings.calibrationResetExact, value: "resetExact" },
+        { title: copy().settings.calibrationResetModel, value: "resetModel" },
       ],
     })
     if (picked === undefined) return "back"
-    if (picked === "reset") {
-      await resetCalibration(key)
+    if (picked === "resetExact") {
+      await resetCalibrationScope(key, "exact")
       return "back"
     }
-    const isCjk = picked === "cjk"
+    if (picked === "resetModel") {
+      await resetCalibrationScope(key, "model")
+      return "back"
+    }
+    const scope = picked
+    const layer = scope === "exact" ? snapshot.exact : snapshot.model
+    const current = layer ?? { cjk: TOKEN_COEF_MIN.cjk, ascii: TOKEN_COEF_MIN.ascii, samples: 0 }
+    const field = await props.context.ui.dialog.select<"cjk" | "ascii">({
+      title: `${keyLabel(key)} · ${
+        scope === "exact" ? copy().settings.calibrationExactScope : copy().settings.calibrationModelScope
+      }`,
+      options: [
+        { title: copy().settings.calibrationCjk, value: "cjk", footer: current.cjk.toFixed(3) },
+        { title: copy().settings.calibrationAscii, value: "ascii", footer: current.ascii.toFixed(3) },
+      ],
+    })
+    if (field === undefined) return "back"
+    const isCjk = field === "cjk"
     props.context.ui.dialog.show(() => (
       <CoefDialog
         context={props.context}
@@ -826,11 +854,16 @@ export function SettingsCommand(props: {
         title={isCjk ? copy().settings.calibrationCjk : copy().settings.calibrationAscii}
         hint={copy().settings.calibrationHint}
         invalid={copy().settings.calibrationInvalid}
-        initial={(isCjk ? state.cjk : state.ascii).toFixed(3)}
+        initial={(isCjk ? current.cjk : current.ascii).toFixed(3)}
         min={isCjk ? TOKEN_COEF_MIN.cjk : TOKEN_COEF_MIN.ascii}
         max={isCjk ? TOKEN_COEF_MAX.cjk : TOKEN_COEF_MAX.ascii}
         onConfirm={(value) => {
-          void writeCalibration(key, isCjk ? value : state.cjk, isCjk ? state.ascii : value)
+          void writeCalibration(
+            key,
+            isCjk ? value : current.cjk,
+            isCjk ? current.ascii : value,
+            scope,
+          )
         }}
       />
     ))

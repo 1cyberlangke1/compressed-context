@@ -7,12 +7,15 @@ import type { StorageLike } from "./state.ts"
  * 按模型学习 token 估算系数。
  *
  * 输入：服务端 storage + 模型身份 + 单次真实 usage 观测。
- * 输出：该模型当前生效的 `{ cjk, ascii }` 系数。
- * 预期：用二维递推最小二乘（RLS）+ 遗忘因子 + 往默认值收缩，
- *       默认值等于旧规则（CJK 1 / ASCII 0.25），所以没有样本时行为与历史版本一致。
+ * 输出：该模型当前生效的 `{ cjk, ascii }` 系数 + 它来自哪一层。
+ * 预期：分两层——`model:<modelID>` 是所有提供商共享的学习值，
+ *       `<provider>/<modelID>` 是某家提供商自己的精确覆盖。
+ *       读取顺序 精确 > 共享 > 默认；学习写回「当前生效的那一层」。
  */
 
-/** 系数存储键前缀；后面接 `providerID/modelID`。 */
+/** 共享层键前缀；后面接归一化后的模型名。 */
+export const MODEL_CALIBRATION_PREFIX = "calibration:model:"
+/** 精确层键前缀；后面接 `providerID/modelID`。 */
 export const CALIBRATION_PREFIX = "calibration:"
 
 /** 学习状态：两个系数 + 2×2 协方差 + 样本数。 */
@@ -24,6 +27,15 @@ export interface CalibrationState {
   readonly p11: number
   readonly samples: number
   readonly updatedAt: number
+}
+
+/** 系数来自哪一层：精确覆盖、共享学习值，或内置默认。 */
+export type CalibrationScope = "exact" | "model" | "default"
+
+/** 生效系数 + 来源层。 */
+export interface EffectiveCalibration {
+  readonly state: CalibrationState
+  readonly scope: CalibrationScope
 }
 
 /** 无样本时的初始状态：系数等于默认值，协方差给足初始步长。 */
@@ -52,7 +64,17 @@ const MAX_OBSERVATION_SKEW = 0.5
 /** 缓存有效期；跨实例写盘后最多这么久能读到。 */
 const CACHE_TTL_MS = 5_000
 
-/** 输入：模型；输出：storage 键。 */
+/** 输入：模型名；输出：共享层用的归一化键（去首尾空白 + 小写）。 */
+export function normalizeModelName(id: string): string {
+  return id.trim().toLowerCase()
+}
+
+/** 输入：模型；输出：共享层 storage 键。 */
+export function modelCalibrationKey(model: ModelIdentity): string {
+  return `${MODEL_CALIBRATION_PREFIX}${normalizeModelName(model.id)}`
+}
+
+/** 输入：模型；输出：精确层 storage 键（按提供商区分）。 */
 export function calibrationKey(model: ModelIdentity): string {
   return `${CALIBRATION_PREFIX}${model.providerID}/${model.id}`
 }
@@ -100,36 +122,77 @@ export function coefsOf(state: CalibrationState): TokenCoefs {
   return { cjk: state.cjk, ascii: state.ascii }
 }
 
-const cache = new Map<string, { readonly at: number; readonly state: CalibrationState }>()
+const cache = new Map<string, { readonly at: number; readonly value: EffectiveCalibration }>()
 
-/** 输入：模型；输出：缓存里的状态（可能过期）。 */
-function cached(model: ModelIdentity): CalibrationState | undefined {
+/** 输入：模型；输出：缓存里的生效值（可能过期）。 */
+function cached(model: ModelIdentity): EffectiveCalibration | undefined {
   const hit = cache.get(calibrationKey(model))
   if (hit === undefined) return undefined
   if (Date.now() - hit.at > CACHE_TTL_MS) return undefined
-  return hit.state
+  return hit.value
 }
 
-/** 输入：模型 + 状态；输出：无；预期：同时刷新缓存。 */
-function remember(model: ModelIdentity, state: CalibrationState): void {
-  cache.set(calibrationKey(model), { at: Date.now(), state })
+/** 输入：模型 + 生效值；输出：无；预期：同时刷新缓存。 */
+function remember(model: ModelIdentity, value: EffectiveCalibration): void {
+  cache.set(calibrationKey(model), { at: Date.now(), value })
+}
+
+/** 输入：storage + 键；输出：解析后的状态；读盘失败返回 undefined。 */
+async function readLayer(storage: StorageLike, key: string): Promise<CalibrationState | undefined> {
+  try {
+    return parseCalibration(await storage.get(key))
+  } catch {
+    return undefined
+  }
 }
 
 /**
  * 输入：storage + 模型。
- * 输出：该模型的学习状态；没有记录时返回默认状态。
- * 预期：读盘失败不抛错——系数只是估算，退回默认值即可。
+ * 输出：生效状态 + 来源层。
+ * 预期：精确覆盖优先；其次共享层；都没有就是默认值。读盘失败一律退回默认。
  */
-export async function loadCalibration(storage: StorageLike, model: ModelIdentity): Promise<CalibrationState> {
+export async function loadEffectiveCalibration(
+  storage: StorageLike,
+  model: ModelIdentity,
+): Promise<EffectiveCalibration> {
   const hit = cached(model)
   if (hit !== undefined) return hit
-  try {
-    const state = parseCalibration(await storage.get(calibrationKey(model))) ?? DEFAULT_CALIBRATION
-    remember(model, state)
-    return state
-  } catch {
-    return DEFAULT_CALIBRATION
+  const exact = await readLayer(storage, calibrationKey(model))
+  if (exact !== undefined) {
+    const value: EffectiveCalibration = { state: exact, scope: "exact" }
+    remember(model, value)
+    return value
   }
+  const shared = await readLayer(storage, modelCalibrationKey(model))
+  const value: EffectiveCalibration =
+    shared === undefined ? { state: DEFAULT_CALIBRATION, scope: "default" } : { state: shared, scope: "model" }
+  remember(model, value)
+  return value
+}
+
+/** 两层原始快照；精确层没有记录时不带该字段。 */
+export interface CalibrationLayers {
+  /** 共享层；没有记录时是默认状态。 */
+  readonly model: CalibrationState
+  readonly exact?: CalibrationState
+}
+
+/** 输入：storage + 模型；输出：共享层与精确层各自的原始值。预期：读盘失败按没有记录处理。 */
+export async function loadCalibrationLayers(
+  storage: StorageLike,
+  model: ModelIdentity,
+): Promise<CalibrationLayers> {
+  const shared = await readLayer(storage, modelCalibrationKey(model))
+  const exact = await readLayer(storage, calibrationKey(model))
+  return {
+    model: shared ?? DEFAULT_CALIBRATION,
+    ...(exact === undefined ? {} : { exact }),
+  }
+}
+
+/** 输入：storage + 模型；输出：生效状态（读不到就是默认状态）。 */
+export async function loadCalibration(storage: StorageLike, model: ModelIdentity): Promise<CalibrationState> {
+  return (await loadEffectiveCalibration(storage, model)).state
 }
 
 /** 输入：storage + 模型；输出：当前生效系数（读盘失败或没有记录时是默认值）。 */
@@ -137,15 +200,10 @@ export async function calibrationCoefs(storage: StorageLike, model: ModelIdentit
   return coefsOf(await loadCalibration(storage, model))
 }
 
-/** 输入：storage + 模型 + 状态；输出：无；预期：写盘并刷新缓存，失败静默。 */
-export async function saveCalibration(
-  storage: StorageLike,
-  model: ModelIdentity,
-  state: CalibrationState,
-): Promise<void> {
-  remember(model, state)
+/** 输入：storage + 键 + 状态；输出：无；预期：写盘并让缓存失效，失败静默。 */
+async function writeLayer(storage: StorageLike, key: string, state: CalibrationState): Promise<void> {
   try {
-    await storage.set(calibrationKey(model), state as unknown as Parameters<StorageLike["set"]>[1])
+    await storage.set(key, state as unknown as Parameters<StorageLike["set"]>[1])
   } catch {
     // best effort：写不进去只影响下次启动后的系数
   }
@@ -177,11 +235,9 @@ export function applyObservation(state: CalibrationState, sample: CalibrationSam
   if (Math.abs(target / pred - 1) > MAX_OBSERVATION_SKEW) return state
 
   // RLS：P 是 2×2 协方差，φ 是字符数向量。
-  const phi0 = cjkChars
-  const phi1 = asciiChars
-  const pPhi0 = state.p00 * phi0 + state.p01 * phi1
-  const pPhi1 = state.p01 * phi0 + state.p11 * phi1
-  const denom = FORGETTING + phi0 * pPhi0 + phi1 * pPhi1
+  const pPhi0 = state.p00 * cjkChars + state.p01 * asciiChars
+  const pPhi1 = state.p01 * cjkChars + state.p11 * asciiChars
+  const denom = FORGETTING + cjkChars * pPhi0 + asciiChars * pPhi1
   if (denom <= 0) return state
   const k0 = pPhi0 / denom
   const k1 = pPhi1 / denom
@@ -214,21 +270,29 @@ export function applyObservation(state: CalibrationState, sample: CalibrationSam
 
 const chains = sessionChains(Symbol.for("compressed-context.calibration-chains"))
 
+/** 输入：模型；输出：串行锁键。 */
+function lockKey(model: ModelIdentity): string {
+  return `${model.providerID}/${model.id}`
+}
+
 /**
  * 输入：storage + 模型 + 观测。
  * 输出：无。
- * 预期：按模型串行读改写，避免同模型的并发请求互相覆盖。
+ * 预期：按模型串行读改写；写回「当前生效的那一层」——
+ *       没设精确覆盖就写共享层（所有提供商一起受益），设了只更新那家。
  */
 export async function recordCalibration(
   storage: StorageLike,
   model: ModelIdentity,
   sample: CalibrationSample,
 ): Promise<void> {
-  await withSessionLock(chains, `${model.providerID}/${model.id}`, async () => {
-    const current = await loadCalibration(storage, model)
-    const next = applyObservation(current, sample)
-    if (next === current) return
-    await saveCalibration(storage, model, next)
+  await withSessionLock(chains, lockKey(model), async () => {
+    const effective = await loadEffectiveCalibration(storage, model)
+    const next = applyObservation(effective.state, sample)
+    if (next === effective.state) return
+    const key = effective.scope === "exact" ? calibrationKey(model) : modelCalibrationKey(model)
+    await writeLayer(storage, key, next)
+    cache.delete(calibrationKey(model))
   })
 }
 
@@ -244,37 +308,57 @@ export function isCoefInRange(coefs: TokenCoefs): boolean {
   )
 }
 
+/** 手动写入的目标层：共享层或某家提供商的精确层。 */
+export type WritableScope = "exact" | "model"
+
 /**
- * 输入：storage + 模型 + 用户手填的系数。
+ * 输入：storage + 模型 + 用户手填的系数 + 目标层。
  * 输出：写入是否成功。
- * 预期：只写系数并保留样本数与协方差形状；越界值拒绝写入，交给调用方报错。
+ * 预期：越界值拒绝写入；写精确层等于给这家提供商单独定系数，
+ *       之后学习只更新这一层，共享层不受影响。
  */
 export async function setManualCalibration(
   storage: StorageLike,
   model: ModelIdentity,
   coefs: TokenCoefs,
+  scope: WritableScope,
 ): Promise<boolean> {
   if (!isCoefInRange(coefs)) return false
-  await withSessionLock(chains, `${model.providerID}/${model.id}`, async () => {
-    const current = await loadCalibration(storage, model)
-    await saveCalibration(storage, model, {
+  await withSessionLock(chains, lockKey(model), async () => {
+    const key = scope === "exact" ? calibrationKey(model) : modelCalibrationKey(model)
+    const current = (await readLayer(storage, key)) ?? DEFAULT_CALIBRATION
+    await writeLayer(storage, key, {
       ...current,
       cjk: coefs.cjk,
       ascii: coefs.ascii,
       updatedAt: Date.now(),
     })
+    cache.delete(calibrationKey(model))
   })
   return true
 }
 
-/** 输入：storage + 模型；输出：无；预期：删除学习记录，回到默认系数重新学。 */
-export async function resetCalibration(storage: StorageLike, model: ModelIdentity): Promise<void> {
+/** 重置目标层：精确层、共享层，或两层都清。 */
+export type ResetScope = WritableScope | "all"
+
+/** 输入：storage + 模型 + 重置范围；输出：无；预期：删掉的层回落到下一层或默认值。 */
+export async function resetCalibration(
+  storage: StorageLike,
+  model: ModelIdentity,
+  scope: ResetScope,
+): Promise<void> {
+  const keys =
+    scope === "all"
+      ? [calibrationKey(model), modelCalibrationKey(model)]
+      : [scope === "exact" ? calibrationKey(model) : modelCalibrationKey(model)]
   cache.delete(calibrationKey(model))
-  await withSessionLock(chains, `${model.providerID}/${model.id}`, async () => {
-    try {
-      await storage.remove(calibrationKey(model))
-    } catch {
-      // best effort
+  await withSessionLock(chains, lockKey(model), async () => {
+    for (const key of keys) {
+      try {
+        await storage.remove(key)
+      } catch {
+        // best effort
+      }
     }
   })
 }

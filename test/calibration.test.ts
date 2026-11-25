@@ -10,6 +10,10 @@ import {
   DEFAULT_CALIBRATION,
   isCoefInRange,
   loadCalibration,
+  loadCalibrationLayers,
+  loadEffectiveCalibration,
+  modelCalibrationKey,
+  normalizeModelName,
   parseCalibration,
   recordCalibration,
   resetCalibration,
@@ -41,16 +45,32 @@ function freshModel(): { providerID: string; id: string } {
   return { providerID: "prov", id: `model-${seq.toString()}` }
 }
 
+/** 同一个模型名、两个不同的提供商：用来验证共享层。 */
+function providerPair(): readonly [
+  { providerID: string; id: string },
+  { providerID: string; id: string },
+] {
+  seq += 1
+  const id = `shared-${seq.toString()}`
+  return [
+    { providerID: "prov-a", id },
+    { providerID: "prov-b", id },
+  ]
+}
+
+const SAMPLE = { chars: { cjk: 0, ascii: 80_000 }, realTokens: 30_000, mediaTokens: 0 }
+
 describe("calibration 默认值", () => {
   it("没有记录时等于旧规则（CJK 1 / ASCII 0.25）", async () => {
-    const coefs = await calibrationCoefs(memoryStorage(), freshModel())
-    expect(coefs).toEqual(DEFAULT_TOKEN_COEFS)
+    const effective = await loadEffectiveCalibration(memoryStorage(), freshModel())
+    expect(effective.scope).toBe("default")
+    expect(effective.state).toEqual(DEFAULT_CALIBRATION)
   })
 
   it("坏记录回落到默认状态", async () => {
     const storage = memoryStorage()
     const model = freshModel()
-    await storage.set(calibrationKey(model), { cjk: "x" })
+    await storage.set(modelCalibrationKey(model), { cjk: "x" })
     expect(await loadCalibration(storage, model)).toEqual(DEFAULT_CALIBRATION)
   })
 
@@ -59,15 +79,17 @@ describe("calibration 默认值", () => {
     expect(parseCalibration({ cjk: 1, ascii: 0.25 })).toBeUndefined()
     expect(parseCalibration(null)).toBeUndefined()
   })
+
+  it("共享层键做 trim + 小写归一化", () => {
+    expect(normalizeModelName("  DeepSeek-V4.1  ")).toBe("deepseek-v4.1")
+    expect(modelCalibrationKey({ providerID: "p", id: " ABC " })).toBe("calibration:model:abc")
+    expect(calibrationKey({ providerID: "p", id: "ABC" })).toBe("calibration:p/ABC")
+  })
 })
 
 describe("calibration 学习", () => {
   it("ASCII 被低估时 ascii 系数上升，一次观测走完大部分差距", () => {
-    const next = applyObservation(DEFAULT_CALIBRATION, {
-      chars: { cjk: 0, ascii: 80_000 },
-      realTokens: 30_000,
-      mediaTokens: 0,
-    })
+    const next = applyObservation(DEFAULT_CALIBRATION, SAMPLE)
     // 目标：30000/80000 = 0.375；一次观测后应明显靠近但不超过目标。
     expect(next.ascii).toBeGreaterThan(0.25)
     expect(next.ascii).toBeLessThan(0.375)
@@ -76,11 +98,7 @@ describe("calibration 学习", () => {
 
   it("重复观测会收敛到真实比例", () => {
     let state = DEFAULT_CALIBRATION
-    const chars = { cjk: 0, ascii: 80_000 }
-    // 后端真实按每 ASCII 字符 0.375 token 计费；观测值固定，不随我们的预测变化。
-    for (let index = 0; index < 200; index += 1) {
-      state = applyObservation(state, { chars, realTokens: 30_000, mediaTokens: 0 })
-    }
+    for (let index = 0; index < 200; index += 1) state = applyObservation(state, SAMPLE)
     // 往默认值收缩会留下一点稳态偏差，收敛到 0.375 附近即可。
     expect(Math.abs(state.ascii - 0.375)).toBeLessThan(0.01)
   })
@@ -124,63 +142,82 @@ describe("calibration 学习", () => {
   })
 
   it("媒体 token 从目标值里扣掉", () => {
-    const withoutMedia = applyObservation(DEFAULT_CALIBRATION, {
-      chars: { cjk: 0, ascii: 80_000 },
-      realTokens: 30_000,
-      mediaTokens: 0,
-    })
-    const withMedia = applyObservation(DEFAULT_CALIBRATION, {
-      chars: { cjk: 0, ascii: 80_000 },
-      realTokens: 35_000,
-      mediaTokens: 5_000,
-    })
+    const withoutMedia = applyObservation(DEFAULT_CALIBRATION, SAMPLE)
+    const withMedia = applyObservation(DEFAULT_CALIBRATION, { ...SAMPLE, realTokens: 35_000, mediaTokens: 5_000 })
     expect(withMedia.ascii).toBeCloseTo(withoutMedia.ascii, 6)
   })
 })
 
-describe("calibration 落盘与手动覆盖", () => {
-  it("recordCalibration 写盘后能读回，且不同模型互不影响", async () => {
+describe("calibration 两层键", () => {
+  it("没设精确层时，学习写共享层，其他提供商同样受益", async () => {
     const storage = memoryStorage()
-    const model = freshModel()
-    await recordCalibration(storage, model, {
-      chars: { cjk: 0, ascii: 80_000 },
-      realTokens: 30_000,
-      mediaTokens: 0,
-    })
-    expect((await loadCalibration(storage, model)).samples).toBe(1)
-    expect(await calibrationCoefs(storage, freshModel())).toEqual(DEFAULT_TOKEN_COEFS)
+    const [a, b] = providerPair()
+    await recordCalibration(storage, a, SAMPLE)
+    expect((await loadEffectiveCalibration(storage, a)).scope).toBe("model")
+    const coefsA = await calibrationCoefs(storage, a)
+    const coefsB = await calibrationCoefs(storage, b)
+    expect(coefsA).toEqual(coefsB)
+    expect(coefsA.ascii).toBeGreaterThan(0.25)
   })
 
-  it("手动系数写进去后继续被观测修正", async () => {
+  it("精确层覆盖共享层，且只影响那一家", async () => {
     const storage = memoryStorage()
-    const model = freshModel()
-    expect(await setManualCalibration(storage, model, { cjk: 1.2, ascii: 0.4 })).toBe(true)
-    expect(await calibrationCoefs(storage, model)).toEqual({ cjk: 1.2, ascii: 0.4 })
+    const [a, b] = providerPair()
+    await recordCalibration(storage, a, SAMPLE)
+    expect(await setManualCalibration(storage, a, { cjk: 1.1, ascii: 0.5 }, "exact")).toBe(true)
 
-    await recordCalibration(storage, model, {
-      chars: { cjk: 0, ascii: 80_000 },
-      realTokens: 30_000,
-      mediaTokens: 0,
-    })
-    const after = await calibrationCoefs(storage, model)
-    // 手填的 0.4 高于真实 0.375：观测会把它往下拉。
-    expect(after.ascii).toBeLessThan(0.4)
-    expect(after.ascii).toBeGreaterThan(0.25)
+    const effectiveA = await loadEffectiveCalibration(storage, a)
+    expect(effectiveA.scope).toBe("exact")
+    expect(effectiveA.state.ascii).toBe(0.5)
+
+    const effectiveB = await loadEffectiveCalibration(storage, b)
+    expect(effectiveB.scope).toBe("model")
+    expect(effectiveB.state.ascii).toBeLessThan(0.5)
+  })
+
+  it("有精确层时学习只写精确层，共享层不动", async () => {
+    const storage = memoryStorage()
+    const [a, b] = providerPair()
+    await recordCalibration(storage, a, SAMPLE)
+    const sharedBefore = (await loadCalibrationLayers(storage, a)).model
+    await setManualCalibration(storage, a, { cjk: 1, ascii: 0.6 }, "exact")
+
+    await recordCalibration(storage, a, SAMPLE)
+    const sharedAfter = (await loadCalibrationLayers(storage, a)).model
+    const exactAfter = (await loadCalibrationLayers(storage, a)).exact
+
+    expect(sharedAfter).toEqual(sharedBefore)
+    expect(exactAfter?.ascii).toBeLessThan(0.6)
+    expect(exactAfter?.ascii).toBeGreaterThan(0.25)
+    // 另一家仍用共享层
+    expect((await calibrationCoefs(storage, b)).ascii).toBeCloseTo(sharedAfter.ascii, 6)
+  })
+
+  it("删掉精确层后回落到共享层", async () => {
+    const storage = memoryStorage()
+    const [a] = providerPair()
+    await recordCalibration(storage, a, SAMPLE)
+    const shared = await calibrationCoefs(storage, a)
+    await setManualCalibration(storage, a, { cjk: 1.5, ascii: 0.8 }, "exact")
+    await resetCalibration(storage, a, "exact")
+    expect(await loadEffectiveCalibration(storage, a)).toMatchObject({ scope: "model" })
+    expect(await calibrationCoefs(storage, a)).toEqual(shared)
+  })
+
+  it("清共享层后两家都回到默认值", async () => {
+    const storage = memoryStorage()
+    const [a, b] = providerPair()
+    await recordCalibration(storage, a, SAMPLE)
+    await resetCalibration(storage, a, "model")
+    expect(await calibrationCoefs(storage, a)).toEqual(DEFAULT_TOKEN_COEFS)
+    expect(await calibrationCoefs(storage, b)).toEqual(DEFAULT_TOKEN_COEFS)
   })
 
   it("越界的手动系数被拒绝、不写入", async () => {
     const storage = memoryStorage()
     const model = freshModel()
-    expect(await setManualCalibration(storage, model, { cjk: 9, ascii: 0.25 })).toBe(false)
-    expect(await setManualCalibration(storage, model, { cjk: 1, ascii: 0 })).toBe(false)
-    expect(await calibrationCoefs(storage, model)).toEqual(DEFAULT_TOKEN_COEFS)
-  })
-
-  it("重置后回到默认值", async () => {
-    const storage = memoryStorage()
-    const model = freshModel()
-    await setManualCalibration(storage, model, { cjk: 1.2, ascii: 0.4 })
-    await resetCalibration(storage, model)
+    expect(await setManualCalibration(storage, model, { cjk: 9, ascii: 0.25 }, "model")).toBe(false)
+    expect(await setManualCalibration(storage, model, { cjk: 1, ascii: 0 }, "model")).toBe(false)
     expect(await calibrationCoefs(storage, model)).toEqual(DEFAULT_TOKEN_COEFS)
   })
 })
