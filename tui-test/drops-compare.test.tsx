@@ -1,13 +1,14 @@
 import { testRender } from "@opentui/solid"
+import { ScrollBoxRenderable, type BaseRenderable } from "@opentui/core"
 import { describe, expect, test } from "bun:test"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createSignal } from "solid-js"
 
 import { resolveMessages } from "../src/i18n/index.ts"
-import type { CacheDrop } from "../src/shared/cache-drops.ts"
+import type { CacheDrop, CacheDropNode } from "../src/shared/cache-drops.ts"
 import { DEFAULT_SETTINGS, type Settings } from "../src/shared/settings.ts"
 import { DropCompare } from "../src/tui/panel/drops-compare.tsx"
-import { DropsDialog } from "../src/tui/panel/drops-dialog.tsx"
+import { DropsDialog, NodeTextDialog } from "../src/tui/panel/drops-dialog.tsx"
 
 const copy = resolveMessages("zh")
 
@@ -97,6 +98,18 @@ function locate(
     return sum + (wide ? 2 : 1)
   }, 0)
   return { row, col: width + 1 }
+}
+
+/**
+ * 输入：渲染树节点；输出：树里全部 scrollbox 渲染节点。
+ * 预期：横向滚动断言用；scrollWidth 是布局内容宽，被视口拉伸时等于自身宽度。
+ */
+function collectScrollboxes(node: BaseRenderable, out: ScrollBoxRenderable[] = []): ScrollBoxRenderable[] {
+  for (const child of node.getChildren()) {
+    if (child instanceof ScrollBoxRenderable) out.push(child)
+    collectScrollboxes(child, out)
+  }
+  return out
 }
 
 describe("DropCompare", () => {
@@ -206,6 +219,71 @@ describe("DropCompare", () => {
     try {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.compareTitle))
       expect(frame).toContain("xxxx")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("最长行超出栏宽时横向能滚到行尾", async () => {
+    const long = `{"content":"${"x".repeat(300)}"}`
+    const app = await testRender(
+      () => (
+        <DropCompare
+          context={fakeContext([])}
+          sessionID="ses_a"
+          drop={drop("m2", { body: long, previousBody: long })}
+          copy={copy}
+          onBack={() => {}}
+        />
+      ),
+      { width: 120, height: 40 },
+    )
+    app.renderer.start()
+    try {
+      await app.waitForFrame((value) => value.includes(copy.drops.compareTitle))
+      const boxes = collectScrollboxes(app.renderer.root)
+      const columns = boxes.filter((box) => box.scrollX)
+      expect(columns.length).toBeGreaterThanOrEqual(2)
+      // scrollWidth 由 native 布局同步，测试环境读不到；断言布局前提：行盒必须显式比视口宽，
+      // 否则 content 被拉伸成视口等宽，横向没有可滚范围。
+      for (const column of columns) {
+        const widest = Math.max(...column.content.getChildren().map((child) => child.width))
+        expect(widest).toBeGreaterThan(column.viewport.width)
+      }
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("节点内容超长行横向能滚到行尾（宽度不封顶 2000）", async () => {
+    const node: CacheDropNode = {
+      key: "content",
+      chars: 3002,
+      text: `"${"y".repeat(3000)}"`,
+      truncated: false,
+    }
+    const app = await testRender(
+      () => (
+        <NodeTextDialog
+          context={fakeContext([])}
+          copy={copy}
+          node={node}
+          path={["content"]}
+          body={undefined}
+          onBack={() => {}}
+        />
+      ),
+      { width: 120, height: 40 },
+    )
+    app.renderer.start()
+    try {
+      await app.waitForFrame((value) => value.includes(copy.drops.nodeTitle))
+      const boxes = collectScrollboxes(app.renderer.root)
+      const column = boxes.at(-1)
+      if (column === undefined) throw new Error("scrollbox missing")
+      expect(column.scrollX).toBe(true)
+      const widest = Math.max(...column.content.getChildren().map((child) => child.width))
+      expect(widest).toBeGreaterThan(2000)
     } finally {
       app.renderer.destroy()
     }

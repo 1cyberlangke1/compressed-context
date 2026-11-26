@@ -58,6 +58,19 @@ export function DropCompare(props: {
     return diffLines(prettyJsonLines(left).join("\n"), prettyJsonLines(right).join("\n"))
   })
   const visibleRows = createMemo(() => rows().slice(0, MAX_DIFF_ROWS))
+  /**
+   * 两栏各自最长行的码点宽度。
+   * 预期：行盒必须显式给宽；不给宽会被滚动视口拉伸成等宽，`scrollWidth` 等于视口，横向就没有可滚范围。
+   */
+  const columnContentWidth = createMemo(() => {
+    let left = 1
+    let right = 1
+    for (const row of visibleRows()) {
+      if (row.left !== undefined) left = Math.max(left, Array.from(row.left.text).length)
+      if (row.right !== undefined) right = Math.max(right, Array.from(row.right.text).length)
+    }
+    return { left, right }
+  })
   /** 弹窗固定高度：按终端高度放大，内容多寡都保持同一块大小。 */
   const fixedHeight = createMemo(() => Math.max(18, Math.min(60, Math.floor(viewportHeight() * 0.85))))
   const panelHeight = createMemo(() => Math.max(6, fixedHeight() - 4))
@@ -82,33 +95,39 @@ export function DropCompare(props: {
     return row.right === undefined ? " " : "+"
   }
 
-  /** 输入：栏；输出：该栏的逐行元素。预期：行号 + 标记 + 内容都在同一个横向滚动区里。 */
-  const Column = (input: { readonly side: "left" | "right" }) => (
-    <scrollbox
-      width={columnWidth()}
-      height={panelHeight()}
-      scrollX={true}
-      scrollY={true}
-      focused={true}
-      flexShrink={0}
-    >
-      <For each={visibleRows()}>
-        {(row) => (
-          <box flexDirection="row" height={1} flexShrink={0}>
-            <text fg={theme.text.muted} width={GUTTER} flexShrink={0} selectable={false}>
-              {lineNo(input.side === "left" ? row.left?.no : row.right?.no)}
-            </text>
-            <text fg={rowColor(row)} width={1} flexShrink={0} selectable={false}>
-              {marker(row, input.side)}
-            </text>
-            <text fg={rowColor(row)} flexShrink={0} wrapMode="none" selectable={false}>
-              {input.side === "left" ? (row.left?.text ?? "") : (row.right?.text ?? "")}
-            </text>
-          </box>
-        )}
-      </For>
-    </scrollbox>
-  )
+  /** 输入：栏；输出：该栏的逐行元素。预期：行号 + 标记 + 内容都在同一个横向滚动区里，行宽按最长行显式声明。 */
+  const Column = (input: { readonly side: "left" | "right" }) => {
+    const contentWidth = createMemo(() =>
+      input.side === "left" ? columnContentWidth().left : columnContentWidth().right,
+    )
+    return (
+      <scrollbox
+        width={columnWidth()}
+        height={panelHeight()}
+        scrollX={true}
+        scrollY={true}
+        focused={true}
+        flexShrink={0}
+        contentOptions={{ width: "auto" }}
+      >
+        <For each={visibleRows()}>
+          {(row) => (
+            <box flexDirection="row" height={1} flexShrink={0} width={GUTTER + 1 + contentWidth()}>
+              <text fg={theme.text.muted} width={GUTTER} flexShrink={0} selectable={false}>
+                {lineNo(input.side === "left" ? row.left?.no : row.right?.no)}
+              </text>
+              <text fg={rowColor(row)} width={1} flexShrink={0} selectable={false}>
+                {marker(row, input.side)}
+              </text>
+              <text fg={rowColor(row)} width={contentWidth()} flexShrink={0} wrapMode="none" selectable={false}>
+                {input.side === "left" ? (row.left?.text ?? "") : (row.right?.text ?? "")}
+              </text>
+            </box>
+          )}
+        </For>
+      </scrollbox>
+    )
+  }
 
   return (
     <box flexDirection="column" width="100%" height={fixedHeight()} flexShrink={0} gap={1}>

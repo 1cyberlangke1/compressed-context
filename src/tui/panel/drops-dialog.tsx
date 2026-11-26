@@ -642,13 +642,17 @@ export function NodeTextDialog(props: {
     }
     return prettyJsonLines(props.node.text)
   })
+  /**
+   * 内容宽度：最长行的码点数 + 1。
+   * 预期：不封顶——行盒宽度必须覆盖最长行，横向滚动才能拉到行尾；封顶会让更长的行被裁掉且滚不到。
+   */
   const width = createMemo(() => {
     let max = 24
     for (const line of lines()) {
       const size = Array.from(line).length
       if (size > max) max = size
     }
-    return Math.min(2_000, max + 1)
+    return max + 1
   })
   const height = createMemo(() => {
     const size = props.context.renderer.height
