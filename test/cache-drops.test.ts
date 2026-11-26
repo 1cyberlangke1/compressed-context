@@ -6,7 +6,9 @@ import {
   diffRequests,
   dropPercent,
   parseCacheDrops,
+  segmentTextOf,
   treeFromBody,
+  valueAtPath,
   type CacheDrop,
 } from "../src/shared/cache-drops.ts"
 
@@ -201,5 +203,48 @@ describe("cacheDropsEqual", () => {
     expect(cacheDropsEqual([drop("m1", 1)], [drop("m1", 1)])).toBe(true)
     expect(cacheDropsEqual([drop("m1", 1)], [drop("m1", 2)])).toBe(false)
     expect(cacheDropsEqual([drop("m1", 1)], [{ ...drop("m1", 1), dropPp: 10 }])).toBe(false)
+  })
+})
+
+describe("segmentTextOf", () => {
+  it("按段标识取出同一段原文，键序已规范化", () => {
+    const request = chat([{ role: "user", content: "a" }, { role: "assistant", content: "b" }], { system: "s" })
+    expect(segmentTextOf(request, "messages[1]")).toBe('{"content":"b","role":"assistant"}')
+    expect(segmentTextOf(request, "system")).toBe('"s"')
+  })
+
+  it("段不存在或报文不是 JSON 时返回 undefined", () => {
+    expect(segmentTextOf(chat([]), "messages[0]")).toBeUndefined()
+    expect(segmentTextOf("not json", "system")).toBeUndefined()
+  })
+})
+
+describe("parseCacheDrops 的内联完整报文", () => {
+  it("读出记录里的完整报文，不截断", () => {
+    const full = `{"messages":[${"x".repeat(5000)}]}`
+    const record = { ...drop("m1", 1), bodies: { body: full, previousBody: "old" } }
+    const [parsed] = parseCacheDrops([record], 10)
+    expect(parsed?.bodies?.body).toBe(full)
+    expect(parsed?.bodies?.previousBody).toBe("old")
+  })
+
+  it("空映射或非法值视为没有内联报文", () => {
+    expect(parseCacheDrops([{ ...drop("m1", 1), bodies: {} }], 10)[0]?.bodies).toBeUndefined()
+    expect(parseCacheDrops([{ ...drop("m1", 1), bodies: { body: 1 } }], 10)[0]?.bodies).toBeUndefined()
+  })
+})
+
+describe("valueAtPath", () => {
+  it("按字段名与数组下标取到值", () => {
+    const value = { messages: [{ content: "hi" }] }
+    expect(valueAtPath(value, ["messages", "[0]", "content"])).toEqual({ ok: true, value: "hi" })
+    expect(valueAtPath(value, [])).toEqual({ ok: true, value })
+  })
+
+  it("路径缺失时返回未找到", () => {
+    const value = { messages: [] }
+    expect(valueAtPath(value, ["messages", "[0]"])).toEqual({ ok: false })
+    expect(valueAtPath(value, ["tools"])).toEqual({ ok: false })
+    expect(valueAtPath("text", ["a"])).toEqual({ ok: false })
   })
 })

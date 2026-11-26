@@ -42,14 +42,13 @@ export default Plugin.define({
     cleanupStaleTempFiles({
       maxAgeMs: effectiveDecompressTempMaxAgeHours(initialSettings) * 60 * 60 * 1000,
     })
-
     /** 输入：sessionID；输出：无；预期：会话空闲时丢掉没等到 usage 的 pending，保留上一份报文。 */
     const clearSessionMemory = (sessionID: string): void => {
       published.delete(sessionID)
       dropTracker().clearPending(sessionID)
     }
 
-    /** 输入：sessionID；输出：无；预期：会话删除时清掉进程内全部状态。 */
+    /** 输入：sessionID；输出：无；预期：会话删除时清掉进程内状态。 */
     const forgetMemory = (sessionID: string): void => {
       published.delete(sessionID)
       dropTracker().forget(sessionID)

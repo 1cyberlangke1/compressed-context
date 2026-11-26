@@ -35,6 +35,88 @@ export function groupOutline(segments: readonly CacheDropSegment[]): readonly Ou
   return groups
 }
 
+/**
+ * 输入：可能是被截断的 JSON 文本。
+ * 输出：按缩进展开的多行文本。
+ * 预期：字符串里的括号/逗号不参与换行，尾部被截断也照样缩进，不要求能解析；
+ *       用于旧记录那份被 `REQUEST_TEXT_MAX_CHARS` 砍过的报文预览。
+ */
+export function looseFormatJson(text: string): string {
+  const out: string[] = []
+  let line = ""
+  let indent = 0
+  let inString = false
+  let escaped = false
+  for (const char of text) {
+    if (inString) {
+      line += char
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      line += char
+      continue
+    }
+    if (char === "{" || char === "[") {
+      line += char
+      out.push(line)
+      indent += 1
+      line = "  ".repeat(indent)
+      continue
+    }
+    if (char === "}" || char === "]") {
+      if (line.trim().length > 0) out.push(line)
+      indent = Math.max(0, indent - 1)
+      line = `${"  ".repeat(indent)}${char}`
+      continue
+    }
+    if (char === ",") {
+      line += char
+      out.push(line)
+      line = "  ".repeat(indent)
+      continue
+    }
+    if (char === ":") {
+      line += ": "
+      continue
+    }
+    line += char
+  }
+  if (line.trim().length > 0) out.push(line)
+  return out.join("\n")
+}
+
+/**
+ * 输入：任意 JSON 值。
+ * 输出：两空格缩进后的行；字符串按原文显示。
+ * 预期：字符串里即使套着 JSON 也不再解析（例如 `arguments`），避免改动用户原始数据。
+ */
+export function prettyValueLines(value: unknown): readonly string[] {
+  if (typeof value === "string") return value.split(/\r?\n/)
+  if (value === undefined) return ["undefined"]
+  try {
+    return JSON.stringify(value, null, 2).split(/\r?\n/)
+  } catch {
+    return ["(unserializable)"]
+  }
+}
+
+/**
+ * 输入：任意 JSON 文本；输出：两空格缩进后的行。
+ * 预期：能解析时按值格式化；解析失败（例如被截断）时退回宽松格式化，仍然逐行展开。
+ */
+export function prettyJsonLines(text: string | undefined): readonly string[] {
+  if (text === undefined) return []
+  try {
+    return prettyValueLines(JSON.parse(text) as unknown)
+  } catch {
+    return looseFormatJson(text).split(/\r?\n/)
+  }
+}
+
 /** 输入：断点；输出：`system[0] +41` 这样的定位文本；无断点时为空串。 */
 export function segmentLabel(breakPoint: CacheDropBreak | undefined): string {
   if (breakPoint === undefined) return ""

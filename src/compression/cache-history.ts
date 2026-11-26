@@ -11,8 +11,8 @@ import {
   type CacheHistory,
   type StepTokens,
 } from "../shared/cache.ts"
-import { appendCacheDrop, type CacheRequestKind } from "../shared/cache-drops.ts"
-import { dropTracker, planCacheDrop } from "./cache-drops.ts"
+import { appendCacheDrop, type CacheDrop, type CacheRequestKind } from "../shared/cache-drops.ts"
+import { dropTracker, planCacheDrop, type RequestPair } from "./cache-drops.ts"
 import { isSessionDeleted } from "./deleted-sessions.ts"
 import { sessionChains, withSessionLock } from "./session-lock.ts"
 import { loadServerSettings } from "./settings.ts"
@@ -20,6 +20,16 @@ import type { StorageLike } from "./state.ts"
 
 /** 缓存历史读改写串行链；与压缩状态锁分开。 */
 const cacheChains = sessionChains(Symbol.for("compressed-context.cache-history"))
+
+/** 输入：报文对；输出：是否同时拿到当前与上一份报文；预期：缺任何一份都不能生成可对比记录。 */
+function hasRequestPair(pair: RequestPair | undefined): pair is RequestPair & {
+  readonly current: NonNullable<RequestPair["current"]>
+  readonly previous: NonNullable<RequestPair["previous"]>
+} {
+  const current = pair?.current
+  const previous = pair?.previous
+  return current !== undefined && previous !== undefined
+}
 
 /** 输入：storage + sessionID；输出：该会话的历史；缺失或损坏时为空历史。 */
 export async function loadCacheHistory(
@@ -86,8 +96,9 @@ export async function recordCacheHistoryUsage(
         },
       ])
       const pair = settings.cacheDropsEnabled ? tracker.consume(sessionID, input.sampleID) : undefined
-      const drop =
-        pair === undefined || previousSample === undefined
+      // 记录必须同时带当前与上一条的完整报文；缺任何一份都不写这条记录。
+      const planned =
+        !hasRequestPair(pair) || previousSample === undefined
           ? undefined
           : planCacheDrop({
               previousSample,
@@ -97,6 +108,15 @@ export async function recordCacheHistoryUsage(
               threshold: settings.cacheDropsThreshold,
               ...(input.model === undefined ? {} : { model: input.model }),
             })
+      // 完整报文内联进记录，随 maxRecords LRU 一起淘汰；不再写临时文件。
+      let drop: CacheDrop | undefined
+      if (planned !== undefined && hasRequestPair(pair)) {
+        const bodies = {
+          ...(pair.current.body.length > 0 ? { body: pair.current.body } : {}),
+          ...(pair.previous.body.length > 0 ? { previousBody: pair.previous.body } : {}),
+        }
+        if (bodies.body !== undefined && bodies.previousBody !== undefined) drop = { ...planned, bodies }
+      }
       const drops = drop === undefined ? history.drops : appendCacheDrop(history.drops, drop, maxDrops)
       const next: CacheHistory = { v: 2, samples, drops }
       if (!cacheHistoryEquals(history, next)) {

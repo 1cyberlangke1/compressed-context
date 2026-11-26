@@ -88,8 +88,7 @@ function readCalibrationReset(
 }
 
 /** 设置 RPC 的可选回调。 */
-export interface SettingsRpcOptions {
-  /** 输入：刚保存的设置；输出：无；预期：让 compress 工具的描述与参数跟着摘要格式切换。 */
+export interface SettingsRpcOptions {  /** 输入：刚保存的设置；输出：无；预期：让 compress 工具的描述与参数跟着摘要格式切换。 */
   readonly onSaved?: (settings: ServerSettings) => Promise<void>
 }
 

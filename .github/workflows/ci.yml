@@ -119,5 +119,7 @@ jobs:
       - run: bun scripts/e2e-native-compaction.mjs
       # 真实 TUI 里完整走一遍「触发压缩 → 点开块 → 编辑 → ctrl+s 保存」。
       - run: bun scripts/e2e-block-edit.mjs
+      # 缓存突变结构树：悬浮变色、父节点展开、叶子点开完整内容。
+      - run: bun scripts/e2e-drops-click.mjs
       # 更新菜单：本地假 registry + 假 opencode，验证确认/进度/失败三条界面路径。
       - run: bun scripts/build-tui.mjs && bun scripts/e2e-update.mjs

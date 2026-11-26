@@ -43,7 +43,7 @@ export interface TempFileStore {
 }
 
 /** 输入：会话；输出：短且稳定的文件名标记；预期：不把原始 sessionID 写进磁盘。 */
-function sessionToken(sessionID: string): string {
+export function sessionToken(sessionID: string): string {
   return createHash("sha256").update(sessionID).digest("hex").slice(0, 12)
 }
 

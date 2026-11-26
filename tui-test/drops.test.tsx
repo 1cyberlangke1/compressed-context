@@ -61,7 +61,7 @@ function fakeContext(
 ): Context {
   return {
     theme: fakeTheme(),
-    renderer: { height: 40 },
+    renderer: { height: 40, width: 120 },
     location: { directory: "/work" },
     ui: {
       dialog: {
@@ -71,6 +71,9 @@ function fakeContext(
         set: () => {},
         clear: () => {},
       },
+    },
+    keymap: {
+      layer: () => {},
     },
     data: {
       on: () => () => {},
@@ -99,6 +102,22 @@ function locate(
   if (row < 0 || line === undefined) throw new Error(`frame missing ${anchor}`)
   const index = line.indexOf(anchor)
   return { row, col: (index < 0 ? 0 : index) + 2 }
+}
+
+/** 输入：一帧文本 + 行匹配函数；输出：该行展开箭头的行号与显示列。 */
+function arrowPoint(frame: string, match: (line: string) => boolean): { readonly row: number; readonly col: number } {
+  const lines = frame.split("\n")
+  const row = lines.findIndex(match)
+  const line = lines[row]
+  if (row < 0 || line === undefined) throw new Error("arrow row missing")
+  const index = line.indexOf("▶")
+  if (index < 0) throw new Error("arrow missing")
+  const width = Array.from(line.slice(0, index)).reduce((sum, char) => {
+    const code = char.codePointAt(0) ?? 0
+    const wide = code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f
+    return sum + (wide ? 2 : 1)
+  }, 0)
+  return { row, col: width + 1 }
 }
 
 /** 输入：初始设置 + 记录 + 打开回调；输出：侧栏分区 fixture。 */
@@ -280,8 +299,8 @@ describe("DropsDialog", () => {
       expect(frame).toContain("-50.0pp")
       expect(frame).toContain(copy.drops.kind.compaction)
       expect(frame).toContain(copy.drops.structure)
-      expect(frame).toContain(copy.drops.request)
-      expect(frame).toContain("AABA")
+      expect(frame).toContain("- A")
+      expect(frame).toContain("+ B")
       expect(frame).toContain(copy.drops.break)
       expect(frame).toContain(copy.drops.footer)
       expect(frame).toContain("esc")
@@ -309,12 +328,12 @@ describe("DropsDialog", () => {
     })
     app.renderer.start()
     try {
-      const frame = await app.waitForFrame((value) => value.includes("CCCD"))
-      expect(frame).toContain("CCCD")
+      const frame = await app.waitForFrame((value) => value.includes("+ D"))
+      expect(frame).toContain("- C")
       const row = frame.split("\n").findIndex((line) => line.includes("-20.0pp"))
       await app.mockMouse.click(4, row)
-      const after = await app.waitForFrame((value) => value.includes("AAAB"))
-      expect(after).toContain("AAAB")
+      const after = await app.waitForFrame((value) => value.includes("+ B"))
+      expect(after).toContain("- A")
     } finally {
       app.renderer.destroy()
     }
@@ -363,14 +382,14 @@ describe("DropsDialog", () => {
     try {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.structure))
       expect(frame).not.toContain("messages (1)")
-      const rootRow = frame.split("\n").findIndex((line) => line.includes(copy.drops.structure))
-      await app.mockMouse.click(4, rootRow)
+      const root = arrowPoint(frame, (line) => line.includes(copy.drops.structure))
+      await app.mockMouse.click(root.col, root.row)
       // 顶层展开后，数组仍保持折叠，只显示组名和数量。
       const opened = await app.waitForFrame((value) => value.includes("messages (1)"))
       expect(opened).toContain("system")
       expect(opened).not.toContain("[0] 10 字符")
-      const groupRow = opened.split("\n").findIndex((line) => line.includes("messages (1)"))
-      await app.mockMouse.click(6, groupRow)
+      const group = arrowPoint(opened, (line) => line.includes("messages (1)"))
+      await app.mockMouse.click(group.col, group.row)
       const expanded = await app.waitForFrame((value) => value.includes("[0] 10 字符"))
       expect(expanded).toContain("[0] 10 字符")
     } finally {
@@ -405,14 +424,14 @@ describe("DropsDialog", () => {
     app.renderer.start()
     try {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.structure))
-      const root = locate(frame, copy.drops.structure)
+      const root = arrowPoint(frame, (line) => line.includes(copy.drops.structure))
       await app.mockMouse.click(root.col, root.row)
       const level1 = await app.waitForFrame((value) => value.includes("messages (1)"))
       expect(level1).not.toContain("[0] (2)")
-      const messages = locate(level1, "messages", (line) => line.includes("messages (1)"))
+      const messages = locate(level1, "(1)", (line) => line.includes("messages (1)"))
       await app.mockMouse.click(messages.col, messages.row)
       const level2 = await app.waitForFrame((value) => value.includes("[0] (2)"))
-      const index = locate(level2, "[0]", (line) => line.includes("[0] (2)"))
+      const index = locate(level2, "(2)", (line) => line.includes("[0] (2)"))
       await app.mockMouse.click(index.col, index.row)
       const level3 = await app.waitForFrame((value) => value.includes("content"))
       const messagesLine = level3.split("\n").find((line) => line.includes("messages (1)")) ?? ""
@@ -425,8 +444,7 @@ describe("DropsDialog", () => {
     }
   })
 
-  test("点击叶子节点打开原始内容弹窗", async () => {
-    let shown = 0
+  test("点击节点查看完整原始内容", async () => {
     const nested: CacheDrop = {
       ...drop("m5", 50, "AAAA", "AABA"),
       tree: [
@@ -443,33 +461,27 @@ describe("DropsDialog", () => {
         },
       ],
     }
-    const app = await testRender(
-      () => (
-        <DialogFixture
-          drops={[nested]}
-          initial="m5"
-          onDialogShow={() => {
-            shown += 1
-          }}
-        />
-      ),
-      { width: 120, height: 32 },
-    )
+    const app = await testRender(() => <DialogFixture drops={[nested]} initial="m5" />, {
+      width: 120,
+      height: 32,
+    })
     app.renderer.start()
     try {
       const frame = await app.waitForFrame((value) => value.includes(copy.drops.structure))
-      const root = locate(frame, copy.drops.structure)
+      const root = arrowPoint(frame, (line) => line.includes(copy.drops.structure))
       await app.mockMouse.click(root.col, root.row)
       const level1 = await app.waitForFrame((value) => value.includes("messages (1)"))
-      const messages = locate(level1, "messages", (line) => line.includes("messages (1)"))
+      const messages = locate(level1, "(1)", (line) => line.includes("messages (1)"))
       await app.mockMouse.click(messages.col, messages.row)
       const level2 = await app.waitForFrame((value) => value.includes("[0] (1)"))
-      const index = locate(level2, "[0]", (line) => line.includes("[0] (1)"))
+      const index = locate(level2, "(1)", (line) => line.includes("[0] (1)"))
       await app.mockMouse.click(index.col, index.row)
       const level3 = await app.waitForFrame((value) => value.includes("content 20"))
       const content = locate(level3, "content", (line) => line.includes("content 20"))
       await app.mockMouse.click(content.col, content.row)
-      expect(shown).toBe(1)
+      const detail = await app.waitForFrame((value) => value.includes(copy.drops.nodeTitle))
+      expect(detail).toContain("hello world")
+      expect(detail).toContain("messages/[0]/content")
     } finally {
       app.renderer.destroy()
     }

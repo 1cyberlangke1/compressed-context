@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 
-import { groupOutline, segmentLabel, shortSegment, splitExcerpt } from "../src/tui/panel/drops-format.ts"
+import {
+  groupOutline,
+  looseFormatJson,
+  prettyJsonLines,
+  prettyValueLines,
+  segmentLabel,
+  shortSegment,
+  splitExcerpt,
+} from "../src/tui/panel/drops-format.ts"
 
 /** 输入：段标识 + 两侧摘录；输出：断点对象。 */
 function point(segment: string, before = "AAAA", after = "AABA", offset = 1) {
@@ -62,5 +70,56 @@ describe("groupOutline", () => {
         ],
       },
     ])
+  })
+})
+
+describe("looseFormatJson", () => {
+  it("把紧凑 JSON 展开成缩进行", () => {
+    expect(looseFormatJson('{"a":1,"b":[2,3]}').split("\n")).toEqual([
+      "{",
+      '  "a": 1,',
+      '  "b": [',
+      "    2,",
+      "    3",
+      "  ]",
+      "}",
+    ])
+  })
+
+  it("被截断的尾部也照样缩进，不抛异常", () => {
+    const lines = looseFormatJson('{"messages":[{"role":"user","content":"half').split("\n")
+    expect(lines[0]).toBe("{")
+    expect(lines[1]).toBe('  "messages": [')
+    expect(lines[2]).toBe("    {")
+  })
+
+  it("字符串里的括号和逗号不换行", () => {
+    const lines = looseFormatJson('{"a":"x,{y}"}').split("\n")
+    expect(lines).toEqual(["{", '  "a": "x,{y}"', "}"])
+  })
+})
+
+describe("prettyJsonLines", () => {
+  it("合法 JSON 按值格式化，字符串直接显示原文", () => {
+    expect(prettyJsonLines('{"role":"user","content":"hi"}')).toEqual([
+      "{",
+      '  "role": "user",',
+      '  "content": "hi"',
+      "}",
+    ])
+    expect(prettyJsonLines('"hi"')).toEqual(["hi"])
+  })
+
+  it("值里套 JSON 字符串时不再解析", () => {
+    expect(prettyValueLines('{"path":"x"}')).toEqual(['{"path":"x"}'])
+    expect(prettyJsonLines('"{\\"path\\":\\"x\\"}"')).toEqual(['{"path":"x"}'])
+  })
+
+  it("解析失败时退回宽松格式化", () => {
+    expect(prettyJsonLines('{"a":1').slice(0, 2)).toEqual(["{", '  "a": 1'])
+  })
+
+  it("undefined 返回空数组", () => {
+    expect(prettyJsonLines(undefined)).toEqual([])
   })
 })

@@ -48,11 +48,11 @@ describe("DropTracker", () => {
     expect(empty.previous?.messageID).toBe("msg_1")
   })
 
-  it("超过单份报文上限时只保留开头预览，不整份丢", () => {
+  it("超长报文原样保留，不截断", () => {
     const tracker = createDropTracker()
-    tracker.capture("s1", { body: request("a"), at: 1, kind: "primary" })
-    tracker.capture("s1", { body: "x".repeat(8 * 1024 * 1024 + 1), at: 2, kind: "primary" })
-    expect(tracker.consume("s1", "msg_1").current?.body.length).toBeLessThanOrEqual(2_400)
+    const long = "x".repeat(8 * 1024 * 1024 + 1)
+    tracker.capture("s1", { body: long, at: 1, kind: "primary" })
+    expect(tracker.consume("s1", "msg_1").current?.body.length).toBe(long.length)
   })
 
   it("clearPending 只丢弃没等到 usage 的报文，保留上一份用于跨回合对比", () => {

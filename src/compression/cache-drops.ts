@@ -56,21 +56,13 @@ export interface DropTracker {
   size(): number
 }
 
-/** 单份请求体上限；超过就只留开头一段用于展示，避免 1M 上下文把内存吃穿。 */
-export const MAX_BODY_CHARS = 2 * 1024 * 1024
-/** 超限报文保留的开头长度；与面板断点原文上限一致，够看清是哪段。 */
-const OVERSIZE_PREVIEW_CHARS = 2_400
-
 /** 输入：无；输出：新的独立追踪器。预期：测试用，生产走 `dropTracker()`。 */
 export function createDropTracker(): DropTracker {
   const pending = new Map<string, CapturedRequest>()
   const previous = new Map<string, ConsumedRequest>()
   return {
     capture(sessionID, request) {
-      // 超出上限时不整份丢：只保留开头，至少能让面板显示「这次的请求长什么样」。
-      const body =
-        request.body.length > MAX_BODY_CHARS ? request.body.slice(0, OVERSIZE_PREVIEW_CHARS) : request.body
-      pending.set(sessionID, { ...request, body })
+      pending.set(sessionID, request)
     },
     consume(sessionID, messageID) {
       const current = pending.get(sessionID)

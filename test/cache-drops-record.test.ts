@@ -97,6 +97,9 @@ describe("recordCacheHistoryStep 的缓存突变记录", () => {
       dropPp: 50,
     })
     expect(history.drops[0]?.breakPoint?.segment).toBe("system")
+    // 完整报文内联进记录，随 maxRecords LRU 淘汰。
+    expect(history.drops[0]?.bodies?.body).toContain("AAB")
+    expect(history.drops[0]?.bodies?.previousBody).toContain("AAA")
   })
 
   it("开关关闭时不抓报文、不写突变记录，但样本照常记录", async () => {

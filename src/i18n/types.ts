@@ -49,14 +49,20 @@ export interface Messages {
       readonly unknown: string
     }
     readonly structure: string
-    readonly request: string
     readonly truncated: string
-    readonly noRequest: string
     readonly noBreak: string
     /** 只追加时展示的后缀标题。 */
     readonly appended: string
     /** 结构树叶子原文弹窗标题。 */
     readonly nodeTitle: string
+    /** 完整对比子界面。 */
+    readonly compareTitle: string
+    readonly openCompare: string
+    /** 对比两栏的表头。 */
+    readonly prevColumn: string
+    readonly curColumn: string
+    readonly fileMissing: string
+    readonly loading: string
     readonly chars: (value: string) => string
     readonly cause: {
       readonly system: string

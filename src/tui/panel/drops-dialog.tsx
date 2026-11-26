@@ -4,10 +4,12 @@ import { createMemo, createSignal, For, Show, type Accessor } from "solid-js"
 import { resolveMessages } from "../../i18n/index.ts"
 import { formatHitRate } from "../../shared/cache.ts"
 import type { CacheDrop, CacheDropNode } from "../../shared/cache-drops.ts"
+import { valueAtPath } from "../../shared/cache-drops.ts"
 import { formatTokens } from "../../shared/format.ts"
 import { localeArgument, type Settings } from "../../shared/settings.ts"
+import { DropCompare } from "./drops-compare.tsx"
 import { usePanelData } from "./data-scoped.ts"
-import { groupOutline, segmentLabel, splitExcerpt, timeLabel } from "./drops-format.ts"
+import { groupOutline, prettyJsonLines, segmentLabel, splitExcerpt, timeLabel } from "./drops-format.ts"
 
 /** 列表默认可见行数上限；终端更高也不会把详情挤没。 */
 const MAX_LIST_ROWS = 6
@@ -24,17 +26,6 @@ function barGlyph(dropPp: number): string {
 /** 输入：跌幅 + 主题；输出：主题色 token。预期：≥30pp 用错误色，其余用警告色。 */
 function barColor(dropPp: number, theme: Context["theme"]): Context["theme"]["text"]["base"] {
   return dropPp >= 30 ? theme.text.feedback.error.base : theme.text.feedback.warning.base
-}
-
-/** 输入：原始段文本；输出：能直接展示的多行 JSON；不是 JSON 时原样返回。 */
-function prettyRequest(text: string): readonly string[] {
-  try {
-    const value: unknown = JSON.parse(text)
-    const pretty = typeof value === "string" ? value : JSON.stringify(value, null, 2)
-    return pretty.split(/\r?\n/)
-  } catch {
-    return text.split(/\r?\n/)
-  }
 }
 
 /** 输入：符号 + 正文 + 颜色；输出：`-`/`+` 行，正文按词换行。预期：差异段完整显示。 */
@@ -77,6 +68,33 @@ export function DropsDialog(props: {
 
   const [selected, setSelected] = createSignal<string | undefined>(props.initial)
   const [hovered, setHovered] = createSignal(false)
+  const [comparing, setComparing] = createSignal(false)
+  const [nodeView, setNodeView] = createSignal<{
+    readonly node: CacheDropNode
+    readonly path: readonly string[]
+    readonly body: string | undefined
+  }>()
+
+  // 对比页和节点内容是同一个弹窗里的下一层：esc 先退回上一层，最外层才交给宿主关闭。
+  props.context.keymap.layer(() => ({
+    mode: "global",
+    enabled: nodeView() !== undefined || comparing(),
+    priority: 100,
+    commands: [
+      {
+        id: "compressed-context.drops.back",
+        title: nodeView() !== undefined ? copy().drops.nodeTitle : copy().drops.compareTitle,
+        bind: "escape",
+        run() {
+          if (nodeView() !== undefined) {
+            setNodeView(undefined)
+            return
+          }
+          setComparing(false)
+        },
+      },
+    ],
+  }))
 
   /** 最新在上；点击行只改选中，不关弹窗。 */
   const drops = createMemo(() => data.drops().toReversed())
@@ -97,6 +115,39 @@ export function DropsDialog(props: {
 
   return (
     <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1} width="100%">
+      <Show when={nodeView()}>
+        {(view) => (
+          <NodeTextDialog
+            context={props.context}
+            copy={copy()}
+            node={view().node}
+            path={view().path}
+            body={view().body}
+            onBack={() => {
+              setNodeView(undefined)
+            }}
+          />
+        )}
+      </Show>
+      <Show when={nodeView() === undefined && comparing()}>
+        <Show
+          when={active()}
+          fallback={<text fg={theme.text.muted}>{copy().drops.empty}</text>}
+        >
+          {(drop) => (
+            <DropCompare
+              context={props.context}
+              sessionID={props.sessionID}
+              drop={drop()}
+              copy={copy()}
+              onBack={() => {
+                setComparing(false)
+              }}
+            />
+          )}
+        </Show>
+      </Show>
+      <Show when={nodeView() === undefined && !comparing()}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <box flexDirection="row" gap={1}>
           <text fg={theme.text.base} wrapMode="word">
@@ -141,24 +192,37 @@ export function DropsDialog(props: {
           <For each={drops()}>
             {(drop) => {
               const isActive = () => active()?.messageID === drop.messageID
+              const select = (): void => {
+                setSelected(drop.messageID)
+              }
               return (
                 <box
                   flexDirection="row"
                   height={1}
                   gap={1}
-                  {...(isActive() ? { backgroundColor: theme.background.raised.high } : {})}
-                  onMouseDown={() => {
-                    setSelected(drop.messageID)
-                  }}
+                  backgroundColor={isActive() ? theme.background.raised.high : theme.background.base}
+                  onMouseDown={select}
                 >
-                  <text fg={isActive() ? theme.text.feedback.success.base : theme.text.muted}>
+                  <text
+                    fg={isActive() ? theme.text.feedback.success.base : theme.text.muted}
+                    selectable={false}
+                    onMouseDown={select}
+                  >
                     {isActive() ? "▶" : " "}
                   </text>
-                  <text fg={theme.text.muted}>{timeLabel(drop.at)}</text>
-                  <text fg={barColor(drop.dropPp, theme)}>{`-${drop.dropPp.toFixed(1)}pp`}</text>
-                  <text fg={theme.text.muted}>{copy().drops.kind[drop.kind ?? "unknown"]}</text>
-                  <text fg={theme.text.muted}>{copy().drops.causeIcon[drop.cause]}</text>
-                  <text fg={theme.text.base} flexGrow={1} wrapMode="none">
+                  <text fg={theme.text.muted} selectable={false} onMouseDown={select}>
+                    {timeLabel(drop.at)}
+                  </text>
+                  <text fg={barColor(drop.dropPp, theme)} selectable={false} onMouseDown={select}>
+                    {`-${drop.dropPp.toFixed(1)}pp`}
+                  </text>
+                  <text fg={theme.text.muted} selectable={false} onMouseDown={select}>
+                    {copy().drops.kind[drop.kind ?? "unknown"]}
+                  </text>
+                  <text fg={theme.text.muted} selectable={false} onMouseDown={select}>
+                    {copy().drops.causeIcon[drop.cause]}
+                  </text>
+                  <text fg={theme.text.base} flexGrow={1} wrapMode="none" selectable={false} onMouseDown={select}>
                     {segmentLabel(drop.breakPoint)}
                   </text>
                 </box>
@@ -169,13 +233,26 @@ export function DropsDialog(props: {
 
         <Show when={active()}>
           {(drop) => (
-            <scrollbox height={detailHeight()} scrollY={true} focused={true} width="100%">
-              <DropDetail context={props.context} theme={theme} copy={copy()} drop={drop()} />
+            <scrollbox height={detailHeight()} scrollY={true} focused={true} width="100%" flexShrink={0}>
+              <DropDetail
+                context={props.context}
+                sessionID={props.sessionID}
+                theme={theme}
+                copy={copy()}
+                drop={drop()}
+                onOpenCompare={() => {
+                  setComparing(true)
+                }}
+                onOpenNode={(node, path) => {
+                  setNodeView({ node, path, body: drop().bodies?.body })
+                }}
+              />
             </scrollbox>
           )}
         </Show>
 
         <text fg={theme.text.muted}>{copy().drops.footer}</text>
+      </Show>
       </Show>
     </box>
   )
@@ -188,11 +265,13 @@ export function DropsDialog(props: {
  */
 function DropDetail(props: {
   readonly context: Context
+  readonly sessionID: string
   readonly theme: Context["theme"]
   readonly copy: ReturnType<typeof resolveMessages>
   readonly drop: CacheDrop
+  readonly onOpenCompare: () => void
+  readonly onOpenNode: (node: CacheDropNode, path: readonly string[]) => void
 }) {
-  const lines = createMemo(() => (props.drop.request === undefined ? [] : prettyRequest(props.drop.request.text)))
   const outline = createMemo(() => props.drop.outline ?? [])
   const groups = createMemo(() => groupOutline(outline()))
   const tree = createMemo(() => props.drop.tree ?? [])
@@ -220,12 +299,9 @@ function DropDetail(props: {
     })
   }
 
-  /** 输入：叶子节点；输出：无；预期：用可滚动的「原始内容」弹窗展示叶子原文。 */
-  const openNode = (node: CacheDropNode): void => {
-    props.context.ui.dialog.show(() => (
-      <NodeTextDialog context={props.context} copy={props.copy} node={node} />
-    ))
-    props.context.ui.dialog.set({ size: "large", centered: true })
+  /** 输入：叶子节点 + 它在记录树里的键路径；输出：无；预期：切到节点内容层看完整值。 */
+  const openNode = (node: CacheDropNode, path: readonly string[]): void => {
+    props.onOpenNode(node, path)
   }
 
   const excerpt = createMemo(() => {
@@ -288,6 +364,22 @@ function DropDetail(props: {
         <text fg={props.theme.text.muted}>{props.copy.drops.noBreak}</text>
       </Show>
 
+      <box
+        flexDirection="row"
+        height={1}
+        gap={1}
+        onMouseDown={() => {
+          props.onOpenCompare()
+        }}
+      >
+        <text fg={props.theme.text.feedback.info.base} flexShrink={0} selectable={false}>
+          {"›"}
+        </text>
+        <text fg={props.theme.text.base} selectable={false}>
+          {props.copy.drops.openCompare}
+        </text>
+      </box>
+
       <Show when={groups().length > 0 || tree().length > 0}>
         <box flexDirection="column" width="100%">
           <box
@@ -298,20 +390,25 @@ function DropDetail(props: {
               setTreeOpen(!treeOpen())
             }}
           >
-            <text fg={props.theme.text.base}>{treeOpen() ? "▼" : "▶"}</text>
-            <text fg={props.theme.text.muted}>{props.copy.drops.structure}</text>
+            <text fg={props.theme.text.base} selectable={false}>
+              {treeOpen() ? "▼" : "▶"}
+            </text>
+            <text fg={props.theme.text.muted} selectable={false}>
+              {props.copy.drops.structure}
+            </text>
           </box>
           <Show when={treeOpen()}>
+            <box flexDirection="column" width="100%" flexShrink={0}>
             <Show
               when={tree().length > 0}
               fallback={
                 <For each={groups()}>
                   {(group) => (
-                    <box flexDirection="column" width="100%" paddingLeft={2}>
+                    <box flexDirection="column" width="100%" paddingLeft={2} flexShrink={0}>
                       <Show
                         when={group.array}
                         fallback={
-                          <text fg={props.theme.text.base} wrapMode="word">
+                          <text fg={props.theme.text.base} wrapMode="none">
                             {`${group.name} ${props.copy.drops.chars((group.leaves[0]?.chars ?? 0).toLocaleString())}`}
                           </text>
                         }
@@ -320,25 +417,33 @@ function DropDetail(props: {
                           flexDirection="row"
                           height={1}
                           gap={1}
+                          flexShrink={0}
                           onMouseDown={() => {
                             toggleGroup(group.name)
                           }}
                         >
-                          <text fg={props.theme.text.base}>
+                          <text fg={props.theme.text.base} selectable={false}>
                             {openGroups().has(group.name) ? "▼" : "▶"}
                           </text>
-                          <text fg={props.theme.text.base}>{`${group.name} (${group.leaves.length.toString()})`}</text>
+                          <text fg={props.theme.text.base} wrapMode="none" selectable={false}>{`${group.name} (${group.leaves.length.toString()})`}</text>
                         </box>
                         <Show when={openGroups().has(group.name)}>
-                          <For each={group.leaves}>
-                            {(leaf) => (
-                              <box paddingLeft={2} width="100%">
-                                <text fg={props.theme.text.muted} wrapMode="word">
-                                  {`${leaf.label} ${props.copy.drops.chars(leaf.chars.toLocaleString())}`}
-                                </text>
-                              </box>
-                            )}
-                          </For>
+                          <scrollbox
+                            height={Math.min(10, group.leaves.length)}
+                            width="100%"
+                            scrollY={true}
+                            flexShrink={0}
+                          >
+                            <For each={group.leaves}>
+                              {(leaf) => (
+                                <box paddingLeft={2} flexShrink={0}>
+                                  <text fg={props.theme.text.muted} wrapMode="none">
+                                    {`${leaf.label} ${props.copy.drops.chars(leaf.chars.toLocaleString())}`}
+                                  </text>
+                                </box>
+                              )}
+                            </For>
+                          </scrollbox>
                         </Show>
                       </Show>
                     </box>
@@ -347,10 +452,10 @@ function DropDetail(props: {
               }
             >
               <For each={tree()}>
-                {(node, index) => (
+                {(node) => (
                   <TreeNode
                     node={node}
-                    path={index().toString()}
+                    path={[node.key]}
                     depth={1}
                     open={openPaths}
                     toggle={togglePath}
@@ -361,32 +466,9 @@ function DropDetail(props: {
                 )}
               </For>
             </Show>
+            </box>
           </Show>
         </box>
-      </Show>
-
-      <Show
-        when={props.drop.request}
-        fallback={<text fg={props.theme.text.muted}>{props.copy.drops.noRequest}</text>}
-      >
-        {(request) => (
-          <box flexDirection="column" width="100%">
-            <box flexDirection="row" gap={1} flexWrap="wrap">
-              <text fg={props.theme.text.muted}>{props.copy.drops.request}</text>
-              <text fg={props.theme.text.base}>{request().segment}</text>
-              <Show when={request().truncated}>
-                <text fg={props.theme.text.feedback.warning.base}>{props.copy.drops.truncated}</text>
-              </Show>
-            </box>
-            <For each={lines()}>
-              {(line) => (
-                <text fg={props.theme.text.base} wrapMode="word">
-                  {line.length === 0 ? " " : line}
-                </text>
-              )}
-            </For>
-          </box>
-        )}
       </Show>
     </box>
   )
@@ -399,82 +481,184 @@ function DropDetail(props: {
  */
 function TreeNode(props: {
   readonly node: CacheDropNode
-  readonly path: string
+  readonly path: readonly string[]
   readonly depth: number
   readonly open: Accessor<ReadonlySet<string>>
   readonly toggle: (path: string) => void
-  readonly onOpen: (node: CacheDropNode) => void
+  readonly onOpen: (node: CacheDropNode, path: readonly string[]) => void
   readonly theme: Context["theme"]
   readonly copy: ReturnType<typeof resolveMessages>
 }) {
+  const key = () => props.path.join("/")
   const children = () => props.node.children ?? []
-  const opened = () => props.open().has(props.path)
+  const opened = () => props.open().has(key())
   const hasChildren = () => children().length > 0
-  const clickable = () => hasChildren() || props.node.text !== undefined
+  const [hovered, setHovered] = createSignal(false)
+  // 子元素（箭头/数量）按下时先置位，行处理器看到后只展开、不打开内容。
+  let suppressOpen = false
+  /** 输入：无；输出：无；预期：本次点击只展开，不触发内容视图。 */
+  const toggleOnly = (): void => {
+    suppressOpen = true
+    props.toggle(key())
+    setTimeout(() => {
+      suppressOpen = false
+    }, 0)
+  }
   return (
-    <box flexDirection="column" width="100%">
+    <box flexDirection="column" width="100%" flexShrink={0}>
       <box
         flexDirection="row"
         height={1}
         gap={1}
+        flexShrink={0}
         paddingLeft={props.depth * 2}
+        backgroundColor={hovered() ? props.theme.background.raised.high : props.theme.background.base}
+        onMouseOver={() => {
+          setHovered(true)
+        }}
+        onMouseOut={() => {
+          setHovered(false)
+        }}
         onMouseDown={() => {
-          if (hasChildren()) props.toggle(props.path)
-          else if (props.node.text !== undefined) props.onOpen(props.node)
+          setHovered(false)
+          if (suppressOpen) {
+            suppressOpen = false
+            return
+          }
+          if (hasChildren()) {
+            props.toggle(key())
+            return
+          }
+          props.onOpen(props.node, props.path)
         }}
       >
-        <text fg={props.theme.text.base}>{hasChildren() ? (opened() ? "▼" : "▶") : " "}</text>
-        <text fg={clickable() ? props.theme.text.base : props.theme.text.muted} wrapMode="none">
+        <box
+          height={1}
+          width={1}
+          flexShrink={0}
+          onMouseDown={() => {
+            if (!hasChildren()) return
+            toggleOnly()
+          }}
+        >
+          <text fg={props.theme.text.base} selectable={false}>
+            {hasChildren() ? (opened() ? "▼" : "▶") : " "}
+          </text>
+        </box>
+        <text
+          fg={hovered() ? props.theme.text.feedback.info.base : props.theme.text.base}
+          wrapMode="none"
+          selectable={false}
+        >
           {props.node.key}
         </text>
         <Show
           when={hasChildren()}
           fallback={
-            <text fg={props.theme.text.muted}>{props.copy.drops.chars(props.node.chars.toLocaleString())}</text>
+            <text fg={props.theme.text.muted} wrapMode="none" selectable={false}>
+              {props.copy.drops.chars(props.node.chars.toLocaleString())}
+            </text>
           }
         >
-          <text fg={props.theme.text.muted}>{`(${children().length.toString()})`}</text>
+          <box
+            height={1}
+            flexShrink={0}
+            onMouseDown={() => {
+              toggleOnly()
+            }}
+          >
+            <text fg={props.theme.text.muted} selectable={false}>
+              {`(${children().length.toString()})`}
+            </text>
+          </box>
         </Show>
       </box>
       <Show when={opened()}>
-        <For each={children()}>
-          {(child, index) => (
-            <TreeNode
-              node={child}
-              path={`${props.path}/${index().toString()}`}
-              depth={props.depth + 1}
-              open={props.open}
-              toggle={props.toggle}
-              onOpen={props.onOpen}
-              theme={props.theme}
-              copy={props.copy}
-            />
-          )}
-        </For>
+        <Show
+          when={props.depth === 1 && children().length > 10}
+          fallback={
+            <For each={children()}>
+              {(child) => (
+                <TreeNode
+                  node={child}
+                  path={[...props.path, child.key]}
+                  depth={props.depth + 1}
+                  open={props.open}
+                  toggle={props.toggle}
+                  onOpen={props.onOpen}
+                  theme={props.theme}
+                  copy={props.copy}
+                />
+              )}
+            </For>
+          }
+        >
+          <scrollbox height={10} width="100%" scrollY={true} flexShrink={0}>
+            <For each={children()}>
+              {(child) => (
+                <TreeNode
+                  node={child}
+                  path={[...props.path, child.key]}
+                  depth={props.depth + 1}
+                  open={props.open}
+                  toggle={props.toggle}
+                  onOpen={props.onOpen}
+                  theme={props.theme}
+                  copy={props.copy}
+                />
+              )}
+            </For>
+          </scrollbox>
+        </Show>
       </Show>
     </box>
   )
 }
 
 /**
- * 输入：被点开的叶子节点 + 文案。
- * 输出：可滚动的原始内容弹窗；长内容只在弹窗里滚动，不撑开主界面。
- * 预期：值是字符串时直接显示正文，其余按两空格缩进的 JSON 显示。
+ * 输入：被点开的叶子节点 + 文案 + 键路径 + 内联完整报文。
+ * 输出：可滚动的原始内容弹窗；完整值从内联报文按路径取，拿不到时退回记录里的截断原文。
+ * 预期：JSON 两空格缩进，超宽行靠横向滚动；横竖都能滚，不撑开主界面。
  */
 export function NodeTextDialog(props: {
   readonly context: Context
   readonly copy: ReturnType<typeof resolveMessages>
   readonly node: CacheDropNode
+  readonly path: readonly string[]
+  readonly body: string | undefined
+  readonly onBack: () => void
 }) {
   const theme = props.context.theme
   const [hovered, setHovered] = createSignal(false)
-  const lines = createMemo(() => prettyRequest(props.node.text ?? ""))
-  const height = createMemo(() => Math.max(8, Math.min(26, props.context.renderer.height - 8)))
+  const lines = createMemo(() => {
+    const body = props.body
+    if (body !== undefined) {
+      try {
+        const found = valueAtPath(JSON.parse(body) as unknown, props.path)
+        if (found.ok && found.value !== undefined) return prettyJsonLines(JSON.stringify(found.value))
+      } catch {
+        // 解析失败时退回截断原文
+      }
+    }
+    return prettyJsonLines(props.node.text)
+  })
+  const width = createMemo(() => {
+    let max = 24
+    for (const line of lines()) {
+      const size = Array.from(line).length
+      if (size > max) max = size
+    }
+    return Math.min(2_000, max + 1)
+  })
+  const height = createMemo(() => {
+    const size = props.context.renderer.height
+    return Math.max(8, Math.min(26, (Number.isFinite(size) && size > 0 ? size : 40) - 8))
+  })
   return (
     <box paddingLeft={3} paddingRight={3} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <text fg={theme.text.base} wrapMode="word">
-          <b>{`${props.copy.drops.nodeTitle} ${props.node.key}`}</b>
+          <b>{`${props.copy.drops.nodeTitle} ${props.path.join("/")}`}</b>
         </text>
         <text
           fg={hovered() ? theme.text.feedback.error.base : theme.text.muted}
@@ -486,7 +670,7 @@ export function NodeTextDialog(props: {
             setHovered(false)
           }}
           onMouseUp={() => {
-            props.context.ui.dialog.clear()
+            props.onBack()
           }}
         >
           {props.copy.drops.closeLabel}
@@ -497,10 +681,10 @@ export function NodeTextDialog(props: {
           ? `${props.copy.drops.chars(props.node.chars.toLocaleString())} · ${props.copy.drops.truncated}`
           : props.copy.drops.chars(props.node.chars.toLocaleString())}
       </text>
-      <scrollbox height={height()} scrollY={true} focused={true} width="100%">
+      <scrollbox height={height()} scrollX={true} scrollY={true} focused={true} width="100%">
         <For each={lines()}>
           {(line) => (
-            <text fg={theme.text.base} wrapMode="word">
+            <text fg={theme.text.base} width={width()} flexShrink={0} wrapMode="none">
               {line.length === 0 ? " " : line}
             </text>
           )}

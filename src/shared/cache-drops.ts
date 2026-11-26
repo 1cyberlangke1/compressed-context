@@ -46,7 +46,19 @@ export interface CacheDropRequest {
   readonly truncated: boolean
 }
 
-/** 一条缓存突变记录；只存诊断结果，不存整段 payload。 */
+/**
+ * 每条突变记录内联保存的完整请求原文。
+ * 旧记录没有这两个字段，面板退回截断的 `request` / `tree`。
+ * 完整报文不截断；记录随 `appendCacheDrop` 的 maxRecords 一起 LRU 淘汰。
+ */
+export interface CacheDropBodies {
+  /** 当前请求的完整报文。 */
+  readonly body?: string
+  /** 上一条请求的完整报文。 */
+  readonly previousBody?: string
+}
+
+/** 一条缓存突变记录。 */
 export interface CacheDrop {
   /** 本条样本 ID；primary 是 assistant messageID，其它请求是 `kind:时间`。 */
   readonly messageID: string
@@ -73,6 +85,8 @@ export interface CacheDrop {
   readonly tree?: readonly CacheDropNode[]
   /** 断点段的原始文本（截断）。 */
   readonly request?: CacheDropRequest
+  /** 内联的完整请求原文；随记录一起按 maxRecords LRU 淘汰。 */
+  readonly bodies?: CacheDropBodies
 }
 
 /**
@@ -256,6 +270,52 @@ export function outlineFromBody(body: string): readonly CacheDropSegment[] {
 /** 输入：整段原始请求；输出：可直接展示的请求片段；用于没有断点的 unknown 记录。 */
 export function requestPreview(body: string, segment = "request"): CacheDropRequest {
   return requestOf(segment, body)
+}
+
+/**
+ * 输入：原始请求体 + 段标识（`system` / `messages[7]`）。
+ * 输出：该段的规范 JSON；找不到段或报文不是 JSON 时返回 undefined。
+ * 预期：对比视图拿两份同一段标识的原文做行级差异。
+ */
+export function segmentTextOf(body: string, segment: string): string | undefined {
+  const fields = fieldsOf(body)
+  if (fields === undefined) return undefined
+  const match = /^(.*)\[(\d+)\]$/.exec(segment)
+  const key = match === null ? segment : (match[1] ?? "")
+  const index = match === null ? undefined : Number(match[2])
+  const field = fields.find((item) => item.key === key)
+  if (field === undefined) return undefined
+  if (index === undefined) return field.items[0]
+  return field.items[index]
+}
+
+/**
+ * 输入：JSON 值 + 键路径（对象用字段名，数组用 `[i]`）。
+ * 输出：路径命中的值与是否找到。
+ * 预期：任何一段缺失都返回未找到，不抛异常。
+ */
+export function valueAtPath(
+  root: unknown,
+  path: readonly string[],
+): { readonly ok: boolean; readonly value?: unknown } {
+  let current: unknown = root
+  for (const key of path) {
+    if (Array.isArray(current)) {
+      const match = /^\[(\d+)\]$/.exec(key)
+      const index = match === null ? Number.NaN : Number(match[1])
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) return { ok: false }
+      current = current[index]
+      continue
+    }
+    if (typeof current === "object" && current !== null) {
+      const record = current as Record<string, unknown>
+      if (!Object.prototype.hasOwnProperty.call(record, key)) return { ok: false }
+      current = record[key]
+      continue
+    }
+    return { ok: false }
+  }
+  return { ok: true, value: current }
 }
 
 /** 输入：两段已按码点拆开的文本；输出：首个不同码点的下标，完全相同返回较短长度。 */
@@ -455,6 +515,7 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
   const outline = parseOutline(record["outline"])
   const tree = parseTree(record["tree"])
   const request = parseRequest(record["request"])
+  const bodies = parseBodies(record["bodies"])
   return {
     messageID,
     at: record["at"] as number,
@@ -474,6 +535,7 @@ function parseCacheDrop(value: unknown): CacheDrop | undefined {
     ...(outline === undefined ? {} : { outline }),
     ...(tree === undefined ? {} : { tree }),
     ...(request === undefined ? {} : { request }),
+    ...(bodies === undefined ? {} : { bodies }),
   }
 }
 
@@ -568,6 +630,23 @@ function parseRequest(value: unknown): CacheDropRequest | undefined {
   if (typeof text !== "string") return undefined
   if (typeof truncated !== "boolean") return undefined
   return { segment, text, truncated }
+}
+
+/** 输入：任意值；输出：合法原文映射（body / previousBody）；全部缺失时 undefined。 */
+function parseBodies(value: unknown): CacheDropBodies | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const textOf = (key: string): string | undefined => {
+    const item = record[key]
+    return typeof item === "string" && item.length > 0 ? item : undefined
+  }
+  const body = textOf("body")
+  const previousBody = textOf("previousBody")
+  const bodies: CacheDropBodies = {
+    ...(body === undefined ? {} : { body }),
+    ...(previousBody === undefined ? {} : { previousBody }),
+  }
+  return Object.keys(bodies).length === 0 ? undefined : bodies
 }
 
 /**

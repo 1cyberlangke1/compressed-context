@@ -301,6 +301,24 @@ const CacheSampleJson = {
   additionalProperties: false,
 } as const
 
+/** 结构树节点 schema：最多 4 层逐层展开，避免递归 $ref 在宿主解码器里不受支持。 */
+function dropNodeJson(depth: number): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      key: { type: "string" },
+      chars: { type: "number" },
+      text: { type: "string" },
+      truncated: { type: "boolean" },
+      ...(depth > 0 ? { children: { type: "array", items: dropNodeJson(depth - 1) } } : {}),
+    },
+    required: ["key", "chars"],
+    additionalProperties: false,
+  }
+}
+
+const CacheDropTreeJson = { type: "array", items: dropNodeJson(3) } as const
+
 /** 一条缓存突变记录。 */
 const CacheDropJson = {
   type: "object",
@@ -317,6 +335,7 @@ const CacheDropJson = {
     prevHit: { type: "number" },
     prevHitRate: { type: "number" },
     dropPp: { type: "number" },
+    tree: CacheDropTreeJson,
     cause: {
       type: "string",
       enum: ["system", "tools", "params", "history", "window", "append", "none", "unknown"],
@@ -349,6 +368,14 @@ const CacheDropJson = {
         truncated: { type: "boolean" },
       },
       required: ["segment", "text", "truncated"],
+      additionalProperties: false,
+    },
+    bodies: {
+      type: "object",
+      properties: {
+        body: { type: "string" },
+        previousBody: { type: "string" },
+      },
       additionalProperties: false,
     },
   },
