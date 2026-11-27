@@ -150,6 +150,34 @@ describe("DropCompare", () => {
     }
   })
 
+  test("终端很矮时 esc 完整显示在同一行，不被折成两半", async () => {
+    // 旧布局 esc 没设宽度与 wrapMode，标题过长时被 flex 挤到只剩 2 列，"esc" 折成 "es"+"c"。
+    const lines = Array.from({ length: 4_100 }, (_, i) => `"k${i}": ${i}`)
+    const body = `{${lines.join(",\n")}}`
+    const height = 20
+    const app = await testRender(
+      () => (
+        <DropCompare
+          context={{ ...fakeContext([]), renderer: { height, width: 120 } }}
+          sessionID="ses_a"
+          drop={drop("m2", { body, previousBody: body })}
+          copy={copy}
+          onBack={() => {}}
+        />
+      ),
+      { width: 120, height },
+    )
+    app.renderer.start()
+    try {
+      const frame = await app.waitForFrame((value) => value.includes(copy.drops.prevColumn))
+      // 旧布局标题行是 box+多 text，esc 被 flex 挤到标题的下一行独占；新布局 esc 与标题同行。
+      const titleRow = frame.split("\n").find((line) => line.includes(copy.drops.compareTitle)) ?? ""
+      expect(titleRow).toContain(copy.drops.closeLabel)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("点 esc 返回上一层", async () => {
     let backs = 0
     const app = await testRender(

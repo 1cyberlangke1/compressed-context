@@ -8,7 +8,7 @@
  */
 
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 
 import { resolveMessages } from "../../i18n/index.ts"
 import type { CacheDrop } from "../../shared/cache-drops.ts"
@@ -41,7 +41,6 @@ export function DropCompare(props: {
   readonly onBack: () => void
 }) {
   const theme = props.context.theme
-  const [hoveredEsc, setHoveredEsc] = createSignal(false)
 
   const viewportHeight = createMemo(() => {
     const height = props.context.renderer.height
@@ -71,9 +70,16 @@ export function DropCompare(props: {
     }
     return { left, right }
   })
-  /** 弹窗固定高度：按终端高度放大，内容多寡都保持同一块大小。 */
-  const fixedHeight = createMemo(() => Math.max(18, Math.min(60, Math.floor(viewportHeight() * 0.85))))
-  const panelHeight = createMemo(() => Math.max(6, fixedHeight() - 4))
+  /**
+   * 弹窗固定高度：按终端高度放大，但始终比终端矮两行。
+   * 预期：centered 弹窗上下各留一行，标题行（含 esc）不会被裁到终端外。
+   */
+  const fixedHeight = createMemo(() => Math.max(10, Math.min(60, viewportHeight() - 2, Math.floor(viewportHeight() * 0.85))))
+  /**
+   * 内容区高度：标题行、列头行、截断警告行和三道 gap 之外剩余的部分。
+   * 预期：标题行钉死一行且 flexShrink=0，内容多时不会被 flex 压扁；esc 恒在标题行最右。
+   */
+  const panelHeight = createMemo(() => Math.max(4, fixedHeight() - 6))
 
   /** 弹窗实际可用宽度：xlarge 固定 116，终端更窄时收窄，再减左右内边距。 */
   const dialogWidth = createMemo(() => {
@@ -131,32 +137,15 @@ export function DropCompare(props: {
 
   return (
     <box flexDirection="column" width="100%" height={fixedHeight()} flexShrink={0} gap={1}>
-      <box flexDirection="row" justifyContent="space-between" gap={1}>
-        <box flexDirection="row" gap={1} flexShrink={1}>
-          <text fg={theme.text.base} wrapMode="word">
-            <b>{props.copy.drops.compareTitle}</b>
-          </text>
-          <text fg={theme.text.muted}>{props.copy.drops.kind[props.drop.kind ?? "unknown"]}</text>
-          <text fg={theme.text.muted}>
-            {`${props.copy.drops.causeIcon[props.drop.cause]} ${props.copy.drops.cause[props.drop.cause]}`}
-          </text>
-          <text fg={theme.text.feedback.error.base}>{`-${props.drop.dropPp.toFixed(1)}pp`}</text>
-        </box>
-        <text
-          fg={hoveredEsc() ? theme.text.feedback.error.base : theme.text.muted}
-          flexShrink={0}
-          onMouseOver={() => {
-            setHoveredEsc(true)
-          }}
-          onMouseOut={() => {
-            setHoveredEsc(false)
-          }}
-          onMouseUp={() => {
-            props.onBack()
-          }}
-        >
-          {props.copy.drops.closeLabel}
+      <box flexDirection="row" height={1} flexShrink={0} flexWrap="no-wrap">
+        <text fg={theme.text.base} wrapMode="none" flexShrink={0}>
+          {`${props.copy.drops.compareTitle}  -${props.drop.dropPp.toFixed(1)}pp  ·  ${props.copy.drops.kind[props.drop.kind ?? "unknown"]}  ·  ${props.copy.drops.causeIcon[props.drop.cause]} ${props.copy.drops.cause[props.drop.cause]}  ·  `}
         </text>
+        <box onMouseUp={props.onBack}>
+          <text fg={theme.text.muted} wrapMode="none">
+            {props.copy.drops.closeLabel}
+          </text>
+        </box>
       </box>
 
       <Show
@@ -182,7 +171,7 @@ export function DropCompare(props: {
           <Column side="right" />
         </box>
         <Show when={rows().length > MAX_DIFF_ROWS}>
-          <text fg={theme.text.feedback.warning.base}>
+          <text fg={theme.text.feedback.warning.base} height={1} flexShrink={0}>
             {`${MAX_DIFF_ROWS.toString()} / ${rows().length.toString()}`}
           </text>
         </Show>
