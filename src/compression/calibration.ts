@@ -37,6 +37,10 @@ export interface CalibrationState {
   readonly emaPrior: number
   /** 用学习值预测时的指数移动平均相对误差。 */
   readonly emaLearned: number
+  /** 先验预测的相对偏差（估算-真实，负=低估，正=高估）EMA；旧状态缺字段按 0。 */
+  readonly biasPrior?: number
+  /** 学习值预测的相对偏差 EMA；旧状态缺字段按 0。 */
+  readonly biasLearned?: number
   /** 是否是用户手填的系数；手填后立刻生效，第一次观测起交回影子判定。 */
   readonly manual?: boolean
 }
@@ -87,6 +91,8 @@ export const DEFAULT_CALIBRATION: CalibrationState = {
   updatedAt: 0,
   emaPrior: 0,
   emaLearned: 0,
+  biasPrior: 0,
+  biasLearned: 0,
 }
 
 /** 遗忘因子：越接近 1 越信任历史。 */
@@ -159,7 +165,18 @@ export function parseCalibration(value: unknown): CalibrationState | undefined {
   ) {
     return undefined
   }
-  return { coefs, p, samples, updatedAt, emaPrior, emaLearned, ...(record["manual"] === true ? { manual: true } : {}) }
+  return {
+    coefs,
+    p,
+    samples,
+    updatedAt,
+    emaPrior,
+    emaLearned,
+    // 旧状态没有偏差字段：显式补 0，允许后续观测积累出方向。
+    biasPrior: readNumber(record["biasPrior"]) ?? 0,
+    biasLearned: readNumber(record["biasLearned"]) ?? 0,
+    ...(record["manual"] === true ? { manual: true } : {}),
+  }
 }
 
 /** 输入：先验值；输出：该维的合法区间；预期：允许 grow 到两倍多、缩到一半以下。 */
@@ -311,14 +328,23 @@ export function applyObservation(state: CalibrationState, sample: CalibrationSam
   const predLearned = priceBuckets(sample.buckets, learned)
   const predPrior = priceBuckets(sample.buckets, DEFAULT_BUCKET_COEFS)
   if (predLearned <= 0 || predPrior <= 0) return state
-  if (Math.abs(target / predLearned - 1) > MAX_OBSERVATION_SKEW) return state
+  // 对称基准：相对 max(估算,真实)。旧写法相对估算，低估会被放大（真实=估算2倍时判成100%丢掉），
+  // 高估被缩小，于是低估模型永远进不来学；对称后低估/高估同幅度一视同仁，真脏观测仍照样丢。
+  const skew = Math.abs(predLearned - target) / Math.max(predLearned, target)
+  if (skew > MAX_OBSERVATION_SKEW) return state
 
-  // 两套预测的误差都要记：学习值必须证明自己比先验更准才会被采用。
+  // 误差取绝对值用于「谁更准」的切换判定；偏差保留符号供展示是估多了还是估少了。
   const errorLearned = Math.abs(predLearned - target) / target
   const errorPrior = Math.abs(predPrior - target) / target
   const emaLearned =
     state.emaLearned === 0 ? errorLearned : state.emaLearned * (1 - EMA_ALPHA) + errorLearned * EMA_ALPHA
   const emaPrior = state.emaPrior === 0 ? errorPrior : state.emaPrior * (1 - EMA_ALPHA) + errorPrior * EMA_ALPHA
+  const biasLearnedRaw = (predLearned - target) / target
+  const biasPriorRaw = (predPrior - target) / target
+  const biasLearned =
+    (state.biasLearned ?? 0) === 0 ? biasLearnedRaw : (state.biasLearned ?? 0) * (1 - EMA_ALPHA) + biasLearnedRaw * EMA_ALPHA
+  const biasPrior =
+    (state.biasPrior ?? 0) === 0 ? biasPriorRaw : (state.biasPrior ?? 0) * (1 - EMA_ALPHA) + biasPriorRaw * EMA_ALPHA
 
   // RLS：P 是 13×13 协方差，φ 是本次的桶计数向量。
   const p = state.p.slice()
@@ -374,6 +400,8 @@ export function applyObservation(state: CalibrationState, sample: CalibrationSam
     updatedAt: Date.now(),
     emaPrior,
     emaLearned,
+    biasPrior,
+    biasLearned,
     // 第一次观测起，手填值也要和先验比一比；影子判定接手。
     manual: false,
   }

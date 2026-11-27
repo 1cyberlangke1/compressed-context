@@ -243,7 +243,9 @@ export async function registerSettingsRpc(
           samples: 0,
           emaPrior: 0,
           emaLearned: 0,
-          model: { coefs: prior, samples: 0, emaPrior: 0, emaLearned: 0 },
+          biasPrior: 0,
+          biasLearned: 0,
+          model: { coefs: prior, samples: 0, emaPrior: 0, emaLearned: 0, biasPrior: 0, biasLearned: 0 },
         }
       }
       const effective = await loadEffectiveCalibration(ctx.storage, model)
@@ -254,11 +256,15 @@ export async function registerSettingsRpc(
         samples: number
         emaPrior: number
         emaLearned: number
+        biasPrior: number
+        biasLearned: number
       } => ({
         coefs: [...state.coefs],
         samples: state.samples,
         emaPrior: state.emaPrior,
         emaLearned: state.emaLearned,
+        biasPrior: state.biasPrior ?? 0,
+        biasLearned: state.biasLearned ?? 0,
       })
       return {
         scope: effective.scope,
@@ -267,6 +273,8 @@ export async function registerSettingsRpc(
         samples: effective.state.samples,
         emaPrior: effective.state.emaPrior,
         emaLearned: effective.state.emaLearned,
+        biasPrior: effective.state.biasPrior ?? 0,
+        biasLearned: effective.state.biasLearned ?? 0,
         model: layer(layers.model),
         ...(layers.exact === undefined ? {} : { exact: layer(layers.exact) }),
       }

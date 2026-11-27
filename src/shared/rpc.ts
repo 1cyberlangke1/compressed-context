@@ -150,8 +150,10 @@ const CalibrationLayerJson = {
     samples: { type: "number" },
     emaPrior: { type: "number" },
     emaLearned: { type: "number" },
+    biasPrior: { type: "number" },
+    biasLearned: { type: "number" },
   },
-  required: ["coefs", "samples", "emaPrior", "emaLearned"],
+  required: ["coefs", "samples", "emaPrior", "emaLearned", "biasPrior", "biasLearned"],
   additionalProperties: false,
 } as const
 
@@ -165,10 +167,12 @@ const CalibrationOutputJson = {
     samples: { type: "number" },
     emaPrior: { type: "number" },
     emaLearned: { type: "number" },
+    biasPrior: { type: "number" },
+    biasLearned: { type: "number" },
     model: CalibrationLayerJson,
     exact: CalibrationLayerJson,
   },
-  required: ["scope", "source", "coefs", "samples", "emaPrior", "emaLearned", "model"],
+  required: ["scope", "source", "coefs", "samples", "emaPrior", "emaLearned", "biasPrior", "biasLearned", "model"],
   additionalProperties: false,
 } as const
 
@@ -439,6 +443,8 @@ export interface CalibrationLayer {
   readonly samples: number
   readonly emaPrior: number
   readonly emaLearned: number
+  readonly biasPrior: number
+  readonly biasLearned: number
 }
 
 /** 校准查询结果：生效系数 + 来源层 + 两层原始值。 */
@@ -449,6 +455,8 @@ export interface CalibrationSnapshot {
   readonly samples: number
   readonly emaPrior: number
   readonly emaLearned: number
+  readonly biasPrior: number
+  readonly biasLearned: number
   readonly model: CalibrationLayer
   readonly exact?: CalibrationLayer
 }

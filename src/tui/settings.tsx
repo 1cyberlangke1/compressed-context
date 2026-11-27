@@ -71,6 +71,16 @@ import type { UpdateSettings } from "./types.ts"
 /** 设置导航的返回结果：`back` 回上一层，`done` 结束（弹窗已经在屏幕上）。 */
 type Flow = "back" | "done"
 
+/**
+ * 输入：绝对误差 + 带符号偏差（估算-真实）；输出：带方向的百分比文本。
+ * 预期：bias<0 是低估显示 "-"，bias>0 是高估显示 "+"；无误差显示 "--"。
+ */
+function signedError(error: number, bias: number): string {
+  if (error <= 0) return "--"
+  const sign = bias < 0 ? "-" : bias > 0 ? "+" : ""
+  return `${sign}${(error * 100).toFixed(1)}%`
+}
+
 /** 可选上限预设；菜单里只出现合法值（最低 50k）。 */
 const PRESET_LIMITS = [
   64_000,
@@ -843,9 +853,10 @@ export function SettingsCommand(props: {
   /** 输入：校准快照；输出：菜单右侧摘要；没有记录时显示先验。 */
   const calibrationFooter = (snapshot: CalibrationSnapshot | undefined): string => {
     if (snapshot === undefined) return copy().settings.calibrationUnset
-    const error = snapshot.source === "prior" ? snapshot.emaPrior : snapshot.emaLearned
-    const percent = error > 0 ? `${(error * 100).toFixed(1)}%` : "--"
-    return `${percent} · ${snapshot.samples.toString()}`
+    const prior = snapshot.source === "prior"
+    const error = prior ? snapshot.emaPrior : snapshot.emaLearned
+    const bias = prior ? snapshot.biasPrior : snapshot.biasLearned
+    return `${signedError(error, bias)} · ${snapshot.samples.toString()}`
   }
 
   /**
@@ -862,8 +873,10 @@ export function SettingsCommand(props: {
     /** 输入：单层快照；输出：`5.9% · 12` 或「未设置」。 */
     const layerText = (layer: CalibrationSnapshot["model"] | undefined): string => {
       if (layer === undefined) return copy().settings.calibrationScopeUnset
-      const error = layer.emaLearned > 0 ? layer.emaLearned : layer.emaPrior
-      return `${error > 0 ? `${(error * 100).toFixed(1)}%` : "--"} · ${layer.samples.toString()}`
+      const learned = layer.emaLearned > 0
+      const error = learned ? layer.emaLearned : layer.emaPrior
+      const bias = learned ? layer.biasLearned : layer.biasPrior
+      return `${signedError(error, bias)} · ${layer.samples.toString()}`
     }
     const picked = await props.context.ui.dialog.select<"exact" | "model" | "resetExact" | "resetModel">({
       title: `${copy().settings.calibration} · ${keyLabel(key)}`,

@@ -115,8 +115,10 @@ export function ModelPanel(props: {
   const estimateError = createMemo(() => {
     const snapshot = calibration()
     if (snapshot === undefined) return undefined
-    const value = snapshot.source === "prior" ? snapshot.emaPrior : snapshot.emaLearned
-    return value > 0 ? value : undefined
+    const prior = snapshot.source === "prior"
+    const error = prior ? snapshot.emaPrior : snapshot.emaLearned
+    const bias = prior ? snapshot.biasPrior : snapshot.biasLearned
+    return error > 0 ? { error, bias } : undefined
   })
 
   return (
@@ -134,11 +136,16 @@ export function ModelPanel(props: {
           {(segment) => <text fg={colorOf(segment.layer)}>{segment.text}</text>}
         </For>
         <Show when={estimateError()}>
-          {(value) => (
-            <text fg={theme.text.muted}>
-              {`${copy().modelPanel.icons.calibration} ${(value() * 100).toFixed(1)}%`}
-            </text>
-          )}
+          {(value) => {
+            // bias = (估算-真实)/真实：负=低估，正=高估；符号追加在误差百分比前，便于看方向。
+            const bias = value().bias
+            const sign = bias < 0 ? "-" : bias > 0 ? "+" : ""
+            return (
+              <text fg={theme.text.muted}>
+                {`${copy().modelPanel.icons.calibration} ${sign}${(value().error * 100).toFixed(1)}%`}
+              </text>
+            )
+          }}
         </Show>
       </box>
     </box>

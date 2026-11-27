@@ -164,12 +164,58 @@ describe("calibration 学习", () => {
     )
   })
 
-  it("偏离预测超过 50% 的观测直接丢弃", () => {
+  it("偏差超过 50% 的观测直接丢弃（对称基准：低估到 1/3）", () => {
     const buckets = asciiBuckets(80_000)
-    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 2)
+    const target = Math.round(priceBuckets(buckets, DEFAULT_BUCKET_COEFS) * 3)
     expect(applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: target, mediaTokens: 0 })).toBe(
       DEFAULT_CALIBRATION,
     )
+  })
+
+  it("低估一半的观测不再被丢弃（对称基准）", () => {
+    // 真实值是先验估算的 2 倍：相对真实误差 50%，旧的相对预测判断是 100% 会被丢。
+    const buckets = asciiBuckets(80_000)
+    const pred = priceBuckets(buckets, DEFAULT_BUCKET_COEFS)
+    const target = Math.round(pred * 2)
+    const next = applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: target, mediaTokens: 0 })
+    expect(next.samples).toBe(1)
+  })
+
+  it("低估与高估同样幅度时对称处理", () => {
+    const buckets = asciiBuckets(80_000)
+    const pred = priceBuckets(buckets, DEFAULT_BUCKET_COEFS)
+    // 真实值 = 预测一半：相对预测误差 50%，旧判断正好卡在边界不丢；对称基准也应不丢。
+    const target = Math.round(pred / 2)
+    const next = applyObservation(DEFAULT_CALIBRATION, { buckets, realTokens: target, mediaTokens: 0 })
+    expect(next.samples).toBe(1)
+  })
+
+  it("偏差带符号：低估为负、高估为正", () => {
+    const buckets = asciiBuckets(80_000)
+    const pred = priceBuckets(buckets, DEFAULT_BUCKET_COEFS)
+    // 真实值高于预测 → 估算偏低 → bias 为负
+    const low = applyObservation(DEFAULT_CALIBRATION, {
+      buckets,
+      realTokens: Math.round(pred * 1.3),
+      mediaTokens: 0,
+    })
+    expect(low.biasPrior).toBeLessThan(0)
+    // 真实值低于预测 → 估算偏高 → bias 为正
+    const high = applyObservation(DEFAULT_CALIBRATION, {
+      buckets,
+      realTokens: Math.round(pred / 1.3),
+      mediaTokens: 0,
+    })
+    expect(high.biasPrior).toBeGreaterThan(0)
+  })
+
+  it("旧状态缺少偏差字段时按 0 处理", () => {
+    const legacy = { ...DEFAULT_CALIBRATION, samples: 5, emaPrior: 0.1, emaLearned: 0.05 } as Record<string, unknown>
+    delete legacy["biasPrior"]
+    delete legacy["biasLearned"]
+    const parsed = parseCalibration(legacy)
+    expect(parsed?.biasPrior).toBe(0)
+    expect(parsed?.biasLearned).toBe(0)
   })
 
   it("媒体 token 从目标值里扣掉", () => {
